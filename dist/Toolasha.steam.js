@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Toolasha
 // @namespace    http://tampermonkey.net/
-// @version      1.22.0
+// @version      1.23.0
 // @downloadURL  https://greasyfork.org/scripts/562662-toolasha/code/Toolasha.user.js
 // @updateURL    https://greasyfork.org/scripts/562662-toolasha/code/Toolasha.meta.js
 // @description  Toolasha - Enhanced tools for Milky Way Idle.
@@ -44212,9 +44212,11 @@ self.onmessage = function (e) {
                 return;
             }
 
-            // Check if item is openable - exit early if not
+            // Check if item is openable or an ability book - exit early if neither
             const itemDetails = gameData.itemDetailMap[itemHrid];
-            if (!itemDetails || !itemDetails.isOpenable) {
+            const isOpenable = itemDetails?.isOpenable;
+            const isAbilityBook = itemDetails?.categoryHrid === '/item_categories/ability_book';
+            if (!itemDetails || (!isOpenable && !isAbilityBook)) {
                 return;
             }
 

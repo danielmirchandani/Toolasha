@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.22.0
+ * Version: 1.23.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -17904,9 +17904,11 @@ self.onmessage = function (e) {
                 return;
             }
 
-            // Check if item is openable - exit early if not
+            // Check if item is openable or an ability book - exit early if neither
             const itemDetails = gameData.itemDetailMap[itemHrid];
-            if (!itemDetails || !itemDetails.isOpenable) {
+            const isOpenable = itemDetails?.isOpenable;
+            const isAbilityBook = itemDetails?.categoryHrid === '/item_categories/ability_book';
+            if (!itemDetails || (!isOpenable && !isAbilityBook)) {
                 return;
             }
 
