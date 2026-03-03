@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.27.2
+ * Version: 1.27.3
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1309,6 +1309,18 @@
                         { value: 'undercut', label: 'Undercut by 1 (best sell - 1)' },
                     ],
                     help: 'When creating sell listings, choose whether to match or undercut the current best sell price',
+                },
+                market_autoFillBuyStrategy: {
+                    id: 'market_autoFillBuyStrategy',
+                    label: 'Auto-fill buy price strategy',
+                    type: 'select',
+                    default: 'outbid',
+                    options: [
+                        { value: 'outbid', label: 'Outbid by 1 (best buy + 1)' },
+                        { value: 'match', label: 'Match best buy price' },
+                        { value: 'undercut', label: 'Undercut by 1 (best buy - 1)' },
+                    ],
+                    help: 'When creating buy listings, choose whether to outbid, match, or undercut the current best buy price',
                 },
                 market_autoClickMax: {
                     id: 'market_autoClickMax',

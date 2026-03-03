@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Toolasha
 // @namespace    http://tampermonkey.net/
-// @version      1.27.2
+// @version      1.27.3
 // @downloadURL  https://greasyfork.org/scripts/562662-toolasha/code/Toolasha.user.js
 // @updateURL    https://greasyfork.org/scripts/562662-toolasha/code/Toolasha.meta.js
 // @description  Toolasha - Enhanced tools for Milky Way Idle.
@@ -15944,6 +15944,18 @@ return plugin;
                         { value: 'undercut', label: 'Undercut by 1 (best sell - 1)' },
                     ],
                     help: 'When creating sell listings, choose whether to match or undercut the current best sell price',
+                },
+                market_autoFillBuyStrategy: {
+                    id: 'market_autoFillBuyStrategy',
+                    label: 'Auto-fill buy price strategy',
+                    type: 'select',
+                    default: 'outbid',
+                    options: [
+                        { value: 'outbid', label: 'Outbid by 1 (best buy + 1)' },
+                        { value: 'match', label: 'Match best buy price' },
+                        { value: 'undercut', label: 'Undercut by 1 (best buy - 1)' },
+                    ],
+                    help: 'When creating buy listings, choose whether to outbid, match, or undercut the current best buy price',
                 },
                 market_autoClickMax: {
                     id: 'market_autoClickMax',
@@ -32701,23 +32713,25 @@ self.onmessage = function (e) {
             }
 
             if (isBuyOrder) {
-                // For buy orders: click the 3rd button container's button (increment)
-                const targetContainer = buttonContainers[2];
-                const button = targetContainer.querySelector('div button');
-                if (button) {
-                    button.click();
+                const buyStrategy = config$1.getSettingValue('market_autoFillBuyStrategy', 'outbid');
+
+                if (buyStrategy === 'outbid') {
+                    // Click the 3rd button container's button (increment)
+                    const button = buttonContainers[2].querySelector('div button');
+                    if (button) button.click();
+                } else if (buyStrategy === 'undercut') {
+                    // Click the 2nd button container's button (decrement)
+                    const button = buttonContainers[1].querySelector('div button');
+                    if (button) button.click();
                 }
+                // If 'match', do nothing (use best buy price as-is)
             } else if (isSellOrder) {
-                // For sell orders: check user setting
                 const sellStrategy = config$1.getSettingValue('market_autoFillSellStrategy', 'match');
 
                 if (sellStrategy === 'undercut') {
                     // Click the 2nd button container's button (decrement)
-                    const targetContainer = buttonContainers[1];
-                    const button = targetContainer.querySelector('div button');
-                    if (button) {
-                        button.click();
-                    }
+                    const button = buttonContainers[1].querySelector('div button');
+                    if (button) button.click();
                 }
                 // If 'match', do nothing (use best sell price as-is)
             }
@@ -75282,9 +75296,10 @@ self.onmessage = function (e) {
   function formatTime(isoString) {
     if (!isoString) return '';
     const d = new Date(isoString);
-    const h = String(d.getHours()).padStart(2, '0');
-    const m = String(d.getMinutes()).padStart(2, '0');
-    return h + ':' + m;
+    const use12Hour = config.getSettingValue('market_listingTimeFormat', '24hour') === '12hour';
+    return d
+        .toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', hour12: use12Hour })
+        .trim();
   }
 
   function linkifyText(el, text) {

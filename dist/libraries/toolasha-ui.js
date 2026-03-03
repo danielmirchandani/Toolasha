@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.27.2
+ * Version: 1.27.3
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -3246,9 +3246,10 @@
   function formatTime(isoString) {
     if (!isoString) return '';
     const d = new Date(isoString);
-    const h = String(d.getHours()).padStart(2, '0');
-    const m = String(d.getMinutes()).padStart(2, '0');
-    return h + ':' + m;
+    const use12Hour = config.getSettingValue('market_listingTimeFormat', '24hour') === '12hour';
+    return d
+        .toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', hour12: use12Hour })
+        .trim();
   }
 
   function linkifyText(el, text) {
