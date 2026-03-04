@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.27.3
+ * Version: 1.28.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -591,6 +591,13 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Records transmutation sessions and displays history in a viewer tab in the Alchemy panel',
+                },
+                alchemy_coinifyHistory: {
+                    id: 'alchemy_coinifyHistory',
+                    label: 'Alchemy panel: Track and view coinify session history',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Records coinify sessions and displays history in a viewer tab in the Alchemy panel',
                 },
                 actions_missingMaterialsButton: {
                     id: 'actions_missingMaterialsButton',
