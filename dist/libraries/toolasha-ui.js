@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.28.0
+ * Version: 1.29.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2420,6 +2420,85 @@
     const mentionTracker = new MentionTracker();
 
     /**
+     * Chat Block List
+     * Maintains an in-memory set of blocked player names sourced from the game's
+     * blockedCharacterMap, kept current via init_character_data and
+     * character_blocks_updated WebSocket events.
+     *
+     * Used by pop-out-chat.js to filter blocked messages before buffering or relay.
+     */
+
+
+    class ChatBlockList {
+        constructor() {
+            this.isInitialized = false;
+            this.blockedNames = new Set();
+            this.handlers = {
+                initCharacterData: (data) => this._syncFromMap(data?.blockedCharacterMap),
+                blocksUpdated: (data) => this._syncFromMap(data?.blockedCharacterMap),
+            };
+        }
+
+        /**
+         * Initialize the block list — seed from current character data, then register WS listeners.
+         */
+        initialize() {
+            if (this.isInitialized) {
+                return;
+            }
+
+            this.isInitialized = true;
+
+            // Seed from already-received init_character_data (the WS event fires before features initialize)
+            this._syncFromMap(dataManager.getBlockedCharacterMap());
+
+            webSocketHook.on('init_character_data', this.handlers.initCharacterData);
+            webSocketHook.on('character_blocks_updated', this.handlers.blocksUpdated);
+        }
+
+        /**
+         * Disable the block list — unregister WS listeners and clear state.
+         */
+        disable() {
+            webSocketHook.off('init_character_data', this.handlers.initCharacterData);
+            webSocketHook.off('character_blocks_updated', this.handlers.blocksUpdated);
+
+            this.blockedNames.clear();
+            this.isInitialized = false;
+        }
+
+        /**
+         * Check if a player name is blocked.
+         * @param {string} name - Player name to check
+         * @returns {boolean}
+         */
+        isBlocked(name) {
+            if (!name) {
+                return false;
+            }
+
+            return this.blockedNames.has(name.toLowerCase());
+        }
+
+        /**
+         * Replace the in-memory blocked names set from a blockedCharacterMap object.
+         * @param {Object|null|undefined} map - { [characterId]: name } map from WS
+         * @private
+         */
+        _syncFromMap(map) {
+            this.blockedNames = new Set(Object.values(map || {}).map((n) => n.toLowerCase()));
+        }
+    }
+
+    const chatBlockList = new ChatBlockList();
+
+    var chatBlockList$1 = {
+        name: 'Chat Block List',
+        initialize: () => chatBlockList.initialize(),
+        cleanup: () => chatBlockList.disable(),
+    };
+
+    /**
      * Pop-Out Chat Window
      * Opens game chat in a separate browser window with multi-channel split-pane support.
      * Game tab relays WebSocket messages via BroadcastChannel; pop-out is a pure UI shell.
@@ -2673,6 +2752,11 @@
 
             const resolved = resolveMessage(message);
 
+            // Drop messages from blocked players
+            if (!resolved.isSystem && chatBlockList.isBlocked(resolved.sName)) {
+                return;
+            }
+
             // Track channels seen via messages that aren't in the hardcoded list
             if (!CHANNELS.some((c) => c.hrid === resolved.channel) && !this.discoveredChannels.has(resolved.channel)) {
                 const name = resolved.channel
@@ -2751,10 +2835,10 @@
         _sendInit() {
             if (!this.relayChannel) return;
 
-            // Serialize buffer: Map → plain object
+            // Serialize buffer: Map → plain object, filtering blocked players
             const bufferSnapshot = {};
             for (const [hrid, messages] of this.messageBuffer.entries()) {
-                bufferSnapshot[hrid] = [...messages];
+                bufferSnapshot[hrid] = messages.filter((msg) => msg.isSystem || !chatBlockList.isBlocked(msg.sName));
             }
 
             this.relayChannel.postMessage({
@@ -18477,7 +18561,7 @@ self.onmessage = function (e) {
             const itemLevel = itemData.level || 0;
 
             // Get enhancing skill level
-            const enhancingLevel = charData.characterSkills?.['/skills/enhancing']?.level || 1;
+            const enhancingLevel = charData.characterSkills?.find((s) => s.skillHrid === '/skills/enhancing')?.level || 1;
 
             // Get house level (Observatory)
             const houseRooms = charData.characterHouseRoomMap;
@@ -20707,6 +20791,7 @@ self.onmessage = function (e) {
         chatCommands,
         mentionTracker,
         popOutChat,
+        chatBlockList: chatBlockList$1,
         taskProfitDisplay,
         taskRerollTracker,
         taskSorter,

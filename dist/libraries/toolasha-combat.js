@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.28.0
+ * Version: 1.29.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -7636,6 +7636,9 @@
                 return;
             }
 
+            // Apply result section highlights
+            applyResultHighlights();
+
             // Setup mutation observer to watch for sim results
             setupSkillCalculatorObserver(expDiv, resultsPanel);
         } catch (error) {
@@ -7698,6 +7701,25 @@
 
             check();
         });
+    }
+
+    /**
+     * Apply background color highlights to the three key result sections.
+     */
+    function applyResultHighlights() {
+        const highlights = [
+            { id: 'simulationResultPlayerDeaths', background: '#FFEAE9' },
+            { id: 'simulationResultExperienceGain', background: '#CDFFDD' },
+            { id: 'simulationResultConsumablesUsed', background: '#F0F8FF' },
+        ];
+
+        for (const { id, background } of highlights) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.style.backgroundColor = background;
+                el.style.color = 'black';
+            }
+        }
     }
 
     /**
