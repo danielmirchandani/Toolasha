@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.30.1
+ * Version: 1.30.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -856,8 +856,6 @@
                 }
             }
         } else {
-            isParty = true;
-
             let slotIndex = 1;
             for (const member of Object.values(characterObj.partyInfo.partySlotMap)) {
                 if (member.characterID) {
@@ -887,6 +885,10 @@
                     slotIndex++;
                 }
             }
+
+            // Only enable party (5-slot) mode in the sim when the party is full (5 players).
+            // Smaller parties fit within the sim's default 3-slot mode without needing dungeon toggle.
+            isParty = slotIndex - 1 === 5;
 
             // Get party zone and tier
             zone = characterObj.partyInfo?.party?.actionHrid || '/actions/combat/fly';
