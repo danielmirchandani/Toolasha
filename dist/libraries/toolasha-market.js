@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.33.2
+ * Version: 1.33.3
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -4791,9 +4791,10 @@ self.onmessage = function (e) {
                 const color = profit.profitPerHour >= 0 ? config.COLOR_TOOLTIP_INFO : config.COLOR_TOOLTIP_LOSS;
                 html += `<div style="color: ${color};">• ${label}: ${formatters_js.numberFormatter(profit.profitPerHour)}/hr`;
 
-                // Show success rate for alchemy actions
-                if (profit.successRate !== undefined) {
-                    html += ` <span style="opacity: 0.7;">(${(profit.successRate * 100).toFixed(0)}% success)</span>`;
+                // Show profit per action for alchemy actions
+                if (profit.netProfitPerAttempt !== undefined) {
+                    const perActionColor = profit.netProfitPerAttempt >= 0 ? 'inherit' : config.COLOR_TOOLTIP_LOSS;
+                    html += ` <span style="opacity: 0.7; color: ${perActionColor};">(${formatters_js.numberFormatter(profit.netProfitPerAttempt)}/action)</span>`;
                 }
 
                 html += '</div>';
