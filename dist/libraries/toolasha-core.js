@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.33.0
+ * Version: 1.33.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -905,6 +905,21 @@
                     type: 'checkbox',
                     default: false,
                     help: 'Displays per-item ask and bid prices on inventory items',
+                },
+                invCategoryTotals: {
+                    id: 'invCategoryTotals',
+                    label: 'Show category totals in inventory',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Displays the total market value of all items in each inventory category',
+                },
+                invCategoryTotals_mode: {
+                    id: 'invCategoryTotals_mode',
+                    label: 'Category totals pricing mode',
+                    type: 'select',
+                    default: 'ask',
+                    options: ['ask', 'bid'],
+                    help: 'Whether to use ask or bid prices for category totals',
                 },
                 profitCalc_pricingMode: {
                     id: 'profitCalc_pricingMode',

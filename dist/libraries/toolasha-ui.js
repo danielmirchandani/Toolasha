@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.33.0
+ * Version: 1.33.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -7674,6 +7674,9 @@ self.onmessage = function (e) {
             if (headerElement.querySelector('[data-mwi-task-filters]')) {
                 return;
             }
+
+            // Ensure state is loaded before creating icons so persisted state is reflected
+            await this.loadState();
 
             // Ensure manifest URLs are loaded before creating icons
             this.manifestUrls = await assetManifest.fetchManifest();
@@ -20612,15 +20615,15 @@ self.onmessage = function (e) {
             // Track protection cost if protection item exists in action data
             // Protection items are consumed when:
             // 1. Level would have decreased (Mirror of Protection prevents decrease, level stays same)
-            // 2. Level increased (Philosopher's Mirror guarantees success)
             const protectionItemHrid = getProtectionItemHrid(action);
             if (protectionItemHrid) {
                 // Only track if we're at a level where protection might be used
-                // (either level stayed same when it could have decreased, or succeeded at high level)
                 const protectFrom = currentSession.protectFrom || 0;
                 const shouldTrack = previousLevel >= Math.max(2, protectFrom);
 
-                if (shouldTrack && (newLevel <= previousLevel || newLevel === previousLevel + 1)) {
+                // Protection is consumed only on failure (level stays same or would have decreased)
+                // Successful enhancements do NOT consume a protection item
+                if (shouldTrack && newLevel <= previousLevel) {
                     // Use market price (like Ultimate Tracker) instead of vendor price
                     const marketPrice = marketAPI.getPrice(protectionItemHrid, 0);
                     let protectionCost = marketPrice?.ask || marketPrice?.bid || 0;
