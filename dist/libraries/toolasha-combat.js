@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.34.1
+ * Version: 1.34.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -10078,8 +10078,10 @@ self.onmessage = function (e) {
                 const itemDetails = dataManager.getItemDetails(loot.itemHrid);
                 if (itemDetails?.isOpenable && expectedValueCalculator.isInitialized) {
                     // Openable containers (chests, crates, etc.): use expected value
-                    const ev = expectedValueCalculator.getCachedValue(loot.itemHrid);
-                    if (ev !== null) {
+                    const ev =
+                        expectedValueCalculator.getCachedValue(loot.itemHrid) ||
+                        expectedValueCalculator.calculateSingleContainer(loot.itemHrid);
+                    if (ev !== null && ev > 0) {
                         totalAsk += ev * itemCount;
                         totalBid += ev * itemCount;
                     }
