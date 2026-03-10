@@ -1,7 +1,7 @@
 /**
  * Toolasha Utils Library
  * All utility modules
- * Version: 1.33.3
+ * Version: 1.34.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -4762,6 +4762,10 @@ self.onmessage = function (e) {
      * @returns {number} Skill level
      */
     function getSkillLevel(skills, skillType) {
+        // Combat actions don't map to a single skill — efficiency scaling doesn't apply
+        if (skillType === '/action_types/combat') {
+            return 1; // No skill level for combat, efficiency is not level-based
+        }
         // Map action type to skill HRID
         const skillHrid = skillType.replace('/action_types/', '/skills/');
         const skill = skills.find((s) => s.skillHrid === skillHrid);

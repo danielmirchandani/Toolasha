@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.33.3
+ * Version: 1.34.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -15137,7 +15137,9 @@ self.onmessage = function (e) {
      *
      * Success Rate Modifiers:
      * - Tea: Catalytic Tea provides /buff_types/alchemy_success (5% ratio boost, scales with Drink Concentration)
-     * - Formula: finalRate = baseRate × (1 + teaBonus)
+     * - Catalyst (type-specific): +15% multiplicative, consumed once per successful action
+     * - Catalyst (prime): +25% multiplicative, consumed once per successful action
+     * - Formula: finalRate = min(1, baseRate × (1 + teaBonus) × (1 + catalystBonus))
      */
 
 
@@ -15146,6 +15148,20 @@ self.onmessage = function (e) {
         COINIFY: 0.7, // 70%
         DECOMPOSE: 0.6, // 60%
         // TRANSMUTE: varies by item (from alchemyDetail.transmuteSuccessRate)
+    };
+
+    // Catalyst item HRIDs — type-specific catalysts and the universal prime catalyst
+    const CATALYST_HRIDS = {
+        coinify: '/items/catalyst_of_coinification',
+        decompose: '/items/catalyst_of_decomposition',
+        transmute: '/items/catalyst_of_transmutation',
+        prime: '/items/prime_catalyst',
+    };
+
+    // Multiplicative success rate bonuses for catalysts (hardcoded — not in game data structures)
+    const CATALYST_BONUSES = {
+        typeSpecific: 0.15, // 15% multiplicative
+        prime: 0.25, // 25% multiplicative
     };
 
     /**
@@ -15289,20 +15305,22 @@ self.onmessage = function (e) {
         /**
          * Calculate success rate with detailed breakdown
          * @param {number} baseRate - Base success rate (0-1)
-         * @returns {Object} Success rate breakdown { total, base, tea }
+         * @param {number} catalystBonus - Catalyst multiplicative bonus (0, 0.15, or 0.25)
+         * @param {number|null} teaBonusOverride - If provided, use this instead of reading live buffs
+         * @returns {Object} Success rate breakdown { total, base, tea, catalyst }
          */
-        calculateSuccessRateBreakdown(baseRate) {
+        calculateSuccessRateBreakdown(baseRate, catalystBonus = 0, teaBonusOverride = null) {
             try {
-                // Get alchemy success bonus from active buffs
-                const teaBonus = buffParser_js.getAlchemySuccessBonus();
+                const teaBonus = teaBonusOverride !== null ? teaBonusOverride : buffParser_js.getAlchemySuccessBonus();
 
-                // Calculate final success rate
-                const total = Math.min(1.0, baseRate * (1 + teaBonus));
+                // Calculate final success rate: base × (1 + tea) × (1 + catalyst)
+                const total = Math.min(1.0, baseRate * (1 + teaBonus) * (1 + catalystBonus));
 
                 return {
                     total,
                     base: baseRate,
                     tea: teaBonus,
+                    catalyst: catalystBonus,
                 };
             } catch (error) {
                 console.error('[AlchemyProfitCalculator] Failed to calculate success rate breakdown:', error);
@@ -15310,8 +15328,112 @@ self.onmessage = function (e) {
                     total: baseRate,
                     base: baseRate,
                     tea: 0,
+                    catalyst: 0,
                 };
             }
+        }
+
+        /**
+         * Find the best catalyst+tea combination for an alchemy action.
+         * Evaluates 6 combinations (no/type/prime catalyst × no/live tea) and returns
+         * the combo that yields the highest profitPerHour.
+         *
+         * @param {Object} params
+         * @param {string} params.actionType - 'coinify' | 'decompose' | 'transmute'
+         * @param {number} params.baseSuccessRate - Base success rate before modifiers
+         * @param {string} params.buyType - 'ask' | 'bid'
+         * @param {number} params.actionsPerHour - Actions per hour (with efficiency)
+         * @param {number} params.efficiencyDecimal - Efficiency as decimal
+         * @param {number} params.actionTime - Action time in seconds
+         * @param {number} params.alchemyBonusRevenue - Bonus revenue per hour (essences + rares)
+         * @param {Function} params.computeNetProfit - fn(successRate) => netProfitPerAttempt
+         * @param {Function} params.computeTeaCost - fn(teaBonus) => totalTeaCostPerHour
+         * @returns {Object} { catalystBonus, catalystHrid, catalystPrice, teaBonus, teaCostPerHour, successRateBreakdown }
+         */
+        _bestCatalystCombo({
+            actionType,
+            baseSuccessRate,
+            buyType,
+            actionsPerHour,
+            efficiencyDecimal,
+            actionTime,
+            alchemyBonusRevenue,
+            computeNetProfit,
+            computeTeaCost,
+        }) {
+            const liveTeaBonus = buffParser_js.getAlchemySuccessBonus();
+            const typeSpecificHrid = CATALYST_HRIDS[actionType];
+            const primeCatalystHrid = CATALYST_HRIDS.prime;
+            const typeSpecificPrice = marketData_js.getItemPrice(typeSpecificHrid, { context: 'profit', side: buyType }) ?? 0;
+            const primeCatalystPrice = marketData_js.getItemPrice(primeCatalystHrid, { context: 'profit', side: buyType }) ?? 0;
+
+            const combinations = [
+                { catalystBonus: 0, catalystHrid: null, catalystPrice: 0, teaBonus: liveTeaBonus },
+                { catalystBonus: 0, catalystHrid: null, catalystPrice: 0, teaBonus: 0 },
+                {
+                    catalystBonus: CATALYST_BONUSES.typeSpecific,
+                    catalystHrid: typeSpecificHrid,
+                    catalystPrice: typeSpecificPrice,
+                    teaBonus: liveTeaBonus,
+                },
+                {
+                    catalystBonus: CATALYST_BONUSES.typeSpecific,
+                    catalystHrid: typeSpecificHrid,
+                    catalystPrice: typeSpecificPrice,
+                    teaBonus: 0,
+                },
+                {
+                    catalystBonus: CATALYST_BONUSES.prime,
+                    catalystHrid: primeCatalystHrid,
+                    catalystPrice: primeCatalystPrice,
+                    teaBonus: liveTeaBonus,
+                },
+                {
+                    catalystBonus: CATALYST_BONUSES.prime,
+                    catalystHrid: primeCatalystHrid,
+                    catalystPrice: primeCatalystPrice,
+                    teaBonus: 0,
+                },
+            ];
+
+            let best = null;
+            let bestProfitPerHour = -Infinity;
+
+            for (const combo of combinations) {
+                const successRateBreakdown = this.calculateSuccessRateBreakdown(
+                    baseSuccessRate,
+                    combo.catalystBonus,
+                    combo.teaBonus
+                );
+                const successRate = successRateBreakdown.total;
+
+                // Catalyst cost: consumed once per successful action
+                const catalystCostPerAttempt = combo.catalystPrice * successRate;
+                const catalystCostPerHour = catalystCostPerAttempt * actionsPerHour;
+
+                const netProfitPerAttempt = computeNetProfit(successRate) - catalystCostPerAttempt;
+                const teaCostPerHour = combo.teaBonus > 0 ? computeTeaCost(combo.teaBonus) : 0;
+
+                const profitPerSecond = (netProfitPerAttempt * (1 + efficiencyDecimal)) / actionTime;
+                const profitPerHour =
+                    profitPerSecond * profitConstants_js.SECONDS_PER_HOUR + alchemyBonusRevenue - teaCostPerHour - catalystCostPerHour;
+
+                if (profitPerHour > bestProfitPerHour) {
+                    bestProfitPerHour = profitPerHour;
+                    best = {
+                        ...combo,
+                        successRateBreakdown,
+                        successRate,
+                        catalystCostPerAttempt,
+                        catalystCostPerHour,
+                        teaCostPerHour,
+                        netProfitPerAttempt,
+                        profitPerHour,
+                    };
+                }
+            }
+
+            return best;
         }
 
         /**
@@ -15400,11 +15522,6 @@ self.onmessage = function (e) {
                 // Get drink concentration separately (not in breakdown from calculateActionStats)
                 const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
 
-                // Calculate success rate with breakdown
-                const baseSuccessRate = BASE_SUCCESS_RATES.COINIFY;
-                const successRateBreakdown = this.calculateSuccessRateBreakdown(baseSuccessRate);
-                const successRate = successRateBreakdown.total;
-
                 // Calculate input cost (material cost)
                 const bulkMultiplier = itemDetails.alchemyDetail?.bulkMultiplier || 1;
                 const pricePerItem = marketData_js.getItemPrice(itemHrid, { context: 'profit', side: buyType, enhancementLevel });
@@ -15413,34 +15530,13 @@ self.onmessage = function (e) {
                 }
                 const materialCost = pricePerItem * bulkMultiplier;
 
-                // Coinify has no catalyst (catalyst is 0 for coinify)
-                const catalystPrice = 0;
-
                 // Get coin cost per action attempt
                 // If not in action data, calculate as 1/5 of item's sell price per item
                 const coinCost = actionDetails.coinCost || Math.floor((itemDetails.sellPrice || 0) * 0.2) * bulkMultiplier;
 
-                // Calculate cost per attempt (materials consumed on all attempts)
-                const costPerAttempt = materialCost + coinCost;
-
                 // Calculate output value (coins produced)
                 // Formula: sellPrice × bulkMultiplier × 5
                 const coinsProduced = (itemDetails.sellPrice || 0) * bulkMultiplier * 5;
-
-                // Revenue per attempt (coins are always 1:1, only get coins on success)
-                // Note: efficiency is applied to NET PROFIT, not revenue
-                const revenuePerAttempt = coinsProduced * successRate;
-
-                // Net profit per attempt (before efficiency)
-                const netProfitPerAttempt = revenuePerAttempt - costPerAttempt;
-
-                // Calculate tea costs
-                const teaCostData = profitHelpers_js.calculateTeaCostsPerHour({
-                    drinkSlots: dataManager.getActionDrinkSlots('/action_types/alchemy'),
-                    drinkConcentration,
-                    itemDetailMap: gameData.itemDetailMap,
-                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', side: buyType }),
-                });
 
                 // Calculate per-hour values
                 // Actions per hour (for display breakdown) - includes efficiency for display purposes
@@ -15457,16 +15553,46 @@ self.onmessage = function (e) {
                     gameData.itemDetailMap
                 );
 
-                // Material and revenue calculations (for breakdown display)
+                // Calculate live tea cost (used for tea combinations)
+                const teaCostData = profitHelpers_js.calculateTeaCostsPerHour({
+                    drinkSlots: dataManager.getActionDrinkSlots('/action_types/alchemy'),
+                    drinkConcentration,
+                    itemDetailMap: gameData.itemDetailMap,
+                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', side: buyType }),
+                });
+
+                // Find the best catalyst+tea combination
+                const combo = this._bestCatalystCombo({
+                    actionType: 'coinify',
+                    baseSuccessRate: BASE_SUCCESS_RATES.COINIFY,
+                    buyType,
+                    actionsPerHour: actionsPerHourWithEfficiency,
+                    efficiencyDecimal,
+                    actionTime,
+                    alchemyBonusRevenue: alchemyBonus.totalBonusRevenue,
+                    computeNetProfit: (successRate) => coinsProduced * successRate - (materialCost + coinCost),
+                    computeTeaCost: () => teaCostData.totalCostPerHour,
+                });
+
+                const {
+                    successRateBreakdown,
+                    successRate,
+                    catalystCostPerAttempt,
+                    catalystCostPerHour,
+                    teaCostPerHour,
+                    netProfitPerAttempt,
+                    profitPerHour: comboProfitPerHour,
+                } = combo;
+
+                // Revenue per attempt using winning combo's success rate
+                const revenuePerAttempt = coinsProduced * successRate;
+                const costPerAttempt = materialCost + coinCost + catalystCostPerAttempt;
+
+                // Per-hour totals
                 const materialCostPerHour = (materialCost + coinCost) * actionsPerHourWithEfficiency;
-                const catalystCostPerHour = 0; // No catalyst for coinify
                 const revenuePerHour = revenuePerAttempt * actionsPerHourWithEfficiency + alchemyBonus.totalBonusRevenue;
 
-                // Profit calculation (matches OLD system formula)
-                // Formula: (netProfit × (1 + efficiency)) / actionTime × 3600 + bonusRevenue - teaCost
-                const profitPerSecond = (netProfitPerAttempt * (1 + efficiencyDecimal)) / actionTime;
-                const profitPerHour =
-                    profitPerSecond * profitConstants_js.SECONDS_PER_HOUR + alchemyBonus.totalBonusRevenue - teaCostData.totalCostPerHour;
+                const profitPerHour = comboProfitPerHour;
                 const profitPerDay = profitHelpers_js.calculateProfitPerDay(profitPerHour);
 
                 // Build detailed breakdowns
@@ -15516,11 +15642,11 @@ self.onmessage = function (e) {
                 }
 
                 const catalystCost = {
-                    itemHrid: null,
-                    price: 0,
-                    costPerSuccess: 0,
-                    costPerAttempt: 0,
-                    costPerHour: 0,
+                    itemHrid: combo.catalystHrid,
+                    price: combo.catalystPrice,
+                    costPerSuccess: combo.catalystPrice,
+                    costPerAttempt: catalystCostPerAttempt,
+                    costPerHour: catalystCostPerHour,
                 };
 
                 const consumableCosts = teaCostData.costs.map((cost) => ({
@@ -15548,7 +15674,7 @@ self.onmessage = function (e) {
 
                     // Per-attempt economics
                     materialCost,
-                    catalystPrice,
+                    catalystPrice: combo.catalystPrice,
                     costPerAttempt,
                     incomePerAttempt: revenuePerAttempt,
                     netProfitPerAttempt,
@@ -15556,7 +15682,7 @@ self.onmessage = function (e) {
                     // Per-hour costs
                     materialCostPerHour,
                     catalystCostPerHour,
-                    totalTeaCostPerHour: teaCostData.totalCostPerHour,
+                    totalTeaCostPerHour: teaCostPerHour,
 
                     // Detailed breakdowns
                     requirementCosts,
@@ -15574,6 +15700,10 @@ self.onmessage = function (e) {
                     actionSpeedBreakdown,
                     rareFindBreakdown: alchemyBonus.rareFindBreakdown,
                     essenceFindBreakdown: alchemyBonus.essenceFindBreakdown,
+
+                    // Winning catalyst/tea combo indicators (for tooltip icons)
+                    winningCatalystHrid: combo.catalystHrid,
+                    winningTeaUsed: combo.teaBonus > 0,
 
                     // Pricing info
                     pricingMode,
@@ -15669,11 +15799,6 @@ self.onmessage = function (e) {
                 };
                 const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
 
-                // Calculate success rate with breakdown
-                const baseSuccessRate = BASE_SUCCESS_RATES.DECOMPOSE;
-                const successRateBreakdown = this.calculateSuccessRateBreakdown(baseSuccessRate);
-                const successRate = successRateBreakdown.total;
-
                 // Get input cost (market price of the item being decomposed)
                 const inputPrice = marketData_js.getItemPrice(itemHrid, { context: 'profit', side: buyType, enhancementLevel });
                 if (inputPrice === null) {
@@ -15726,26 +15851,9 @@ self.onmessage = function (e) {
                     }
                 }
 
-                // Revenue per attempt (only on success)
-                const revenuePerAttempt = outputValue * successRate;
-
                 // Get coin cost per action attempt
                 // If not in action data, calculate as 1/5 of item's sell price
                 const coinCost = actionDetails.coinCost || Math.floor((itemDetails.sellPrice || 0) * 0.2);
-
-                // Cost per attempt (input consumed on every attempt)
-                const costPerAttempt = inputPrice + coinCost;
-
-                // Net profit per attempt (before efficiency)
-                const netProfitPerAttempt = revenuePerAttempt - costPerAttempt;
-
-                // Calculate tea costs
-                const teaCostData = profitHelpers_js.calculateTeaCostsPerHour({
-                    drinkSlots: dataManager.getActionDrinkSlots('/action_types/alchemy'),
-                    drinkConcentration,
-                    itemDetailMap: gameData.itemDetailMap,
-                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', side: buyType }),
-                });
 
                 // Calculate per-hour values
                 // Convert efficiency from percentage to decimal
@@ -15761,15 +15869,46 @@ self.onmessage = function (e) {
                     gameData.itemDetailMap
                 );
 
-                // Material and revenue calculations (for breakdown display)
+                // Calculate live tea cost (used for tea combinations)
+                const teaCostData = profitHelpers_js.calculateTeaCostsPerHour({
+                    drinkSlots: dataManager.getActionDrinkSlots('/action_types/alchemy'),
+                    drinkConcentration,
+                    itemDetailMap: gameData.itemDetailMap,
+                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', side: buyType }),
+                });
+
+                // Find the best catalyst+tea combination
+                const combo = this._bestCatalystCombo({
+                    actionType: 'decompose',
+                    baseSuccessRate: BASE_SUCCESS_RATES.DECOMPOSE,
+                    buyType,
+                    actionsPerHour: actionsPerHourWithEfficiency,
+                    efficiencyDecimal,
+                    actionTime,
+                    alchemyBonusRevenue: alchemyBonus.totalBonusRevenue,
+                    computeNetProfit: (successRate) => outputValue * successRate - (inputPrice + coinCost),
+                    computeTeaCost: () => teaCostData.totalCostPerHour,
+                });
+
+                const {
+                    successRateBreakdown,
+                    successRate,
+                    catalystCostPerAttempt,
+                    catalystCostPerHour,
+                    teaCostPerHour,
+                    netProfitPerAttempt,
+                    profitPerHour: comboProfitPerHour,
+                } = combo;
+
+                // Revenue and cost using winning combo's success rate
+                const revenuePerAttempt = outputValue * successRate;
+                const costPerAttempt = inputPrice + coinCost + catalystCostPerAttempt;
+
+                // Per-hour totals
                 const materialCostPerHour = (inputPrice + coinCost) * actionsPerHourWithEfficiency;
-                const catalystCostPerHour = 0; // No catalyst for decompose
                 const revenuePerHour = revenuePerAttempt * actionsPerHourWithEfficiency + alchemyBonus.totalBonusRevenue;
 
-                // Profit calculation (matches OLD system formula)
-                const profitPerSecond = (netProfitPerAttempt * (1 + efficiencyDecimal)) / actionTime;
-                const profitPerHour =
-                    profitPerSecond * profitConstants_js.SECONDS_PER_HOUR + alchemyBonus.totalBonusRevenue - teaCostData.totalCostPerHour;
+                const profitPerHour = comboProfitPerHour;
                 const profitPerDay = profitHelpers_js.calculateProfitPerDay(profitPerHour);
 
                 // Build detailed breakdowns
@@ -15815,11 +15954,11 @@ self.onmessage = function (e) {
                 }
 
                 const catalystCost = {
-                    itemHrid: null,
-                    price: 0,
-                    costPerSuccess: 0,
-                    costPerAttempt: 0,
-                    costPerHour: 0,
+                    itemHrid: combo.catalystHrid,
+                    price: combo.catalystPrice,
+                    costPerSuccess: combo.catalystPrice,
+                    costPerAttempt: catalystCostPerAttempt,
+                    costPerHour: catalystCostPerHour,
                 };
 
                 const consumableCosts = teaCostData.costs.map((cost) => ({
@@ -15847,7 +15986,7 @@ self.onmessage = function (e) {
 
                     // Per-attempt economics
                     materialCost: inputPrice,
-                    catalystPrice: 0,
+                    catalystPrice: combo.catalystPrice,
                     costPerAttempt,
                     incomePerAttempt: revenuePerAttempt,
                     netProfitPerAttempt,
@@ -15855,7 +15994,7 @@ self.onmessage = function (e) {
                     // Per-hour costs
                     materialCostPerHour,
                     catalystCostPerHour,
-                    totalTeaCostPerHour: teaCostData.totalCostPerHour,
+                    totalTeaCostPerHour: teaCostPerHour,
 
                     // Detailed breakdowns
                     requirementCosts,
@@ -15873,6 +16012,10 @@ self.onmessage = function (e) {
                     actionSpeedBreakdown,
                     rareFindBreakdown: alchemyBonus.rareFindBreakdown,
                     essenceFindBreakdown: alchemyBonus.essenceFindBreakdown,
+
+                    // Winning catalyst/tea combo indicators (for tooltip icons)
+                    winningCatalystHrid: combo.catalystHrid,
+                    winningTeaUsed: combo.teaBonus > 0,
 
                     // Pricing info
                     pricingMode,
@@ -15973,10 +16116,6 @@ self.onmessage = function (e) {
                 };
                 const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
 
-                // Calculate success rate with breakdown
-                const successRateBreakdown = this.calculateSuccessRateBreakdown(baseSuccessRate);
-                const successRate = successRateBreakdown.total;
-
                 // Get input cost (market price of the item being transmuted)
                 const inputPrice = marketData_js.getItemPrice(itemHrid, { context: 'profit', side: buyType });
                 if (inputPrice === null) {
@@ -16027,34 +16166,12 @@ self.onmessage = function (e) {
                     }
                 }
 
-                // Revenue per attempt (expected value on success, excluding self-returns)
-                const revenuePerAttempt = expectedOutputValue * successRate;
-
-                // Material cost calculation with self-return adjustment
-                // Gross cost = input price × bulk
-                // Self-return value = input price × self return rate × success rate × bulk
-                // Net cost = gross - self-return value
-                const grossMaterialCost = inputPrice * bulkMultiplier;
-                const selfReturnValue = inputPrice * selfReturnRate * successRate * selfReturnCount;
-                const netMaterialCost = grossMaterialCost - selfReturnValue;
-
                 // Get coin cost per action attempt
                 // If not in action data, calculate as 1/5 of item's sell price per item
                 const coinCost = actionDetails.coinCost || Math.floor((itemDetails.sellPrice || 0) * 0.2) * bulkMultiplier;
 
-                // Cost per attempt (net material cost after self-return + coin cost)
-                const costPerAttempt = netMaterialCost + coinCost;
-
-                // Net profit per attempt (before efficiency)
-                const netProfitPerAttempt = revenuePerAttempt - costPerAttempt;
-
-                // Calculate tea costs
-                const teaCostData = profitHelpers_js.calculateTeaCostsPerHour({
-                    drinkSlots: dataManager.getActionDrinkSlots('/action_types/alchemy'),
-                    drinkConcentration,
-                    itemDetailMap: gameData.itemDetailMap,
-                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', side: buyType }),
-                });
+                // Gross material cost (before self-return adjustment)
+                const grossMaterialCost = inputPrice * bulkMultiplier;
 
                 // Calculate per-hour values
                 // Convert efficiency from percentage to decimal
@@ -16070,16 +16187,55 @@ self.onmessage = function (e) {
                     gameData.itemDetailMap
                 );
 
-                // Material and revenue calculations (for breakdown display)
-                // Use net material cost (after self-return adjustment)
+                // Calculate live tea cost (used for tea combinations)
+                const teaCostData = profitHelpers_js.calculateTeaCostsPerHour({
+                    drinkSlots: dataManager.getActionDrinkSlots('/action_types/alchemy'),
+                    drinkConcentration,
+                    itemDetailMap: gameData.itemDetailMap,
+                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', side: buyType }),
+                });
+
+                // Find the best catalyst+tea combination.
+                // Note: selfReturnValue depends on successRate so it must be computed inside the combo loop.
+                const combo = this._bestCatalystCombo({
+                    actionType: 'transmute',
+                    baseSuccessRate,
+                    buyType,
+                    actionsPerHour: actionsPerHourWithEfficiency,
+                    efficiencyDecimal,
+                    actionTime,
+                    alchemyBonusRevenue: alchemyBonus.totalBonusRevenue,
+                    computeNetProfit: (successRate) => {
+                        const selfReturnVal = inputPrice * selfReturnRate * successRate * selfReturnCount;
+                        const netMat = grossMaterialCost - selfReturnVal;
+                        return expectedOutputValue * successRate - (netMat + coinCost);
+                    },
+                    computeTeaCost: () => teaCostData.totalCostPerHour,
+                });
+
+                const {
+                    successRateBreakdown,
+                    successRate,
+                    catalystCostPerAttempt,
+                    catalystCostPerHour,
+                    teaCostPerHour,
+                    netProfitPerAttempt,
+                    profitPerHour: comboProfitPerHour,
+                } = combo;
+
+                // Compute final self-return and material cost using winning combo's success rate
+                const selfReturnValue = inputPrice * selfReturnRate * successRate * selfReturnCount;
+                const netMaterialCost = grossMaterialCost - selfReturnValue;
+
+                // Revenue and cost using winning combo
+                const revenuePerAttempt = expectedOutputValue * successRate;
+                const costPerAttempt = netMaterialCost + coinCost + catalystCostPerAttempt;
+
+                // Per-hour totals
                 const materialCostPerHour = (netMaterialCost + coinCost) * actionsPerHourWithEfficiency;
-                const catalystCostPerHour = 0; // No catalyst for transmute
                 const revenuePerHour = revenuePerAttempt * actionsPerHourWithEfficiency + alchemyBonus.totalBonusRevenue;
 
-                // Profit calculation (matches OLD system formula)
-                const profitPerSecond = (netProfitPerAttempt * (1 + efficiencyDecimal)) / actionTime;
-                const profitPerHour =
-                    profitPerSecond * profitConstants_js.SECONDS_PER_HOUR + alchemyBonus.totalBonusRevenue - teaCostData.totalCostPerHour;
+                const profitPerHour = comboProfitPerHour;
                 const profitPerDay = profitHelpers_js.calculateProfitPerDay(profitPerHour);
 
                 // Build detailed breakdowns
@@ -16129,11 +16285,11 @@ self.onmessage = function (e) {
                 }
 
                 const catalystCost = {
-                    itemHrid: null,
-                    price: 0,
-                    costPerSuccess: 0,
-                    costPerAttempt: 0,
-                    costPerHour: 0,
+                    itemHrid: combo.catalystHrid,
+                    price: combo.catalystPrice,
+                    costPerSuccess: combo.catalystPrice,
+                    costPerAttempt: catalystCostPerAttempt,
+                    costPerHour: catalystCostPerHour,
                 };
 
                 const consumableCosts = teaCostData.costs.map((cost) => ({
@@ -16163,7 +16319,7 @@ self.onmessage = function (e) {
                     materialCost: netMaterialCost, // Net cost after self-return adjustment
                     grossMaterialCost,
                     selfReturnValue,
-                    catalystPrice: 0,
+                    catalystPrice: combo.catalystPrice,
                     costPerAttempt,
                     incomePerAttempt: revenuePerAttempt,
                     netProfitPerAttempt,
@@ -16171,7 +16327,7 @@ self.onmessage = function (e) {
                     // Per-hour costs
                     materialCostPerHour,
                     catalystCostPerHour,
-                    totalTeaCostPerHour: teaCostData.totalCostPerHour,
+                    totalTeaCostPerHour: teaCostPerHour,
 
                     // Detailed breakdowns
                     requirementCosts,
@@ -16189,6 +16345,10 @@ self.onmessage = function (e) {
                     actionSpeedBreakdown,
                     rareFindBreakdown: alchemyBonus.rareFindBreakdown,
                     essenceFindBreakdown: alchemyBonus.essenceFindBreakdown,
+
+                    // Winning catalyst/tea combo indicators (for tooltip icons)
+                    winningCatalystHrid: combo.catalystHrid,
+                    winningTeaUsed: combo.teaBonus > 0,
 
                     // Pricing info
                     pricingMode,

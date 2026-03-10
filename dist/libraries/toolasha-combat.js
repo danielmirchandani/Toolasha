@@ -1,11 +1,11 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.33.3
+ * Version: 1.34.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (config, dataManager, domObserver, webSocketHook, profileManager_js, storage, timerRegistry_js, domObserverHelpers_js, marketAPI, formatters_js, reactInput_js, dom, abilityCostCalculator_js, houseCostCalculator_js, enhancementConfig_js, marketData_js) {
+(function (config, dataManager, domObserver, webSocketHook, profileManager_js, storage, timerRegistry_js, domObserverHelpers_js, marketAPI, formatters_js, reactInput_js, tokenValuation_js, marketData_js, profitHelpers_js, dom, abilityCostCalculator_js, houseCostCalculator_js, enhancementConfig_js) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -9255,10 +9255,789 @@
     const combatStatsDataCollector = new CombatStatsDataCollector();
 
     /**
+     * Worker Pool Manager
+     * Manages a pool of Web Workers for parallel task execution
+     */
+
+    class WorkerPool {
+        constructor(workerScript, poolSize = null) {
+            // Auto-detect optimal pool size (max 4 workers)
+            this.poolSize = poolSize || Math.min(navigator.hardwareConcurrency || 2, 4);
+            this.workerScript = workerScript;
+            this.workers = [];
+            this.taskQueue = [];
+            this.activeWorkers = new Set();
+            this.nextTaskId = 0;
+            this.initialized = false;
+        }
+
+        /**
+         * Initialize the worker pool
+         */
+        async initialize() {
+            if (this.initialized) {
+                return;
+            }
+
+            try {
+                // Create workers
+                for (let i = 0; i < this.poolSize; i++) {
+                    const worker = new Worker(URL.createObjectURL(this.workerScript));
+                    this.workers.push({
+                        id: i,
+                        worker,
+                        busy: false,
+                        currentTask: null,
+                    });
+                }
+
+                this.initialized = true;
+            } catch (error) {
+                console.error('[WorkerPool] Failed to initialize:', error);
+                throw error;
+            }
+        }
+
+        /**
+         * Execute a task in the worker pool
+         * @param {Object} taskData - Data to send to worker
+         * @returns {Promise} Promise that resolves with worker result
+         */
+        async execute(taskData) {
+            if (!this.initialized) {
+                await this.initialize();
+            }
+
+            return new Promise((resolve, reject) => {
+                const taskId = this.nextTaskId++;
+                const task = {
+                    id: taskId,
+                    data: taskData,
+                    resolve,
+                    reject,
+                    timestamp: Date.now(),
+                };
+
+                // Try to assign to an available worker immediately
+                const availableWorker = this.workers.find((w) => !w.busy);
+
+                if (availableWorker) {
+                    this.assignTask(availableWorker, task);
+                } else {
+                    // Queue the task if all workers are busy
+                    this.taskQueue.push(task);
+                }
+            });
+        }
+
+        /**
+         * Execute multiple tasks in parallel
+         * @param {Array} taskDataArray - Array of task data objects
+         * @returns {Promise<Array>} Promise that resolves with array of results
+         */
+        async executeAll(taskDataArray) {
+            if (!this.initialized) {
+                await this.initialize();
+            }
+
+            const promises = taskDataArray.map((taskData) => this.execute(taskData));
+            return Promise.all(promises);
+        }
+
+        /**
+         * Assign a task to a worker
+         * @private
+         */
+        assignTask(workerWrapper, task) {
+            workerWrapper.busy = true;
+            workerWrapper.currentTask = task;
+
+            // Set up message handler for this specific task
+            const messageHandler = (e) => {
+                const { taskId, result, error } = e.data;
+
+                if (taskId === task.id) {
+                    // Clean up
+                    workerWrapper.worker.removeEventListener('message', messageHandler);
+                    workerWrapper.worker.removeEventListener('error', errorHandler);
+                    workerWrapper.busy = false;
+                    workerWrapper.currentTask = null;
+
+                    // Resolve or reject the promise
+                    if (error) {
+                        task.reject(new Error(error));
+                    } else {
+                        task.resolve(result);
+                    }
+
+                    // Process next task in queue
+                    this.processQueue();
+                }
+            };
+
+            const errorHandler = (error) => {
+                console.error('[WorkerPool] Worker error:', error);
+                workerWrapper.worker.removeEventListener('message', messageHandler);
+                workerWrapper.worker.removeEventListener('error', errorHandler);
+                workerWrapper.busy = false;
+                workerWrapper.currentTask = null;
+
+                task.reject(error);
+
+                // Process next task in queue
+                this.processQueue();
+            };
+
+            workerWrapper.worker.addEventListener('message', messageHandler);
+            workerWrapper.worker.addEventListener('error', errorHandler);
+
+            // Send task to worker
+            workerWrapper.worker.postMessage({
+                taskId: task.id,
+                data: task.data,
+            });
+        }
+
+        /**
+         * Process the next task in the queue
+         * @private
+         */
+        processQueue() {
+            if (this.taskQueue.length === 0) {
+                return;
+            }
+
+            const availableWorker = this.workers.find((w) => !w.busy);
+            if (availableWorker) {
+                const task = this.taskQueue.shift();
+                this.assignTask(availableWorker, task);
+            }
+        }
+
+        /**
+         * Get pool statistics
+         */
+        getStats() {
+            return {
+                poolSize: this.poolSize,
+                busyWorkers: this.workers.filter((w) => w.busy).length,
+                queuedTasks: this.taskQueue.length,
+                totalWorkers: this.workers.length,
+            };
+        }
+
+        /**
+         * Terminate all workers and clean up
+         */
+        terminate() {
+            for (const workerWrapper of this.workers) {
+                workerWrapper.worker.terminate();
+            }
+
+            this.workers = [];
+            this.taskQueue = [];
+            this.initialized = false;
+        }
+    }
+
+    /**
+     * Expected Value Calculator Worker Manager
+     * Manages a worker pool for parallel EV container calculations
+     */
+
+
+    // Worker pool instance
+    let workerPool$1 = null;
+
+    // Worker script as inline string
+    const WORKER_SCRIPT$1 = `
+// Cache for EV calculation results
+const evCache = new Map();
+
+/**
+ * Calculate expected value for a single container
+ * @param {Object} data - Container calculation data
+ * @returns {Object} {containerHrid, ev}
+ */
+function calculateContainerEV(data) {
+    const { containerHrid, dropTable, priceMap, COIN_HRID, MARKET_TAX } = data;
+
+    if (!dropTable || dropTable.length === 0) {
+        return { containerHrid, ev: null };
+    }
+
+    let totalExpectedValue = 0;
+
+    // Calculate expected value for each drop
+    for (const drop of dropTable) {
+        const itemHrid = drop.itemHrid;
+        const dropRate = drop.dropRate || 0;
+        const minCount = drop.minCount || 0;
+        const maxCount = drop.maxCount || 0;
+
+        // Skip invalid drops
+        if (dropRate <= 0 || (minCount === 0 && maxCount === 0)) {
+            continue;
+        }
+
+        // Calculate average drop count
+        const avgCount = (minCount + maxCount) / 2;
+
+        // Get price for this drop
+        const priceData = priceMap[itemHrid];
+        if (!priceData || priceData.price === null) {
+            continue; // Skip drops with missing data
+        }
+
+        const price = priceData.price;
+        const canBeSold = priceData.canBeSold;
+        const isCoin = itemHrid === COIN_HRID;
+
+        // Calculate drop value with tax
+        const dropValue = isCoin
+            ? avgCount * dropRate * price
+            : canBeSold
+              ? avgCount * dropRate * price * (1 - MARKET_TAX)
+              : avgCount * dropRate * price;
+
+        totalExpectedValue += dropValue;
+    }
+
+    return { containerHrid, ev: totalExpectedValue };
+}
+
+/**
+ * Calculate EV for a batch of containers
+ * @param {Array} containers - Array of container data objects
+ * @returns {Array} Array of {containerHrid, ev} results
+ */
+function calculateBatchEV(containers) {
+    const results = [];
+
+    for (const container of containers) {
+        const result = calculateContainerEV(container);
+        if (result.ev !== null) {
+            evCache.set(result.containerHrid, result.ev);
+        }
+        results.push(result);
+    }
+
+    return results;
+}
+
+self.onmessage = function (e) {
+    const { taskId, data } = e.data;
+    try {
+        const { action, params } = data;
+
+        if (action === 'calculateBatch') {
+            const results = calculateBatchEV(params.containers);
+            self.postMessage({ taskId, result: results });
+        } else if (action === 'clearCache') {
+            evCache.clear();
+            self.postMessage({ taskId, result: { success: true, message: 'Cache cleared' } });
+        } else {
+            throw new Error(\`Unknown action: \${action}\`);
+        }
+    } catch (error) {
+        self.postMessage({ taskId, error: error.message || String(error) });
+    }
+};
+`;
+
+    /**
+     * Get or create the worker pool instance
+     */
+    async function getWorkerPool$1() {
+        if (workerPool$1) {
+            return workerPool$1;
+        }
+
+        try {
+            // Create worker blob from inline script
+            const blob = new Blob([WORKER_SCRIPT$1], { type: 'application/javascript' });
+
+            // Initialize worker pool with 2-4 workers
+            workerPool$1 = new WorkerPool(blob);
+            await workerPool$1.initialize();
+
+            return workerPool$1;
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    /**
+     * Calculate EV for multiple containers in parallel
+     * @param {Array} containers - Array of container data objects
+     * @returns {Promise<Array>} Array of {containerHrid, ev} results
+     */
+    async function calculateEVBatch(containers) {
+        const pool = await getWorkerPool$1();
+
+        // Split containers into chunks for parallel processing
+        const chunkSize = Math.ceil(containers.length / pool.getStats().poolSize);
+        const chunks = [];
+
+        for (let i = 0; i < containers.length; i += chunkSize) {
+            chunks.push(containers.slice(i, i + chunkSize));
+        }
+
+        // Process chunks in parallel
+        const tasks = chunks.map((chunk) => ({
+            action: 'calculateBatch',
+            params: { containers: chunk },
+        }));
+
+        const results = await pool.executeAll(tasks);
+
+        // Flatten results
+        return results.flat();
+    }
+
+    /**
+     * Expected Value Calculator Module
+     * Calculates expected value for openable containers
+     */
+
+
+    /**
+     * ExpectedValueCalculator class handles EV calculations for openable containers
+     */
+    class ExpectedValueCalculator {
+        constructor() {
+            // Constants
+            this.MARKET_TAX = 0.02; // 2% marketplace tax
+            this.CONVERGENCE_ITERATIONS = 4; // Nested container convergence
+
+            // Cache for container EVs
+            this.containerCache = new Map();
+
+            // Special item HRIDs
+            this.COIN_HRID = '/items/coin';
+            this.COWBELL_HRID = '/items/cowbell';
+            this.COWBELL_BAG_HRID = '/items/bag_of_10_cowbells';
+
+            // Dungeon token HRIDs
+            this.DUNGEON_TOKENS = [
+                '/items/chimerical_token',
+                '/items/sinister_token',
+                '/items/enchanted_token',
+                '/items/pirate_token',
+            ];
+
+            // Flag to track if initialized
+            this.isInitialized = false;
+
+            // Retry handler reference for cleanup
+            this.retryHandler = null;
+        }
+
+        /**
+         * Initialize the calculator
+         * Pre-calculates all openable containers with nested convergence
+         */
+        async initialize() {
+            if (!dataManager.getInitClientData()) {
+                // Init data not yet available - set up retry on next character update
+                if (!this.retryHandler) {
+                    this.retryHandler = () => {
+                        this.initialize(); // Retry initialization
+                    };
+                    dataManager.on('character_initialized', this.retryHandler);
+                }
+                return false;
+            }
+
+            // Data is available - remove retry handler if it exists
+            if (this.retryHandler) {
+                dataManager.off('character_initialized', this.retryHandler);
+                this.retryHandler = null;
+            }
+
+            // Wait for market data to load
+            if (!marketAPI.isLoaded()) {
+                await marketAPI.fetch(true); // Force fresh fetch on init
+            }
+
+            // Calculate all containers with 4-iteration convergence for nesting (now async with workers)
+            await this.calculateNestedContainers();
+
+            this.isInitialized = true;
+
+            // Notify listeners that calculator is ready
+            dataManager.emit('expected_value_initialized', { timestamp: Date.now() });
+
+            return true;
+        }
+
+        /**
+         * Calculate all containers with nested convergence using workers
+         * Iterates 4 times to resolve nested container values
+         */
+        async calculateNestedContainers() {
+            const initData = dataManager.getInitClientData();
+            if (!initData || !initData.openableLootDropMap) {
+                return;
+            }
+
+            // Get all openable container HRIDs
+            const containerHrids = Object.keys(initData.openableLootDropMap);
+
+            // Iterate 4 times for convergence (handles nesting depth)
+            for (let iteration = 0; iteration < this.CONVERGENCE_ITERATIONS; iteration++) {
+                // Build price map for all items (includes cached container EVs from previous iterations)
+                const priceMap = this.buildPriceMap(containerHrids, initData);
+
+                // Prepare container data for workers
+                const containerData = containerHrids.map((containerHrid) => ({
+                    containerHrid,
+                    dropTable: initData.openableLootDropMap[containerHrid],
+                    priceMap,
+                    COIN_HRID: this.COIN_HRID,
+                    MARKET_TAX: this.MARKET_TAX,
+                }));
+
+                // Calculate all containers in parallel using workers
+                try {
+                    const results = await calculateEVBatch(containerData);
+
+                    // Update cache with results
+                    for (const result of results) {
+                        if (result.ev !== null) {
+                            this.containerCache.set(result.containerHrid, result.ev);
+                        }
+                    }
+                } catch (error) {
+                    // Worker failed, fall back to main thread calculation
+                    console.warn('[ExpectedValueCalculator] Worker failed, falling back to main thread:', error);
+                    for (const containerHrid of containerHrids) {
+                        const ev = this.calculateSingleContainer(containerHrid, initData);
+                        if (ev !== null) {
+                            this.containerCache.set(containerHrid, ev);
+                        }
+                    }
+                }
+            }
+        }
+
+        /**
+         * Build price map for all items needed for container calculations
+         * @param {Array} containerHrids - Array of container HRIDs
+         * @param {Object} initData - Game data
+         * @returns {Object} Map of itemHrid to {price, canBeSold}
+         */
+        buildPriceMap(containerHrids, initData) {
+            const priceMap = {};
+            const processedItems = new Set();
+
+            // Collect all unique items from all containers
+            for (const containerHrid of containerHrids) {
+                const dropTable = initData.openableLootDropMap[containerHrid];
+                if (!dropTable) continue;
+
+                for (const drop of dropTable) {
+                    const itemHrid = drop.itemHrid;
+                    if (processedItems.has(itemHrid)) continue;
+                    processedItems.add(itemHrid);
+
+                    // Get price and tradeable status
+                    const price = this.getDropPrice(itemHrid);
+                    const itemDetails = dataManager.getItemDetails(itemHrid);
+                    const canBeSold = itemDetails?.tradeable !== false;
+
+                    priceMap[itemHrid] = {
+                        price,
+                        canBeSold,
+                    };
+                }
+            }
+
+            return priceMap;
+        }
+
+        /**
+         * Calculate expected value for a single container
+         * @param {string} containerHrid - Container item HRID
+         * @param {Object} initData - Cached game data (optional, will fetch if not provided)
+         * @returns {number|null} Expected value or null if unavailable
+         */
+        calculateSingleContainer(containerHrid, initData = null) {
+            // Use cached data if provided, otherwise fetch
+            if (!initData) {
+                initData = dataManager.getInitClientData();
+            }
+            if (!initData || !initData.openableLootDropMap) {
+                return null;
+            }
+
+            // Get drop table for this container
+            const dropTable = initData.openableLootDropMap[containerHrid];
+            if (!dropTable || dropTable.length === 0) {
+                return null;
+            }
+
+            let totalExpectedValue = 0;
+
+            // Calculate expected value for each drop
+            for (const drop of dropTable) {
+                const itemHrid = drop.itemHrid;
+                const dropRate = drop.dropRate || 0;
+                const minCount = drop.minCount || 0;
+                const maxCount = drop.maxCount || 0;
+
+                // Skip invalid drops
+                if (dropRate <= 0 || (minCount === 0 && maxCount === 0)) {
+                    continue;
+                }
+
+                // Calculate average drop count
+                const avgCount = (minCount + maxCount) / 2;
+
+                // Get price for this drop
+                const price = this.getDropPrice(itemHrid);
+
+                if (price === null) {
+                    continue; // Skip drops with missing data
+                }
+
+                // Check if item is tradeable (for tax calculation)
+                const itemDetails = dataManager.getItemDetails(itemHrid);
+                const canBeSold = itemDetails?.tradeable !== false;
+
+                // Special case: Coin never has market tax (it's currency, not a market item)
+                const isCoin = itemHrid === this.COIN_HRID;
+
+                const dropValue = isCoin
+                    ? avgCount * dropRate * price // No tax for coins
+                    : canBeSold
+                      ? profitHelpers_js.calculatePriceAfterTax(avgCount * dropRate * price, this.MARKET_TAX)
+                      : avgCount * dropRate * price;
+                totalExpectedValue += dropValue;
+            }
+
+            // Cache the result for future lookups
+            if (totalExpectedValue > 0) {
+                this.containerCache.set(containerHrid, totalExpectedValue);
+            }
+
+            return totalExpectedValue;
+        }
+
+        /**
+         * Get price for a drop item
+         * Handles special cases (Coin, Cowbell, Dungeon Tokens, nested containers)
+         * @param {string} itemHrid - Item HRID
+         * @returns {number|null} Price or null if unavailable
+         */
+        getDropPrice(itemHrid) {
+            // Special case: Coin (face value = 1)
+            if (itemHrid === this.COIN_HRID) {
+                return 1;
+            }
+
+            // Special case: Cowbell (use bag price ÷ 10, with 18% tax)
+            if (itemHrid === this.COWBELL_HRID) {
+                // Get Cowbell Bag price using profit context (sell side - you're selling the bag)
+                const bagValue = marketData_js.getItemPrice(this.COWBELL_BAG_HRID, { context: 'profit', side: 'sell' }) || 0;
+
+                if (bagValue > 0) {
+                    // Apply 18% market tax (Cowbell Bag only), then divide by 10
+                    return profitHelpers_js.calculatePriceAfterTax(bagValue, 0.18) / 10;
+                }
+                return null; // No bag price available
+            }
+
+            // Special case: Dungeon Tokens (calculate value from shop items)
+            if (this.DUNGEON_TOKENS.includes(itemHrid)) {
+                return tokenValuation_js.calculateDungeonTokenValue(itemHrid, 'profitCalc_pricingMode', 'expectedValue_respectPricingMode');
+            }
+
+            // Check if this is a nested container (use cached EV)
+            if (this.containerCache.has(itemHrid)) {
+                return this.containerCache.get(itemHrid);
+            }
+
+            // Regular market item - get price based on pricing mode (sell side - you're selling drops)
+            const dropPrice = marketData_js.getItemPrice(itemHrid, { enhancementLevel: 0, context: 'profit', side: 'sell' });
+            return dropPrice > 0 ? dropPrice : null;
+        }
+
+        /**
+         * Calculate expected value for an openable container
+         * @param {string} itemHrid - Container item HRID
+         * @returns {Object|null} EV data or null
+         */
+        calculateExpectedValue(itemHrid) {
+            if (!this.isInitialized) {
+                console.warn('[ExpectedValueCalculator] Not initialized');
+                return null;
+            }
+
+            // Get item details
+            const itemDetails = dataManager.getItemDetails(itemHrid);
+            if (!itemDetails) {
+                return null;
+            }
+
+            // Verify this is an openable container
+            if (!itemDetails.isOpenable) {
+                return null; // Not an openable container
+            }
+
+            // Get detailed drop breakdown (calculates with fresh market prices)
+            const drops = this.getDropBreakdown(itemHrid);
+
+            // Calculate total expected value from fresh drop data
+            const expectedReturn = drops.reduce((sum, drop) => sum + drop.expectedValue, 0);
+
+            return {
+                itemName: itemDetails.name,
+                itemHrid,
+                expectedValue: expectedReturn,
+                drops,
+            };
+        }
+
+        /**
+         * Get cached expected value for a container (for use by other modules)
+         * @param {string} itemHrid - Container item HRID
+         * @returns {number|null} Cached EV or null
+         */
+        getCachedValue(itemHrid) {
+            return this.containerCache.get(itemHrid) || null;
+        }
+
+        /**
+         * Get detailed drop breakdown for display
+         * @param {string} containerHrid - Container HRID
+         * @returns {Array} Array of drop objects
+         */
+        getDropBreakdown(containerHrid) {
+            const initData = dataManager.getInitClientData();
+            if (!initData || !initData.openableLootDropMap) {
+                return [];
+            }
+
+            const dropTable = initData.openableLootDropMap[containerHrid];
+            if (!dropTable) {
+                return [];
+            }
+
+            const drops = [];
+
+            for (const drop of dropTable) {
+                const itemHrid = drop.itemHrid;
+                const dropRate = drop.dropRate || 0;
+                const minCount = drop.minCount || 0;
+                const maxCount = drop.maxCount || 0;
+
+                if (dropRate <= 0) {
+                    continue;
+                }
+
+                // Get item details
+                const itemDetails = dataManager.getItemDetails(itemHrid);
+                if (!itemDetails) {
+                    continue;
+                }
+
+                // Calculate average count
+                const avgCount = (minCount + maxCount) / 2;
+
+                // Get price
+                const price = this.getDropPrice(itemHrid);
+
+                // Calculate expected value for this drop
+                const itemCanBeSold = itemDetails.tradeable !== false;
+
+                // Special case: Coin never has market tax (it's currency, not a market item)
+                const isCoin = itemHrid === this.COIN_HRID;
+
+                const dropValue =
+                    price !== null
+                        ? isCoin
+                            ? avgCount * dropRate * price // No tax for coins
+                            : itemCanBeSold
+                              ? profitHelpers_js.calculatePriceAfterTax(avgCount * dropRate * price, this.MARKET_TAX)
+                              : avgCount * dropRate * price
+                        : 0;
+
+                drops.push({
+                    itemHrid,
+                    itemName: itemDetails.name,
+                    dropRate,
+                    avgCount,
+                    priceEach: price || 0,
+                    expectedValue: dropValue,
+                    hasPriceData: price !== null,
+                });
+            }
+
+            // Sort by expected value (highest first)
+            drops.sort((a, b) => b.expectedValue - a.expectedValue);
+
+            return drops;
+        }
+
+        /**
+         * Invalidate cache (call when market data refreshes)
+         */
+        invalidateCache() {
+            this.containerCache.clear();
+            this.isInitialized = false;
+
+            // Re-initialize if data is available
+            if (dataManager.getInitClientData() && marketAPI.isLoaded()) {
+                this.initialize();
+            }
+        }
+
+        /**
+         * Cleanup calculator state and handlers
+         */
+        cleanup() {
+            if (this.retryHandler) {
+                dataManager.off('character_initialized', this.retryHandler);
+                this.retryHandler = null;
+            }
+
+            this.containerCache.clear();
+            this.isInitialized = false;
+        }
+
+        disable() {
+            this.cleanup();
+        }
+    }
+
+    const expectedValueCalculator = new ExpectedValueCalculator();
+
+    /**
      * Combat Statistics Calculator
      * Calculates income, profit, consumable costs, and other statistics
      */
 
+
+    // Maps regular dungeon chest HRIDs to their required entry key HRIDs (1:1 relationship)
+    const DUNGEON_CHEST_KEYS = {
+        '/items/chimerical_chest': '/items/chimerical_entry_key',
+        '/items/sinister_chest': '/items/sinister_entry_key',
+        '/items/enchanted_chest': '/items/enchanted_entry_key',
+        '/items/pirate_chest': '/items/pirate_entry_key',
+    };
+
+    // Maps dungeon chest HRIDs (regular and refinement) to their required chest key HRIDs (1:1 relationship)
+    const DUNGEON_CHEST_CHEST_KEYS = {
+        '/items/chimerical_chest': '/items/chimerical_chest_key',
+        '/items/sinister_chest': '/items/sinister_chest_key',
+        '/items/enchanted_chest': '/items/enchanted_chest_key',
+        '/items/pirate_chest': '/items/pirate_chest_key',
+        '/items/chimerical_refinement_chest': '/items/chimerical_chest_key',
+        '/items/sinister_refinement_chest': '/items/sinister_chest_key',
+        '/items/enchanted_refinement_chest': '/items/enchanted_chest_key',
+        '/items/pirate_refinement_chest': '/items/pirate_chest_key',
+    };
 
     /**
      * Calculate total income from loot
@@ -9281,16 +10060,106 @@
                 totalAsk += itemCount;
                 totalBid += itemCount;
             } else {
-                // Other items: get market price
-                const prices = marketAPI.getPrice(loot.itemHrid);
-                if (prices) {
-                    totalAsk += prices.ask * itemCount;
-                    totalBid += prices.bid * itemCount;
+                const itemDetails = dataManager.getItemDetails(loot.itemHrid);
+                if (itemDetails?.isOpenable && expectedValueCalculator.isInitialized) {
+                    // Openable containers (chests, crates, etc.): use expected value
+                    const ev = expectedValueCalculator.getCachedValue(loot.itemHrid);
+                    if (ev !== null) {
+                        totalAsk += ev * itemCount;
+                        totalBid += ev * itemCount;
+                    }
+                } else {
+                    // Other items: get market price
+                    const prices = marketAPI.getPrice(loot.itemHrid);
+                    if (prices) {
+                        totalAsk += prices.ask * itemCount;
+                        totalBid += prices.bid * itemCount;
+                    }
                 }
             }
         }
 
         return { ask: totalAsk, bid: totalBid };
+    }
+
+    /**
+     * Calculate entry key costs from dungeon chests dropped
+     * Each regular dungeon chest in the loot map represents one entry key consumed
+     * @param {Object} lootMap - totalLootMap from player data
+     * @param {number} durationSeconds - Combat duration in seconds (for daily rate)
+     * @returns {Object} { ask: number, bid: number, dailyCost: number, breakdown: Array }
+     */
+    function calculateKeyCosts(lootMap, durationSeconds) {
+        let totalCost = 0;
+        const breakdown = [];
+
+        if (!lootMap) {
+            return { ask: 0, bid: 0, dailyCost: 0, breakdown: [] };
+        }
+
+        for (const loot of Object.values(lootMap)) {
+            const keyHrid = DUNGEON_CHEST_KEYS[loot.itemHrid];
+            if (!keyHrid) continue;
+
+            const chestCount = loot.count;
+            const keyPrices = marketAPI.getPrice(keyHrid);
+            if (!keyPrices) continue;
+
+            // Keys are bought at ask price (you pay ask to acquire them)
+            const keyPrice = keyPrices.ask;
+            const itemCost = keyPrice * chestCount;
+
+            totalCost += itemCost;
+
+            const keyDetails = dataManager.getItemDetails(keyHrid);
+            const keyName = keyDetails?.name || keyHrid;
+
+            const consumedPerDay = durationSeconds > 0 ? Math.ceil((chestCount / durationSeconds) * 86400) : 0;
+
+            breakdown.push({
+                itemHrid: keyHrid,
+                itemName: keyName,
+                count: chestCount,
+                consumedPerDay,
+                pricePerItem: keyPrice,
+                totalCost: itemCost,
+            });
+        }
+
+        // Second pass: aggregate chest key costs (regular + refinement chests share the same key)
+        const chestKeyCounts = {};
+        for (const loot of Object.values(lootMap)) {
+            const keyHrid = DUNGEON_CHEST_CHEST_KEYS[loot.itemHrid];
+            if (!keyHrid) continue;
+            chestKeyCounts[keyHrid] = (chestKeyCounts[keyHrid] || 0) + loot.count;
+        }
+
+        for (const [keyHrid, count] of Object.entries(chestKeyCounts)) {
+            const keyPrices = marketAPI.getPrice(keyHrid);
+            if (!keyPrices) continue;
+
+            const keyPrice = keyPrices.ask;
+            const itemCost = keyPrice * count;
+
+            totalCost += itemCost;
+
+            const keyDetails = dataManager.getItemDetails(keyHrid);
+            const keyName = keyDetails?.name || keyHrid;
+            const consumedPerDay = durationSeconds > 0 ? Math.ceil((count / durationSeconds) * 86400) : 0;
+
+            breakdown.push({
+                itemHrid: keyHrid,
+                itemName: keyName,
+                count,
+                consumedPerDay,
+                pricePerItem: keyPrice,
+                totalCost: itemCost,
+            });
+        }
+
+        const finalDailyCost = durationSeconds > 0 ? calculateDailyRate(totalCost, durationSeconds) : 0;
+
+        return { ask: totalCost, bid: totalCost, dailyCost: finalDailyCost, breakdown };
     }
 
     /**
@@ -9443,9 +10312,15 @@
             0
         );
 
-        // Calculate daily profit
-        const dailyProfitAsk = dailyIncomeAsk - dailyConsumableCosts;
-        const dailyProfitBid = dailyIncomeBid - dailyConsumableCosts;
+        // Calculate entry key costs (1:1 with regular dungeon chests dropped)
+        const keyData = calculateKeyCosts(playerData.loot, duration);
+        const keyCosts = { ask: keyData.ask, bid: keyData.bid };
+        const dailyKeyCosts = keyData.dailyCost;
+        const keyBreakdown = keyData.breakdown;
+
+        // Calculate daily profit (income minus consumables and key costs)
+        const dailyProfitAsk = dailyIncomeAsk - dailyConsumableCosts - dailyKeyCosts;
+        const dailyProfitBid = dailyIncomeBid - dailyConsumableCosts - dailyKeyCosts;
 
         // Calculate total experience
         const totalExp = calculateTotalExperience(playerData.experience);
@@ -9472,6 +10347,9 @@
             consumableCosts,
             consumableBreakdown,
             dailyConsumableCosts,
+            keyCosts,
+            dailyKeyCosts,
+            keyBreakdown,
             dailyProfit: {
                 ask: dailyProfitAsk,
                 bid: dailyProfitBid,
@@ -9826,7 +10704,7 @@
             }
 
             // Get text color from config
-            const textColor = config.getSetting('color_text_primary') || config.COLOR_TEXT_PRIMARY;
+            const textColor = config.COLOR_TEXT_PRIMARY;
 
             // Create overlay
             const overlay = document.createElement('div');
@@ -10073,6 +10951,27 @@
                     breakdown: stats.consumableBreakdown,
                     isDaily: true,
                 },
+                ...(stats.keyBreakdown && stats.keyBreakdown.length > 0
+                    ? [
+                          {
+                              label: 'Key Costs',
+                              value: formatNum(stats.keyCosts.bid),
+                              color: '#ff6b6b',
+                              expandable: true,
+                              breakdown: stats.keyBreakdown,
+                              hideTrackingNote: true,
+                          },
+                          {
+                              label: 'Daily Key Costs',
+                              value: `${formatNum(stats.dailyKeyCosts)}/d`,
+                              color: '#ff6b6b',
+                              expandable: true,
+                              breakdown: stats.keyBreakdown,
+                              isDaily: true,
+                              hideTrackingNote: true,
+                          },
+                      ]
+                    : []),
                 {
                     label: 'Daily Profit',
                     value: `${formatNum(stats.dailyProfit.bid)}/d`,
@@ -10201,8 +11100,8 @@
                             `;
                                 breakdownDiv.appendChild(totalRow);
 
-                                // Add tracking info note
-                                if (row.breakdown.length > 0) {
+                                // Add tracking info note (consumables only)
+                                if (row.breakdown.length > 0 && !row.hideTrackingNote) {
                                     const trackingNote = document.createElement('div');
                                     trackingNote.style.cssText = `
                                     margin-top: 8px;
@@ -10335,6 +11234,16 @@
                     textSpan.innerHTML = `<span style="color: ${textColor};">${formatNum(item.count)}</span> <span style="color: ${rarityColor};">× ${item.itemName}</span>`;
                     itemDiv.appendChild(textSpan);
 
+                    // Attach EV tooltip for openable containers (chests, crates, etc.)
+                    if (
+                        expectedValueCalculator.isInitialized &&
+                        expectedValueCalculator.getCachedValue(item.itemHrid) !== null
+                    ) {
+                        itemDiv.style.cursor = 'help';
+                        itemDiv.addEventListener('mouseenter', () => this.showChestTooltip(itemDiv, item.itemHrid));
+                        itemDiv.addEventListener('mouseleave', () => this.hideChestTooltip());
+                    }
+
                     dropList.appendChild(itemDiv);
                 }
 
@@ -10374,9 +11283,133 @@
         }
 
         /**
+         * Build HTML for chest tooltip matching the inventory EV tooltip format
+         * @param {string} itemHrid - Item HRID
+         * @returns {string} HTML string
+         */
+        buildChestTooltipHTML(itemHrid) {
+            const evData = expectedValueCalculator.calculateExpectedValue(itemHrid);
+            if (!evData) return null;
+
+            const formatPrice = (val) => formatters_js.formatKMB(Math.round(val));
+            const showDropsSetting = config.getSettingValue('expectedValue_showDrops', 'All');
+
+            let html = `<div style="font-weight:bold;margin-bottom:4px;">EXPECTED VALUE</div>`;
+            html += `<div style="font-size:0.9em;margin-left:8px;">`;
+            html += `<div style="color:${config.COLOR_TOOLTIP_PROFIT};font-weight:bold;">Expected Return: ${formatPrice(evData.expectedValue)}</div>`;
+            html += `</div>`;
+
+            if (showDropsSetting !== 'None' && evData.drops.length > 0) {
+                html += `<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;"></div>`;
+
+                let dropsToShow = evData.drops;
+                let headerLabel = 'All Drops';
+                if (showDropsSetting === 'Top 5') {
+                    dropsToShow = evData.drops.slice(0, 5);
+                    headerLabel = 'Top 5 Drops';
+                } else if (showDropsSetting === 'Top 10') {
+                    dropsToShow = evData.drops.slice(0, 10);
+                    headerLabel = 'Top 10 Drops';
+                }
+
+                html += `<div style="font-weight:bold;margin-bottom:4px;">${headerLabel} (${evData.drops.length} total):</div>`;
+                html += `<div style="font-size:0.9em;margin-left:8px;">`;
+
+                for (const drop of dropsToShow) {
+                    if (!drop.hasPriceData) {
+                        html += `<div style="color:${config.COLOR_TEXT_SECONDARY};">• ${drop.itemName} (${formatters_js.formatPercentage(drop.dropRate, 2)}): ${drop.avgCount.toFixed(2)} avg → No price data</div>`;
+                    } else {
+                        const dropRatePercent = formatters_js.formatPercentage(drop.dropRate, 2);
+                        html += `<div>• ${drop.itemName} (${dropRatePercent}): ${drop.avgCount.toFixed(2)} avg → ${formatPrice(drop.expectedValue)}</div>`;
+                    }
+                }
+
+                html += `</div>`;
+                html += `<div style="border-top:1px solid rgba(255,255,255,0.2);margin:4px 0;"></div>`;
+                html += `<div style="font-size:0.9em;margin-left:8px;font-weight:bold;">Total from ${evData.drops.length} drops: ${formatPrice(evData.expectedValue)}</div>`;
+            }
+
+            return html;
+        }
+
+        /**
+         * Show chest EV tooltip near a drop list item
+         * @param {HTMLElement} itemDiv - The hovered item element
+         * @param {string} itemHrid - Item HRID
+         */
+        showChestTooltip(itemDiv, itemHrid) {
+            this.hideChestTooltip();
+
+            const html = this.buildChestTooltipHTML(itemHrid);
+            if (!html) return;
+
+            const tooltip = document.createElement('div');
+            tooltip.className = 'toolasha-chest-ev-tooltip';
+            tooltip.style.cssText = `
+            position: fixed;
+            background: #1a1a1a;
+            border: 1px solid #4a4a4a;
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-size: 13px;
+            color: ${config.COLOR_TEXT_PRIMARY};
+            max-width: 320px;
+            overflow-y: auto;
+            z-index: 20000;
+            pointer-events: none;
+            line-height: 1.4;
+            visibility: hidden;
+        `;
+            tooltip.innerHTML = html;
+            document.body.appendChild(tooltip);
+
+            // Measure after paint so offsetHeight is accurate
+            const rect = itemDiv.getBoundingClientRect();
+            const tipW = tooltip.offsetWidth || 320;
+            const tipH = tooltip.offsetHeight;
+
+            const spaceAbove = rect.top - 8;
+            const spaceBelow = window.innerHeight - rect.bottom - 8;
+
+            let top;
+            if (spaceAbove >= tipH || spaceAbove >= spaceBelow) {
+                // Show above — cap height to available space
+                const maxH = Math.min(tipH, spaceAbove);
+                tooltip.style.maxHeight = `${maxH}px`;
+                top = rect.top - maxH - 6;
+            } else {
+                // Show below — cap height to available space
+                const maxH = Math.min(tipH, spaceBelow);
+                tooltip.style.maxHeight = `${maxH}px`;
+                top = rect.bottom + 6;
+            }
+
+            let left = rect.left;
+            if (left + tipW > window.innerWidth - 8) left = window.innerWidth - tipW - 8;
+            if (left < 8) left = 8;
+
+            tooltip.style.left = `${left}px`;
+            tooltip.style.top = `${top}px`;
+            tooltip.style.visibility = 'visible';
+
+            this.chestTooltip = tooltip;
+        }
+
+        /**
+         * Hide and remove the chest EV tooltip
+         */
+        hideChestTooltip() {
+            if (this.chestTooltip) {
+                this.chestTooltip.remove();
+                this.chestTooltip = null;
+            }
+        }
+
+        /**
          * Close the popup
          */
         closePopup() {
+            this.hideChestTooltip();
             if (this.popup) {
                 this.popup.remove();
                 this.popup = null;
@@ -10747,192 +11780,6 @@
 
     const abilityBookCalculator = new AbilityBookCalculator();
     abilityBookCalculator.setupSettingListener();
-
-    /**
-     * Worker Pool Manager
-     * Manages a pool of Web Workers for parallel task execution
-     */
-
-    class WorkerPool {
-        constructor(workerScript, poolSize = null) {
-            // Auto-detect optimal pool size (max 4 workers)
-            this.poolSize = poolSize || Math.min(navigator.hardwareConcurrency || 2, 4);
-            this.workerScript = workerScript;
-            this.workers = [];
-            this.taskQueue = [];
-            this.activeWorkers = new Set();
-            this.nextTaskId = 0;
-            this.initialized = false;
-        }
-
-        /**
-         * Initialize the worker pool
-         */
-        async initialize() {
-            if (this.initialized) {
-                return;
-            }
-
-            try {
-                // Create workers
-                for (let i = 0; i < this.poolSize; i++) {
-                    const worker = new Worker(URL.createObjectURL(this.workerScript));
-                    this.workers.push({
-                        id: i,
-                        worker,
-                        busy: false,
-                        currentTask: null,
-                    });
-                }
-
-                this.initialized = true;
-            } catch (error) {
-                console.error('[WorkerPool] Failed to initialize:', error);
-                throw error;
-            }
-        }
-
-        /**
-         * Execute a task in the worker pool
-         * @param {Object} taskData - Data to send to worker
-         * @returns {Promise} Promise that resolves with worker result
-         */
-        async execute(taskData) {
-            if (!this.initialized) {
-                await this.initialize();
-            }
-
-            return new Promise((resolve, reject) => {
-                const taskId = this.nextTaskId++;
-                const task = {
-                    id: taskId,
-                    data: taskData,
-                    resolve,
-                    reject,
-                    timestamp: Date.now(),
-                };
-
-                // Try to assign to an available worker immediately
-                const availableWorker = this.workers.find((w) => !w.busy);
-
-                if (availableWorker) {
-                    this.assignTask(availableWorker, task);
-                } else {
-                    // Queue the task if all workers are busy
-                    this.taskQueue.push(task);
-                }
-            });
-        }
-
-        /**
-         * Execute multiple tasks in parallel
-         * @param {Array} taskDataArray - Array of task data objects
-         * @returns {Promise<Array>} Promise that resolves with array of results
-         */
-        async executeAll(taskDataArray) {
-            if (!this.initialized) {
-                await this.initialize();
-            }
-
-            const promises = taskDataArray.map((taskData) => this.execute(taskData));
-            return Promise.all(promises);
-        }
-
-        /**
-         * Assign a task to a worker
-         * @private
-         */
-        assignTask(workerWrapper, task) {
-            workerWrapper.busy = true;
-            workerWrapper.currentTask = task;
-
-            // Set up message handler for this specific task
-            const messageHandler = (e) => {
-                const { taskId, result, error } = e.data;
-
-                if (taskId === task.id) {
-                    // Clean up
-                    workerWrapper.worker.removeEventListener('message', messageHandler);
-                    workerWrapper.worker.removeEventListener('error', errorHandler);
-                    workerWrapper.busy = false;
-                    workerWrapper.currentTask = null;
-
-                    // Resolve or reject the promise
-                    if (error) {
-                        task.reject(new Error(error));
-                    } else {
-                        task.resolve(result);
-                    }
-
-                    // Process next task in queue
-                    this.processQueue();
-                }
-            };
-
-            const errorHandler = (error) => {
-                console.error('[WorkerPool] Worker error:', error);
-                workerWrapper.worker.removeEventListener('message', messageHandler);
-                workerWrapper.worker.removeEventListener('error', errorHandler);
-                workerWrapper.busy = false;
-                workerWrapper.currentTask = null;
-
-                task.reject(error);
-
-                // Process next task in queue
-                this.processQueue();
-            };
-
-            workerWrapper.worker.addEventListener('message', messageHandler);
-            workerWrapper.worker.addEventListener('error', errorHandler);
-
-            // Send task to worker
-            workerWrapper.worker.postMessage({
-                taskId: task.id,
-                data: task.data,
-            });
-        }
-
-        /**
-         * Process the next task in the queue
-         * @private
-         */
-        processQueue() {
-            if (this.taskQueue.length === 0) {
-                return;
-            }
-
-            const availableWorker = this.workers.find((w) => !w.busy);
-            if (availableWorker) {
-                const task = this.taskQueue.shift();
-                this.assignTask(availableWorker, task);
-            }
-        }
-
-        /**
-         * Get pool statistics
-         */
-        getStats() {
-            return {
-                poolSize: this.poolSize,
-                busyWorkers: this.workers.filter((w) => w.busy).length,
-                queuedTasks: this.taskQueue.length,
-                totalWorkers: this.workers.length,
-            };
-        }
-
-        /**
-         * Terminate all workers and clean up
-         */
-        terminate() {
-            for (const workerWrapper of this.workers) {
-                workerWrapper.worker.terminate();
-            }
-
-            this.workers = [];
-            this.taskQueue = [];
-            this.initialized = false;
-        }
-    }
 
     /**
      * Enhancement Calculator Worker Manager
@@ -13493,4 +14340,4 @@ self.onmessage = function (e) {
 
     console.log('[Toolasha] Combat library loaded');
 
-})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.webSocketHook, Toolasha.Core.profileManager, Toolasha.Core.storage, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Core.marketAPI, Toolasha.Utils.formatters, Toolasha.Utils.reactInput, Toolasha.Utils.dom, Toolasha.Utils.abilityCalc, Toolasha.Utils.houseCostCalculator, Toolasha.Utils.enhancementConfig, Toolasha.Utils.marketData);
+})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.webSocketHook, Toolasha.Core.profileManager, Toolasha.Core.storage, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Core.marketAPI, Toolasha.Utils.formatters, Toolasha.Utils.reactInput, Toolasha.Utils.tokenValuation, Toolasha.Utils.marketData, Toolasha.Utils.profitHelpers, Toolasha.Utils.dom, Toolasha.Utils.abilityCalc, Toolasha.Utils.houseCostCalculator, Toolasha.Utils.enhancementConfig);
