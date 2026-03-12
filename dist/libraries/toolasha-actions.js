@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.34.5
+ * Version: 1.34.6
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -7160,8 +7160,13 @@
 
                     // Calculate intermediate time (after equipment speed, before task speed)
                     const timeAfterEquipment = baseTime / (1 + speedBonus);
+                    const displayTimeAfterEquipment = Math.max(profitConstants_js.MIN_ACTION_TIME_SECONDS, timeAfterEquipment);
+                    const equipmentClampSuffix =
+                        timeAfterEquipment < profitConstants_js.MIN_ACTION_TIME_SECONDS ? ` (${timeAfterEquipment.toFixed(2)}s)` : '';
 
-                    speedLines.push(`Base: ${baseTime.toFixed(2)}s → ${timeAfterEquipment.toFixed(2)}s`);
+                    speedLines.push(
+                        `Base: ${baseTime.toFixed(2)}s → ${displayTimeAfterEquipment.toFixed(2)}s${equipmentClampSuffix}`
+                    );
                     if (speedBonus > 0) {
                         speedLines.push(
                             `Speed: +${formatters_js.formatPercentage(speedBonus, 1)} | ${profitHelpers_js.calculateActionsPerHour(timeAfterEquipment).toFixed(0)}/hr`
@@ -7207,7 +7212,7 @@
                             `<span style="font-weight: 500;">Task Speed (multiplicative): +${taskSpeedBonus.toFixed(1)}%</span>`
                         );
                         speedLines.push(
-                            `${timeAfterEquipment.toFixed(2)}s → ${actionTime.toFixed(2)}s | ${profitHelpers_js.calculateActionsPerHour(actionTime).toFixed(0)}/hr`
+                            `${displayTimeAfterEquipment.toFixed(2)}s${equipmentClampSuffix} → ${actionTime.toFixed(2)}s | ${profitHelpers_js.calculateActionsPerHour(actionTime).toFixed(0)}/hr`
                         );
 
                         // Find equipped task badge for details

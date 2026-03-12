@@ -1,7 +1,7 @@
 /**
  * Toolasha Utils Library
  * All utility modules
- * Version: 1.34.5
+ * Version: 1.34.6
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -593,6 +593,11 @@
     const SECONDS_PER_HOUR = 3600;
 
     /**
+     * Minimum action time in seconds (game-enforced cap)
+     */
+    const MIN_ACTION_TIME_SECONDS = 3;
+
+    /**
      * Hours per day (for daily profit calculations)
      */
     const HOURS_PER_DAY = 24;
@@ -626,6 +631,7 @@
         COWBELL_BAG_TAX,
         DRINKS_PER_HOUR_BASE,
         SECONDS_PER_HOUR,
+        MIN_ACTION_TIME_SECONDS,
         HOURS_PER_DAY,
         GATHERING_TYPES,
         PRODUCTION_TYPES,
@@ -641,6 +647,7 @@
         GATHERING_TYPES: GATHERING_TYPES,
         HOURS_PER_DAY: HOURS_PER_DAY,
         MARKET_TAX: MARKET_TAX,
+        MIN_ACTION_TIME_SECONDS: MIN_ACTION_TIME_SECONDS,
         PRODUCTION_TYPES: PRODUCTION_TYPES,
         SECONDS_PER_HOUR: SECONDS_PER_HOUR,
         default: profitConstants
@@ -672,7 +679,7 @@
         if (!actionTimeSeconds || actionTimeSeconds <= 0) {
             return 0;
         }
-        return SECONDS_PER_HOUR / actionTimeSeconds;
+        return SECONDS_PER_HOUR / Math.max(MIN_ACTION_TIME_SECONDS, actionTimeSeconds);
     }
 
     /**
@@ -4629,6 +4636,9 @@ self.onmessage = function (e) {
                 actionTime = actionTime / (1 + taskSpeedBonus / 100); // Apply multiplicatively
             }
 
+            // Enforce game minimum action time
+            actionTime = Math.max(MIN_ACTION_TIME_SECONDS, actionTime);
+
             // Calculate efficiency
             const skillLevel = getSkillLevel(skills, actionDetails.type);
             const baseRequirement = levelRequirementOverride ?? actionDetails.levelRequirement?.level ?? 1;
@@ -6706,6 +6716,7 @@ self.onmessage = function (e) {
      * Math.js library is loaded via userscript @require header.
      */
 
+
     /**
      * Base success rates by enhancement level (before bonuses)
      */
@@ -6783,7 +6794,7 @@ self.onmessage = function (e) {
             speedMultiplier = 1 + speedBonus / 100;
         }
 
-        return baseActionTime / speedMultiplier;
+        return Math.max(MIN_ACTION_TIME_SECONDS, baseActionTime / speedMultiplier);
     }
 
     /**
@@ -6896,7 +6907,7 @@ self.onmessage = function (e) {
             speedMultiplier = 1 + speedBonus / 100;
         }
 
-        const perActionTime = baseActionTime / speedMultiplier;
+        const perActionTime = Math.max(MIN_ACTION_TIME_SECONDS, baseActionTime / speedMultiplier);
         const totalTime = perActionTime * attempts;
 
         return {
