@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.36.0
+ * Version: 1.36.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -15346,7 +15346,6 @@ self.onmessage = function (e) {
          * @param {Object} params
          * @param {string} params.actionType - 'coinify' | 'decompose' | 'transmute'
          * @param {number} params.baseSuccessRate - Base success rate before modifiers
-         * @param {string} params.buyType - 'ask' | 'bid'
          * @param {number} params.actionsPerHour - Actions per hour (with efficiency)
          * @param {number} params.efficiencyDecimal - Efficiency as decimal
          * @param {number} params.actionTime - Action time in seconds
@@ -15358,7 +15357,6 @@ self.onmessage = function (e) {
         _bestCatalystCombo({
             actionType,
             baseSuccessRate,
-            buyType,
             actionsPerHour,
             efficiencyDecimal,
             actionTime,
@@ -15369,8 +15367,8 @@ self.onmessage = function (e) {
             const liveTeaBonus = buffParser_js.getAlchemySuccessBonus();
             const typeSpecificHrid = CATALYST_HRIDS[actionType];
             const primeCatalystHrid = CATALYST_HRIDS.prime;
-            const typeSpecificPrice = marketData_js.getItemPrice(typeSpecificHrid, { context: 'profit', mode: buyType }) ?? 0;
-            const primeCatalystPrice = marketData_js.getItemPrice(primeCatalystHrid, { context: 'profit', mode: buyType }) ?? 0;
+            const typeSpecificPrice = marketData_js.getItemPrice(typeSpecificHrid, { context: 'profit', side: 'buy' }) ?? 0;
+            const primeCatalystPrice = marketData_js.getItemPrice(primeCatalystHrid, { context: 'profit', side: 'buy' }) ?? 0;
 
             const combinations = [
                 { catalystBonus: 0, catalystHrid: null, catalystPrice: 0, teaBonus: liveTeaBonus },
@@ -15470,17 +15468,6 @@ self.onmessage = function (e) {
 
                 // Get pricing mode
                 const pricingMode = config.getSettingValue('profitCalc_pricingMode', 'hybrid');
-                let buyType, sellType;
-                if (pricingMode === 'conservative') {
-                    buyType = 'ask';
-                    sellType = 'bid';
-                } else if (pricingMode === 'hybrid') {
-                    buyType = 'ask';
-                    sellType = 'ask';
-                } else {
-                    buyType = 'bid';
-                    sellType = 'ask';
-                }
 
                 // Calculate action stats (time + efficiency) using shared helper
                 // Alchemy uses item level (not action requirement) for efficiency calculation
@@ -15529,7 +15516,7 @@ self.onmessage = function (e) {
 
                 // Calculate input cost (material cost)
                 const bulkMultiplier = itemDetails.alchemyDetail?.bulkMultiplier || 1;
-                const pricePerItem = marketData_js.getItemPrice(itemHrid, { context: 'profit', mode: buyType, enhancementLevel });
+                const pricePerItem = marketData_js.getItemPrice(itemHrid, { context: 'profit', side: 'buy', enhancementLevel });
                 if (pricePerItem === null) {
                     return null; // No market data
                 }
@@ -15563,14 +15550,13 @@ self.onmessage = function (e) {
                     drinkSlots: dataManager.getActionDrinkSlots('/action_types/alchemy'),
                     drinkConcentration,
                     itemDetailMap: gameData.itemDetailMap,
-                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', mode: buyType }),
+                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', side: 'buy' }),
                 });
 
                 // Find the best catalyst+tea combination
                 const combo = this._bestCatalystCombo({
                     actionType: 'coinify',
                     baseSuccessRate: BASE_SUCCESS_RATES.COINIFY,
-                    buyType,
                     actionsPerHour: actionsPerHourWithEfficiency,
                     efficiencyDecimal,
                     actionTime,
@@ -15712,8 +15698,6 @@ self.onmessage = function (e) {
 
                     // Pricing info
                     pricingMode,
-                    buyType,
-                    sellType,
                 };
             } catch (error) {
                 console.error('[AlchemyProfitCalculator] Failed to calculate coinify profit:', error);
@@ -15749,17 +15733,6 @@ self.onmessage = function (e) {
 
                 // Get pricing mode
                 const pricingMode = config.getSettingValue('profitCalc_pricingMode', 'hybrid');
-                let buyType, sellType;
-                if (pricingMode === 'conservative') {
-                    buyType = 'ask';
-                    sellType = 'bid';
-                } else if (pricingMode === 'hybrid') {
-                    buyType = 'ask';
-                    sellType = 'ask';
-                } else {
-                    buyType = 'bid';
-                    sellType = 'ask';
-                }
 
                 // Calculate action stats (time + efficiency) using shared helper
                 // Alchemy uses item level (not action requirement) for efficiency calculation
@@ -15805,7 +15778,7 @@ self.onmessage = function (e) {
                 const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
 
                 // Get input cost (market price of the item being decomposed)
-                const inputPrice = marketData_js.getItemPrice(itemHrid, { context: 'profit', mode: buyType, enhancementLevel });
+                const inputPrice = marketData_js.getItemPrice(itemHrid, { context: 'profit', side: 'buy', enhancementLevel });
                 if (inputPrice === null) {
                     return null; // No market data
                 }
@@ -15816,7 +15789,7 @@ self.onmessage = function (e) {
 
                 // 1. Base decompose items (always received on success)
                 for (const output of itemDetails.alchemyDetail.decomposeItems) {
-                    const outputPrice = marketData_js.getItemPrice(output.itemHrid, { context: 'profit', mode: sellType });
+                    const outputPrice = marketData_js.getItemPrice(output.itemHrid, { context: 'profit', side: 'sell' });
                     if (outputPrice !== null) {
                         const afterTax = profitHelpers_js.calculatePriceAfterTax(outputPrice);
                         const dropValue = afterTax * output.count;
@@ -15839,7 +15812,7 @@ self.onmessage = function (e) {
                     const itemLevel = itemDetails.itemLevel || 1;
                     essenceAmount = Math.round(2 * (0.5 + 0.1 * Math.pow(1.05, itemLevel)) * Math.pow(2, enhancementLevel));
 
-                    const essencePrice = marketData_js.getItemPrice('/items/enhancing_essence', { context: 'profit', mode: sellType });
+                    const essencePrice = marketData_js.getItemPrice('/items/enhancing_essence', { context: 'profit', side: 'sell' });
                     if (essencePrice !== null) {
                         const afterTax = profitHelpers_js.calculatePriceAfterTax(essencePrice);
                         const dropValue = afterTax * essenceAmount;
@@ -15879,14 +15852,13 @@ self.onmessage = function (e) {
                     drinkSlots: dataManager.getActionDrinkSlots('/action_types/alchemy'),
                     drinkConcentration,
                     itemDetailMap: gameData.itemDetailMap,
-                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', mode: buyType }),
+                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', side: 'buy' }),
                 });
 
                 // Find the best catalyst+tea combination
                 const combo = this._bestCatalystCombo({
                     actionType: 'decompose',
                     baseSuccessRate: BASE_SUCCESS_RATES.DECOMPOSE,
-                    buyType,
                     actionsPerHour: actionsPerHourWithEfficiency,
                     efficiencyDecimal,
                     actionTime,
@@ -16024,8 +15996,6 @@ self.onmessage = function (e) {
 
                     // Pricing info
                     pricingMode,
-                    buyType,
-                    sellType,
                 };
             } catch (error) {
                 console.error('[AlchemyProfitCalculator] Failed to calculate decompose profit:', error);
@@ -16066,17 +16036,6 @@ self.onmessage = function (e) {
 
                 // Get pricing mode
                 const pricingMode = config.getSettingValue('profitCalc_pricingMode', 'hybrid');
-                let buyType, sellType;
-                if (pricingMode === 'conservative') {
-                    buyType = 'ask';
-                    sellType = 'bid';
-                } else if (pricingMode === 'hybrid') {
-                    buyType = 'ask';
-                    sellType = 'ask';
-                } else {
-                    buyType = 'bid';
-                    sellType = 'ask';
-                }
 
                 // Calculate action stats (time + efficiency) using shared helper
                 // Alchemy uses item level (not action requirement) for efficiency calculation
@@ -16122,7 +16081,7 @@ self.onmessage = function (e) {
                 const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
 
                 // Get input cost (market price of the item being transmuted)
-                const inputPrice = marketData_js.getItemPrice(itemHrid, { context: 'profit', mode: buyType });
+                const inputPrice = marketData_js.getItemPrice(itemHrid, { context: 'profit', side: 'buy' });
                 if (inputPrice === null) {
                     return null; // No market data
                 }
@@ -16147,7 +16106,7 @@ self.onmessage = function (e) {
                         selfReturnCount = averageCount * bulkMultiplier;
                     }
 
-                    const outputPrice = marketData_js.getItemPrice(drop.itemHrid, { context: 'profit', mode: sellType });
+                    const outputPrice = marketData_js.getItemPrice(drop.itemHrid, { context: 'profit', side: 'sell' });
                     if (outputPrice !== null) {
                         const afterTax = profitHelpers_js.calculatePriceAfterTax(outputPrice);
                         // Expected value: price × dropRate × averageCount × bulkMultiplier
@@ -16197,7 +16156,7 @@ self.onmessage = function (e) {
                     drinkSlots: dataManager.getActionDrinkSlots('/action_types/alchemy'),
                     drinkConcentration,
                     itemDetailMap: gameData.itemDetailMap,
-                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', mode: buyType }),
+                    getItemPrice: (hrid) => marketData_js.getItemPrice(hrid, { context: 'profit', side: 'buy' }),
                 });
 
                 // Find the best catalyst+tea combination.
@@ -16205,7 +16164,6 @@ self.onmessage = function (e) {
                 const combo = this._bestCatalystCombo({
                     actionType: 'transmute',
                     baseSuccessRate,
-                    buyType,
                     actionsPerHour: actionsPerHourWithEfficiency,
                     efficiencyDecimal,
                     actionTime,
@@ -16357,8 +16315,6 @@ self.onmessage = function (e) {
 
                     // Pricing info
                     pricingMode,
-                    buyType,
-                    sellType,
                 };
             } catch (error) {
                 console.error('[AlchemyProfitCalculator] Failed to calculate transmute profit:', error);
