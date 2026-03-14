@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.36.1
+ * Version: 1.36.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1108,6 +1108,14 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Adds a Statistics button to the Combat panel showing income, profit, consumable costs, EXP, and drop details',
+                },
+                combatStats_keyPricing: {
+                    id: 'combatStats_keyPricing',
+                    label: 'Combat Statistics: Key cost pricing',
+                    type: 'select',
+                    default: 'ask',
+                    options: ['ask', 'bid'],
+                    help: 'Whether to use ask (instant buy) or bid (patient buy) prices for key costs. Use bid if you craft your own keys.',
                 },
                 combatStatsChatMessage: {
                     id: 'combatStatsChatMessage',
@@ -2833,6 +2841,7 @@
             this.characterHouseRooms = new Map(); // House room HRID -> {houseRoomHrid, level}
             this.actionTypeDrinkSlotsMap = new Map(); // Action type HRID -> array of drink items
             this.monsterSortIndexMap = new Map(); // Monster HRID -> combat zone sortIndex
+            this.bossMonsterHrids = new Set(); // Monster HRIDs that appear in bossSpawns
             this.battleData = null; // Current battle data (for Combat Sim export on Steam)
 
             // Character tracking for switch detection
@@ -3627,6 +3636,7 @@
             }
 
             this.monsterSortIndexMap.clear();
+            this.bossMonsterHrids.clear();
 
             // Extract combat zones (non-dungeon only)
             for (const [_zoneHrid, action] of Object.entries(this.initClientData.actionDetailMap)) {
@@ -3642,6 +3652,13 @@
 
                 // Get boss monsters (every 10 battles)
                 const bossMonsters = action.combatZoneInfo?.fightInfo?.bossSpawns || [];
+
+                // Track boss monster HRIDs
+                for (const boss of bossMonsters) {
+                    if (boss.combatMonsterHrid) {
+                        this.bossMonsterHrids.add(boss.combatMonsterHrid);
+                    }
+                }
 
                 // Combine all monsters from this zone
                 const allMonsters = [...regularMonsters, ...bossMonsters];
@@ -3669,6 +3686,15 @@
          */
         getMonsterSortIndex(monsterHrid) {
             return this.monsterSortIndexMap.get(monsterHrid) || 999;
+        }
+
+        /**
+         * Check if a monster is a boss (appears in bossSpawns of any combat zone)
+         * @param {string} monsterHrid - Monster HRID (e.g., "/monsters/crystal_colossus")
+         * @returns {boolean} True if the monster is a boss
+         */
+        isBossMonster(monsterHrid) {
+            return this.bossMonsterHrids.has(monsterHrid);
         }
 
         /**

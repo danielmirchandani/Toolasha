@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.36.1
+ * Version: 1.36.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -6092,12 +6092,14 @@ self.onmessage = function (e) {
                             if (matchingQuests.length <= 1) return;
 
                             const total = matchingQuests.reduce((sum, q) => sum + (q.goalCount - q.currentCount), 0);
+                            const isBoss = thisQuest.monsterHrid && dataManager.isBossMonster(thisQuest.monsterHrid);
+                            const adjustedTotal = isBoss ? total * 10 : total;
 
                             // Wait for the game to navigate and render the input field
                             setTimeout(() => {
                                 const inputEl = actionPanelHelper_js.findActionInput(document);
                                 if (inputEl) {
-                                    reactInput_js.setReactInputValue(inputEl, total);
+                                    reactInput_js.setReactInputValue(inputEl, adjustedTotal);
                                 }
                             }, 300);
                         },
@@ -18880,6 +18882,7 @@ self.onmessage = function (e) {
             this.sessions = {}; // All sessions (keyed by session ID)
             this.currentSessionId = null; // Currently active session ID
             this.isInitialized = false;
+            this.pendingSessionStart = false; // Start new session on next action_completed regardless of currentCount
         }
 
         /**
@@ -19187,6 +19190,26 @@ self.onmessage = function (e) {
          */
         async saveSessions() {
             await saveSessions(this.sessions);
+        }
+
+        /**
+         * Set flag so the next action_completed starts a new session regardless of currentCount.
+         * Used when the tracker is cleared mid-session or when a new action queue is detected.
+         */
+        setPendingStart() {
+            this.pendingSessionStart = true;
+        }
+
+        /**
+         * Clear all sessions and flag that the next attempt should start a new session.
+         * @returns {Promise<void>}
+         */
+        async clearSessions() {
+            this.sessions = {};
+            this.currentSessionId = null;
+            this.pendingSessionStart = true;
+            await saveSessions(this.sessions);
+            await saveCurrentSessionId(null);
         }
 
         /**
@@ -19888,13 +19911,7 @@ self.onmessage = function (e) {
          * Clear all sessions
          */
         async clearAllSessions() {
-            // Clear from tracker
-            const sessions = enhancementTracker.getAllSessions();
-            for (const sessionId of Object.keys(sessions)) {
-                delete sessions[sessionId];
-            }
-
-            await enhancementTracker.saveSessions();
+            await enhancementTracker.clearSessions();
 
             this.currentViewingIndex = 0;
             this.updateUI();
@@ -20401,8 +20418,42 @@ self.onmessage = function (e) {
         // Listen for action_completed (when enhancement completes)
         webSocketHook.on('action_completed', handleActionCompleted);
 
+        // Listen for actions_updated to detect new enhancing queues (handles page-load mid-session
+        // and sets pending start so the next action_completed creates a session regardless of currentCount)
+        webSocketHook.on('actions_updated', handleActionsUpdated);
+
         // Listen for wildcard to catch all messages for debugging
         webSocketHook.on('*', handleDebugMessage);
+    }
+
+    /**
+     * Handle actions_updated message (detects new enhancing queue)
+     * Sets pendingSessionStart so the next action_completed creates a session regardless of currentCount.
+     * @param {Object} data - WebSocket message data
+     */
+    async function handleActionsUpdated(data) {
+        if (!config.getSetting('enhancementTracker')) return;
+        if (!enhancementTracker.isInitialized) return;
+
+        const actions = data.endCharacterActions;
+        if (!Array.isArray(actions)) return;
+
+        const enhancingAction = actions.find((a) => a.actionHrid === '/actions/enhancing/enhance');
+        if (!enhancingAction) return;
+
+        enhancementTracker.setPendingStart();
+
+        // If the target level or protection level changed, finalize the current session so the
+        // next action_completed starts a fresh one instead of continuing the old one.
+        const currentSession = enhancementTracker.getCurrentSession();
+        if (currentSession) {
+            const targetChanged = enhancingAction.enhancingMaxLevel !== currentSession.targetLevel;
+            const protectionChanged =
+                (enhancingAction.enhancingProtectionMinLevel || 0) !== (currentSession.protectFrom || 0);
+            if (targetChanged || protectionChanged) {
+                await enhancementTracker.finalizeCurrentSession();
+            }
+        }
     }
 
     /**
@@ -20625,9 +20676,14 @@ self.onmessage = function (e) {
                 enhancementUI.scheduleUpdate();
             }
 
-            // On first attempt (rawCount === 1), start session if auto-start is enabled
-            // BUT: Don't create a new session if we already have one for this item
-            if (rawCount === 1 && !justCreatedNewSession && !currentSession) {
+            // On first attempt (rawCount === 1) OR after a clear/new-queue (pendingSessionStart),
+            // start a session if none is active yet.
+            const startedViaPending = enhancementTracker.pendingSessionStart && rawCount !== 1;
+            const shouldStartNew =
+                (rawCount === 1 || enhancementTracker.pendingSessionStart) && !justCreatedNewSession && !currentSession;
+
+            if (shouldStartNew) {
+                enhancementTracker.pendingSessionStart = false;
                 // CRITICAL: On first event, primaryItemHash shows RESULT level, not starting level
                 // We need to infer the starting level from the result
                 const protectFrom = action.enhancingProtectionMinLevel || 0;
@@ -20650,6 +20706,13 @@ self.onmessage = function (e) {
 
                 if (!currentSession) {
                     return;
+                }
+
+                // Session was created mid-run (not at a natural queue start) — we don't have a
+                // reliable baseline level, so skip recording success/failure for this first attempt.
+                // Costs are still tracked. On a normal rawCount === 1 start, we record as usual.
+                if (startedViaPending) {
+                    justCreatedNewSession = true;
                 }
             }
 
@@ -20734,23 +20797,27 @@ self.onmessage = function (e) {
             };
 
             // Record the result and track XP
-            if (wasSuccess) {
-                const xpGain = calculateSuccessXP(previousLevel, itemHrid);
-                currentSession.totalXP += xpGain;
+            // Skip on the first attempt of a newly created session — we don't have a reliable
+            // baseline level yet, but lastAttempt is still set so the next attempt works correctly.
+            if (!justCreatedNewSession) {
+                if (wasSuccess) {
+                    const xpGain = calculateSuccessXP(previousLevel, itemHrid);
+                    currentSession.totalXP += xpGain;
 
-                await enhancementTracker.recordSuccess(previousLevel, newLevel);
-                enhancementUI.scheduleUpdate(); // Update UI after success
+                    await enhancementTracker.recordSuccess(previousLevel, newLevel);
+                    enhancementUI.scheduleUpdate(); // Update UI after success
 
-                // Check if we've reached target
-                if (newLevel >= currentSession.targetLevel) {
-                    // Target reached - session will auto-complete on next UI update
+                    // Check if we've reached target
+                    if (newLevel >= currentSession.targetLevel) {
+                        // Target reached - session will auto-complete on next UI update
+                    }
+                } else if (wasFailure) {
+                    const xpGain = calculateFailureXP(previousLevel, itemHrid);
+                    currentSession.totalXP += xpGain;
+
+                    await enhancementTracker.recordFailure(previousLevel, newLevel);
+                    enhancementUI.scheduleUpdate(); // Update UI after failure
                 }
-            } else if (wasFailure) {
-                const xpGain = calculateFailureXP(previousLevel, itemHrid);
-                currentSession.totalXP += xpGain;
-
-                await enhancementTracker.recordFailure(previousLevel, newLevel);
-                enhancementUI.scheduleUpdate(); // Update UI after failure
             }
             // Note: If newLevel === previousLevel (and not 0->0), we track costs but don't record attempt
             // This happens with protection items that prevent level decrease
@@ -20764,6 +20831,7 @@ self.onmessage = function (e) {
      */
     function cleanupEnhancementHandlers() {
         webSocketHook.off('action_completed', handleActionCompleted);
+        webSocketHook.off('actions_updated', handleActionsUpdated);
         webSocketHook.off('*', handleDebugMessage);
     }
 

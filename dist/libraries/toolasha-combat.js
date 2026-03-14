@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.36.1
+ * Version: 1.36.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -3750,23 +3750,20 @@
 
                     label = this.formatTime(diff);
 
-                    // Determine color based on this team's performance history for this dungeon.
-                    // Uses cumulativeStatsByDungeon[statsKey] which is seeded from storage and
-                    // updated as runs are annotated — no cross-team contamination.
+                    // Color run relative to the running cumulative average for this team+dungeon.
+                    // Green = faster than average, red = slower, neutral = no history yet.
                     const teamStats = this.cumulativeStatsByDungeon[statsKey];
-                    if (teamStats && teamStats.fastestTime < Infinity && teamStats.slowestTime > 0) {
-                        const fastestThreshold = teamStats.fastestTime * 1.1;
-                        const slowestThreshold = teamStats.slowestTime * 0.9;
-
-                        if (diff <= fastestThreshold) {
-                            color = config.COLOR_PROFIT || '#5fda5f'; // Green
-                        } else if (diff >= slowestThreshold) {
-                            color = config.COLOR_LOSS || '#ff6b6b'; // Red
+                    if (teamStats && teamStats.runCount > 0) {
+                        const avg = teamStats.totalTime / teamStats.runCount;
+                        if (diff < avg) {
+                            color = config.COLOR_PROFIT || '#5fda5f'; // Green — faster than average
+                        } else if (diff > avg) {
+                            color = config.COLOR_LOSS || '#ff6b6b'; // Red — slower than average
                         } else {
-                            color = '#90ee90'; // Light green (normal)
+                            color = '#90ee90'; // Exactly on average
                         }
                     } else {
-                        color = '#90ee90'; // Light green (no history yet)
+                        color = '#90ee90'; // No history yet — neutral
                     }
 
                     // Track run durations for average calculation
@@ -10332,6 +10329,8 @@ self.onmessage = function (e) {
             return { ask: 0, bid: 0, dailyCost: 0, breakdown: [] };
         }
 
+        const keyPricingSetting = config.getSettingValue('combatStats_keyPricing') || 'ask';
+
         for (const loot of Object.values(lootMap)) {
             const keyHrid = DUNGEON_CHEST_KEYS[loot.itemHrid];
             if (!keyHrid) continue;
@@ -10340,8 +10339,7 @@ self.onmessage = function (e) {
             const keyPrices = marketAPI.getPrice(keyHrid);
             if (!keyPrices) continue;
 
-            // Keys are bought at ask price (you pay ask to acquire them)
-            const keyPrice = keyPrices.ask;
+            const keyPrice = keyPrices[keyPricingSetting] ?? keyPrices.ask;
             const itemCost = keyPrice * chestCount;
 
             totalCost += itemCost;
@@ -10373,7 +10371,7 @@ self.onmessage = function (e) {
             const keyPrices = marketAPI.getPrice(keyHrid);
             if (!keyPrices) continue;
 
-            const keyPrice = keyPrices.ask;
+            const keyPrice = keyPrices[keyPricingSetting] ?? keyPrices.ask;
             const itemCost = keyPrice * count;
 
             totalCost += itemCost;
@@ -11204,6 +11202,7 @@ self.onmessage = function (e) {
                               expandable: true,
                               breakdown: stats.keyBreakdown,
                               hideTrackingNote: true,
+                              showKeyPricingNote: true,
                           },
                           {
                               label: 'Daily Key Costs',
@@ -11213,6 +11212,7 @@ self.onmessage = function (e) {
                               breakdown: stats.keyBreakdown,
                               isDaily: true,
                               hideTrackingNote: true,
+                              showKeyPricingNote: true,
                           },
                       ]
                     : []),
@@ -11441,6 +11441,19 @@ self.onmessage = function (e) {
                             `;
                                 breakdownDiv.appendChild(incomeTotalRow);
                             } else if (row.breakdown && row.breakdown.length > 0) {
+                                // Add key pricing note if applicable
+                                if (row.showKeyPricingNote) {
+                                    const keyPricing = config.getSettingValue('combatStats_keyPricing') || 'ask';
+                                    const keyPricingNote = document.createElement('div');
+                                    keyPricingNote.style.cssText = `
+                                    font-size: 11px;
+                                    color: #aaa;
+                                    margin-bottom: 6px;
+                                `;
+                                    keyPricingNote.textContent = `Pricing: ${keyPricing === 'bid' ? 'Bid (patient buy)' : 'Ask (instant buy)'}`;
+                                    breakdownDiv.appendChild(keyPricingNote);
+                                }
+
                                 // Add header
                                 const header = document.createElement('div');
                                 header.style.cssText = `
