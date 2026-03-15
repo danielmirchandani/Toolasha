@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.37.2
+ * Version: 1.37.3
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1806,7 +1806,7 @@
      */
     async function displayGatheringProfit(panel, actionHrid, dropTableSelector) {
         // Check global hide setting
-        if (config.getSetting('actionPanel_hideActionStats')) {
+        if (!config.getSetting('actionPanel_showProfitPerHour')) {
             return;
         }
 
@@ -2336,7 +2336,7 @@
      */
     async function displayProductionProfit(panel, actionHrid, dropTableSelector) {
         // Check global hide setting
-        if (config.getSetting('actionPanel_hideActionStats')) {
+        if (!config.getSetting('actionPanel_showProfitPerHour')) {
             return;
         }
 
@@ -7567,7 +7567,7 @@
                 } // End hasNormalXP check - queueContent only created for non-combat
 
                 // Insert sections into DOM
-                const hideActionStats = config.getSetting('actionPanel_hideActionStats');
+                const hideActionStats = !config.getSetting('actionPanel_showProfitPerHour');
                 if (queueContent) {
                     // Non-combat: Insert queueContent first
                     inputContainer.insertAdjacentElement('afterend', queueContent);
@@ -9468,7 +9468,7 @@
                 return;
             }
 
-            if (!config.getSetting('actionPanel_gatheringStats')) {
+            if (!config.getSetting('actionPanel_showProfitPerHour') && !config.getSetting('actionPanel_showExpPerHour')) {
                 return;
             }
 
@@ -9846,21 +9846,23 @@
          */
         renderIndicators(actionPanel, data) {
             const { profitPerHour, expPerHour } = data;
+            const showProfit = config.getSetting('actionPanel_showProfitPerHour');
+            const showExp = config.getSetting('actionPanel_showExpPerHour');
             let html = '';
 
-            if (profitPerHour !== null) {
+            if (showProfit && profitPerHour !== null) {
                 const profitColor = profitPerHour >= 0 ? config.COLOR_PROFIT : config.COLOR_LOSS;
                 const profitSign = profitPerHour >= 0 ? '' : '-';
                 html += `<div class="mwi-action-stat-line" style="white-space: nowrap;">`;
                 html += `<span data-stat="profit" style="color: ${profitColor};">Profit/hr: ${profitSign}${formatters_js.formatKMB(Math.abs(profitPerHour))}</span></div>`;
             }
 
-            if (expPerHour !== null && expPerHour > 0) {
+            if (showExp && expPerHour !== null && expPerHour > 0) {
                 html += `<div class="mwi-action-stat-line" style="white-space: nowrap;">`;
                 html += `<span data-stat="exp" style="color: #fff;">Exp/hr: ${formatters_js.formatKMB(expPerHour)}</span></div>`;
             }
 
-            if (profitPerHour !== null && expPerHour !== null && expPerHour > 0) {
+            if (showProfit && showExp && profitPerHour !== null && expPerHour !== null && expPerHour > 0) {
                 const coinsPerXp = profitPerHour / expPerHour;
                 const efficiencyColor = coinsPerXp >= 0 ? config.COLOR_INFO : config.COLOR_WARNING;
                 const efficiencySign = coinsPerXp >= 0 ? '' : '-';
@@ -14741,7 +14743,7 @@
             this.removeDisplay();
 
             // Check global hide setting
-            if (config.getSetting('actionPanel_hideActionStats')) {
+            if (!config.getSetting('actionPanel_showProfitPerHour')) {
                 return;
             }
 
