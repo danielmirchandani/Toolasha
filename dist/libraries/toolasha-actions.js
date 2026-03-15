@@ -1,14 +1,244 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.36.4
+ * Version: 1.37.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (dataManager, domObserver, config, enhancementConfig_js, enhancementCalculator_js, formatters_js, marketAPI, domObserverHelpers_js, equipmentParser_js, teaParser_js, bonusRevenueCalculator_js, marketData_js, profitConstants_js, efficiency_js, profitHelpers_js, houseEfficiency_js, uiComponents_js, actionPanelHelper_js, dom_js, timerRegistry_js, storage, actionCalculator_js, cleanupRegistry_js, experienceParser_js, reactInput_js, experienceCalculator_js, materialCalculator_js, webSocketHook, tokenValuation_js, buffParser_js) {
+(function (dataManager, domObserver, config, enhancementConfig_js, enhancementCalculator_js, profitConstants_js, formatters_js, marketAPI, domObserverHelpers_js, equipmentParser_js, teaParser_js, bonusRevenueCalculator_js, marketData_js, efficiency_js, profitHelpers_js, houseEfficiency_js, uiComponents_js, actionPanelHelper_js, dom_js, timerRegistry_js, storage, actionCalculator_js, cleanupRegistry_js, experienceParser_js, reactInput_js, experienceCalculator_js, materialCalculator_js, webSocketHook, tokenValuation_js, buffParser_js) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
+
+    /**
+     * Enhancement XP Calculations
+     * Based on Ultimate Enhancement Tracker formulas
+     */
+
+
+    /**
+     * Get base item level from item HRID
+     * @param {string} itemHrid - Item HRID
+     * @returns {number} Base item level
+     */
+    function getBaseItemLevel(itemHrid) {
+        try {
+            const gameData = dataManager.getInitClientData();
+            const itemData = gameData?.itemDetailMap?.[itemHrid];
+
+            // First try direct level field (works for consumables, resources, etc.)
+            if (itemData?.level) {
+                return itemData.level;
+            }
+
+            // For equipment, check levelRequirements array
+            if (itemData?.equipmentDetail?.levelRequirements?.length > 0) {
+                // Return the level from the first requirement (highest requirement)
+                return itemData.equipmentDetail.levelRequirements[0].level;
+            }
+
+            return 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    /**
+     * Calculate enhancing action time from the game's buff maps
+     * Reads the pre-computed action_speed flatBoost values from all buff sources
+     * and adds level advantage, matching the game's actual speed calculation
+     * @param {string} itemHrid - Item HRID being enhanced
+     * @returns {number} Per-action time in seconds
+     */
+    function getEnhancingActionTime(itemHrid) {
+        try {
+            const charData = dataManager.characterData;
+            if (!charData) return 12;
+
+            // Get base time from game data
+            const actionDetails = dataManager.getActionDetails('/actions/enhancing/enhance');
+            const baseTime = actionDetails?.baseTimeCost ? actionDetails.baseTimeCost / 1e9 : 12;
+
+            // Get enhancing skill level
+            const enhancingSkill = charData.characterSkills?.find((s) => s.skillHrid === '/skills/enhancing');
+            const baseLevel = enhancingSkill?.level || 1;
+
+            // Get tea level bonus from consumable buff map
+            let teaLevelBonus = 0;
+            const consumableBuffs = charData.consumableActionTypeBuffsMap?.['/action_types/enhancing'];
+            if (Array.isArray(consumableBuffs)) {
+                for (const buff of consumableBuffs) {
+                    if (buff.typeHrid === '/buff_types/enhancing_level') {
+                        teaLevelBonus = buff.flatBoost || 0;
+                    }
+                }
+            }
+
+            // Sum action_speed flatBoost from ALL buff sources (equipment, house, community, tea)
+            let totalSpeedBuff = 0;
+
+            const buffMaps = [
+                charData.equipmentActionTypeBuffsMap,
+                charData.houseActionTypeBuffsMap,
+                charData.communityActionTypeBuffsMap,
+                charData.consumableActionTypeBuffsMap,
+            ];
+
+            for (const buffMap of buffMaps) {
+                const enhancingBuffs = buffMap?.['/action_types/enhancing'];
+                if (!Array.isArray(enhancingBuffs)) continue;
+
+                for (const buff of enhancingBuffs) {
+                    if (buff.typeHrid === '/buff_types/action_speed') {
+                        totalSpeedBuff += buff.flatBoost || 0;
+                    }
+                }
+            }
+
+            // Add personal buffs (Labyrinth seals)
+            totalSpeedBuff += dataManager.getPersonalBuffFlatBoost('/action_types/enhancing', '/buff_types/action_speed');
+
+            // Add level advantage: (effectiveLevel - itemLevel) / 100
+            const effectiveLevel = baseLevel + teaLevelBonus;
+            const itemLevel = getBaseItemLevel(itemHrid);
+            if (effectiveLevel > itemLevel) {
+                totalSpeedBuff += (effectiveLevel - itemLevel) / 100;
+            }
+
+            return Math.max(profitConstants_js.MIN_ACTION_TIME_SECONDS, baseTime / (1 + totalSpeedBuff));
+        } catch {
+            return 12;
+        }
+    }
+
+    /**
+     * Get enhancing speed breakdown from the game's buff maps
+     * Returns per-source speed values and total, matching the game's actual calculation
+     * @param {string} itemHrid - Item HRID being enhanced
+     * @returns {Object} Speed breakdown with total and per-source values (as percentages)
+     */
+    function getEnhancingSpeedBreakdown(itemHrid) {
+        try {
+            const charData = dataManager.characterData;
+            if (!charData)
+                return { total: 0, equipment: 0, house: 0, community: 0, consumable: 0, personal: 0, levelAdvantage: 0 };
+
+            // Get enhancing skill level
+            const enhancingSkill = charData.characterSkills?.find((s) => s.skillHrid === '/skills/enhancing');
+            const baseLevel = enhancingSkill?.level || 1;
+
+            // Get tea level bonus from consumable buff map
+            let teaLevelBonus = 0;
+            const consumableBuffs = charData.consumableActionTypeBuffsMap?.['/action_types/enhancing'];
+            if (Array.isArray(consumableBuffs)) {
+                for (const buff of consumableBuffs) {
+                    if (buff.typeHrid === '/buff_types/enhancing_level') {
+                        teaLevelBonus = buff.flatBoost || 0;
+                    }
+                }
+            }
+
+            // Read action_speed flatBoost from each buff source individually
+            const sources = {
+                equipment: charData.equipmentActionTypeBuffsMap,
+                house: charData.houseActionTypeBuffsMap,
+                community: charData.communityActionTypeBuffsMap,
+                consumable: charData.consumableActionTypeBuffsMap,
+            };
+
+            const breakdown = { equipment: 0, house: 0, community: 0, consumable: 0, personal: 0, levelAdvantage: 0 };
+
+            for (const [source, buffMap] of Object.entries(sources)) {
+                const enhancingBuffs = buffMap?.['/action_types/enhancing'];
+                if (!Array.isArray(enhancingBuffs)) continue;
+
+                for (const buff of enhancingBuffs) {
+                    if (buff.typeHrid === '/buff_types/action_speed') {
+                        breakdown[source] += buff.flatBoost || 0;
+                    }
+                }
+            }
+
+            // Personal buffs (Labyrinth seals)
+            breakdown.personal = dataManager.getPersonalBuffFlatBoost(
+                '/action_types/enhancing',
+                '/buff_types/action_speed'
+            );
+
+            // Level advantage
+            const effectiveLevel = baseLevel + teaLevelBonus;
+            const itemLevel = getBaseItemLevel(itemHrid);
+            if (effectiveLevel > itemLevel) {
+                breakdown.levelAdvantage = (effectiveLevel - itemLevel) / 100;
+            }
+
+            // Total (as decimal, e.g. 1.56 for +156%)
+            breakdown.total =
+                breakdown.equipment +
+                breakdown.house +
+                breakdown.community +
+                breakdown.consumable +
+                breakdown.personal +
+                breakdown.levelAdvantage;
+
+            return breakdown;
+        } catch {
+            return { total: 0, equipment: 0, house: 0, community: 0, consumable: 0, personal: 0, levelAdvantage: 0 };
+        }
+    }
+
+    /**
+     * Calculate enhancement predictions using character stats
+     * @param {string} itemHrid - Item HRID being enhanced
+     * @param {number} startLevel - Starting enhancement level
+     * @param {number} targetLevel - Target enhancement level
+     * @param {number} protectFrom - Level to start using protection
+     * @returns {Object|null} Prediction data or null if cannot calculate
+     */
+    function calculateEnhancementPredictions(itemHrid, startLevel, targetLevel, protectFrom) {
+        try {
+            // Get item level
+            const itemLevel = getBaseItemLevel(itemHrid);
+
+            // Use getEnhancingParams() for all character stats (level, speed, success, teas, etc.)
+            const params = enhancementConfig_js.getEnhancingParams();
+
+            // Check for blessed tea
+            const hasBlessed = params.teas?.blessed || false;
+
+            // Calculate predictions (Markov chain for attempts, protections, success rates)
+            const result = enhancementCalculator_js.calculateEnhancement({
+                enhancingLevel: params.enhancingLevel,
+                houseLevel: params.houseLevel,
+                toolBonus: params.toolBonus,
+                speedBonus: params.speedBonus,
+                itemLevel,
+                targetLevel,
+                startLevel,
+                protectFrom,
+                blessedTea: hasBlessed,
+                guzzlingBonus: params.guzzlingBonus,
+            });
+
+            if (!result) {
+                return null;
+            }
+
+            // Calculate per-action time from the game's buff maps (authoritative source)
+            // instead of the hardcoded formula in calculateEnhancement
+            const perActionTime = getEnhancingActionTime(itemHrid);
+
+            return {
+                expectedAttempts: Math.round(result.attemptsRounded),
+                expectedProtections: Math.round(result.protectionCount),
+                expectedTime: perActionTime * result.attempts,
+                perActionTime,
+                successMultiplier: result.successMultiplier,
+            };
+        } catch {
+            return null;
+        }
+    }
 
     /**
      * Enhancement Display
@@ -99,8 +329,6 @@
                 return;
             }
 
-            const itemLevel = itemDetails.itemLevel || 1;
-
             // Get auto-detected enhancing parameters
             const params = enhancementConfig_js.getEnhancingParams();
 
@@ -114,8 +342,11 @@
             // Detect protection item once (avoid repeated DOM queries)
             const protectionItemHrid = getProtectionItemFromUI(panel);
 
-            // Calculate per-action time (simple calculation, no Markov chain needed)
-            const perActionTime = enhancementCalculator_js.calculatePerActionTime(params.enhancingLevel, itemLevel, params.speedBonus);
+            // Calculate per-action time from game's buff maps (authoritative source)
+            const speedBreakdown = getEnhancingSpeedBreakdown(itemHrid);
+            const actionDetails = dataManager.getActionDetails('/actions/enhancing/enhance');
+            const baseTime = actionDetails?.baseTimeCost ? actionDetails.baseTimeCost / 1e9 : 12;
+            const perActionTime = Math.max(profitConstants_js.MIN_ACTION_TIME_SECONDS, baseTime / (1 + speedBreakdown.total));
 
             // Format and inject display
             const html = formatEnhancementDisplay(
@@ -125,7 +356,8 @@
                 itemDetails,
                 effectiveProtectFrom,
                 itemDetails.enhancementCosts || [],
-                protectionItemHrid
+                protectionItemHrid,
+                speedBreakdown
             );
             injectDisplay(panel, html);
         } catch (error) {
@@ -144,7 +376,15 @@
      * @param {string|null} protectionItemHrid - Protection item HRID (cached, avoid repeated DOM queries)
      * @returns {string} HTML string
      */
-    function generateCostsByLevelTable(panel, params, itemDetails, protectFromLevel, enhancementCosts, protectionItemHrid) {
+    function generateCostsByLevelTable(
+        panel,
+        params,
+        itemDetails,
+        protectFromLevel,
+        enhancementCosts,
+        protectionItemHrid,
+        perActionTime
+    ) {
         const lines = [];
         const gameData = dataManager.getInitClientData();
         const itemLevel = itemDetails.itemLevel || 1;
@@ -235,9 +475,12 @@
 
             const totalCost = materialCost + protectionCost;
 
+            // Override time with buff-map-based per-action time (authoritative source)
+            const totalTime = perActionTime * calc.attempts;
+
             // Calculate XP/hr for this target level
             let totalXP = 0;
-            if (calc.visitCounts && calc.totalTime > 0) {
+            if (calc.visitCounts && totalTime > 0) {
                 for (let i = 0; i < level; i++) {
                     const visits = calc.visitCounts[i];
                     const successRate = calc.successRates[i].actualRate / 100;
@@ -247,13 +490,13 @@
                     totalXP += visits * (successRate * successXP + (1 - successRate) * failXP);
                 }
             }
-            const xpPerHour = calc.totalTime > 0 ? Math.round((totalXP / calc.totalTime) * 3600) : 0;
+            const xpPerHour = totalTime > 0 ? Math.round((totalXP / totalTime) * 3600) : 0;
 
             costData.push({
                 level,
                 attempts: calc.attempts, // Use exact decimal attempts
                 protection: calc.protectionCount,
-                time: calc.totalTime,
+                time: totalTime,
                 xpPerHour,
                 cost: totalCost,
                 breakdown: materialBreakdown,
@@ -461,7 +704,8 @@
         itemDetails,
         protectFromLevel,
         enhancementCosts,
-        protectionItemHrid
+        protectionItemHrid,
+        speedBreakdown
     ) {
         const lines = [];
 
@@ -558,47 +802,46 @@
             }
         }
 
-        // Calculate total speed (includes level advantage if applicable)
-        let totalSpeed = params.speedBonus;
-        let speedLevelAdvantage = 0;
-        if (params.enhancingLevel > itemDetails.itemLevel) {
-            speedLevelAdvantage = params.enhancingLevel - itemDetails.itemLevel;
-            totalSpeed += speedLevelAdvantage;
-        }
+        // Speed display from game's buff maps (authoritative source)
+        const totalSpeed = speedBreakdown.total * 100; // Convert decimal to percentage
 
         if (totalSpeed > 0) {
             lines.push(
                 `<div style="color: #88ccff;"><span style="color: #888;">Speed:</span> +${totalSpeed.toFixed(1)}%</div>`
             );
 
-            // Show breakdown: equipment + house + community + tea + level advantage
-            if (params.equipmentSpeedBonus > 0) {
+            // Show breakdown from buff maps (each value is decimal, convert to %)
+            if (speedBreakdown.equipment > 0) {
                 lines.push(
-                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">Equipment:</span> +${params.equipmentSpeedBonus.toFixed(1)}%</div>`
+                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">Equipment:</span> +${(speedBreakdown.equipment * 100).toFixed(1)}%</div>`
                 );
             }
-            if (params.houseSpeedBonus > 0) {
+            if (speedBreakdown.house > 0) {
                 lines.push(
-                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">House (Observatory):</span> +${params.houseSpeedBonus.toFixed(1)}%</div>`
+                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">House (Observatory):</span> +${(speedBreakdown.house * 100).toFixed(1)}%</div>`
                 );
             }
-            if (params.communitySpeedBonus > 0) {
+            if (speedBreakdown.community > 0) {
                 lines.push(
-                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">Community T${params.communityBuffLevel}:</span> +${params.communitySpeedBonus.toFixed(1)}%</div>`
+                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">Community:</span> +${(speedBreakdown.community * 100).toFixed(1)}%</div>`
                 );
             }
-            if (params.teaSpeedBonus > 0) {
-                const teaName = params.teas.ultraEnhancing ? 'Ultra' : params.teas.superEnhancing ? 'Super' : 'Enhancing';
+            if (speedBreakdown.consumable > 0) {
                 lines.push(
-                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">${teaName} Tea:</span> +${params.teaSpeedBonus.toFixed(1)}%</div>`
+                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">Tea:</span> +${(speedBreakdown.consumable * 100).toFixed(1)}%</div>`
                 );
             }
-            if (speedLevelAdvantage > 0) {
+            if (speedBreakdown.personal > 0) {
                 lines.push(
-                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">Level advantage:</span> +${speedLevelAdvantage.toFixed(1)}%</div>`
+                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">Labyrinth:</span> +${(speedBreakdown.personal * 100).toFixed(1)}%</div>`
                 );
             }
-        } else if (totalSpeed === 0 && speedLevelAdvantage === 0) {
+            if (speedBreakdown.levelAdvantage > 0) {
+                lines.push(
+                    `<div style="color: #aaddff; font-size: 0.8em; padding-left: 10px;"><span style="color: #666;">Level advantage:</span> +${(speedBreakdown.levelAdvantage * 100).toFixed(1)}%</div>`
+                );
+            }
+        } else {
             lines.push(`<div style="color: #88ccff;"><span style="color: #888;">Speed:</span> +0.0%</div>`);
         }
 
@@ -690,7 +933,8 @@
             itemDetails,
             protectFromLevel,
             enhancementCosts,
-            protectionItemHrid
+            protectionItemHrid,
+            perActionTime
         );
         lines.push(costsByLevelHTML);
 
@@ -767,13 +1011,9 @@
 
         lines.push('• Attempts and time are statistical averages<br>');
 
-        // Calculate total speed for display (includes level advantage if applicable)
-        let displaySpeed = params.speedBonus;
-        if (params.enhancingLevel > itemDetails.itemLevel) {
-            displaySpeed += params.enhancingLevel - itemDetails.itemLevel;
-        }
-
-        lines.push(`• Action time: ${perActionTime.toFixed(2)}s (includes ${displaySpeed.toFixed(1)}% speed bonus)`);
+        lines.push(
+            `• Action time: ${perActionTime.toFixed(2)}s (includes ${(speedBreakdown.total * 100).toFixed(1)}% speed bonus)`
+        );
         lines.push('</div>');
 
         lines.push('</div>'); // Close targets section
@@ -5646,6 +5886,14 @@
                 return;
             }
 
+            // Handle enhancing actions with specialized display
+            if (actionDetails.type === '/action_types/enhancing') {
+                const displayMode = config.getSettingValue('totalActionTime', 'full');
+                this.buildEnhancingDisplay(action, actionDetails, actionNameElement, displayMode);
+                this.reconnectActionNameObserver(actionNameElement);
+                return;
+            }
+
             // Re-apply CSS override on every update to prevent game's CSS from truncating text
             // ONLY for non-combat actions (combat needs normal width for HP/MP bars)
             // Use setProperty with 'important' to ensure we override game's styles
@@ -5732,10 +5980,9 @@
             // For alchemy actions, use item level for efficiency calculation (not action requirement)
             let levelRequirementOverride = undefined;
             if (actionDetails.type === '/action_types/alchemy' && action.primaryItemHash) {
-                const parts = action.primaryItemHash.split('::');
-                if (parts.length >= 3) {
-                    const itemHrid = parts[2];
-                    const itemDetails = itemDetailMap[itemHrid];
+                const { itemHrid: alchItemHrid } = this.parseItemHash(action.primaryItemHash);
+                if (alchItemHrid) {
+                    const itemDetails = itemDetailMap[alchItemHrid];
                     if (itemDetails && itemDetails.itemLevel) {
                         levelRequirementOverride = itemDetails.itemLevel;
                     }
@@ -6019,6 +6266,237 @@
             );
         }
 
+        /**
+         * Build and display enhancing-specific stats in the action bar
+         * @param {Object} action - Current action object from dataManager
+         * @param {Object} actionDetails - Action details
+         * @param {HTMLElement} actionNameElement - Action name DOM element
+         * @param {string} displayMode - Display mode ('full', 'compact', 'minimal')
+         */
+        buildEnhancingDisplay(action, actionDetails, actionNameElement, displayMode) {
+            // Parse primaryItemHash to get item HRID and current enhancement level
+            if (!action.primaryItemHash) {
+                this.displayElement.innerHTML = '';
+                this.clearAppendedStats(actionNameElement);
+                return;
+            }
+
+            const { itemHrid, level: currentLevel } = this.parseItemHash(action.primaryItemHash);
+            if (!itemHrid) {
+                this.displayElement.innerHTML = '';
+                this.clearAppendedStats(actionNameElement);
+                return;
+            }
+
+            const targetLevel = action.enhancingMaxLevel || 0;
+            const protectFrom = action.enhancingProtectionMinLevel || 0;
+
+            if (targetLevel <= currentLevel) {
+                this.displayElement.innerHTML = '';
+                this.clearAppendedStats(actionNameElement);
+                return;
+            }
+
+            // Get predictions from the enhancement calculator
+            const predictions = calculateEnhancementPredictions(itemHrid, currentLevel, targetLevel, protectFrom);
+            if (!predictions) {
+                this.displayElement.innerHTML = '';
+                this.clearAppendedStats(actionNameElement);
+                return;
+            }
+
+            const { expectedAttempts, expectedProtections, perActionTime, successMultiplier } = predictions;
+
+            // Calculate current level success rate
+            const baseRate = currentLevel < enhancementCalculator_js.BASE_SUCCESS_RATES.length ? enhancementCalculator_js.BASE_SUCCESS_RATES[currentLevel] : 30;
+            const actualSuccessRate = Math.min(100, baseRate * successMultiplier);
+
+            // Determine queue count
+            let queuedActions;
+            let materialLimit = null;
+
+            if (action.hasMaxCount) {
+                queuedActions = action.maxCount - action.currentCount;
+            } else {
+                // Infinite action — calculate material limit from enhancementCosts
+                const inventory = dataManager.getInventory();
+                const inventoryLookup = this.buildInventoryLookup(inventory);
+                const limitResult = this.calculateMaterialLimit(actionDetails, inventoryLookup, 0, action);
+                if (limitResult) {
+                    materialLimit = limitResult.maxActions;
+                    queuedActions = materialLimit;
+                } else {
+                    queuedActions = Infinity;
+                }
+
+                // Also check protection item availability if protection is active
+                if (protectFrom > 0 && expectedProtections > 0) {
+                    let protectionItemHrid = null;
+
+                    // Extract from secondaryItemHash
+                    if (action.secondaryItemHash) {
+                        const { itemHrid: secItemHrid } = this.parseItemHash(action.secondaryItemHash);
+                        protectionItemHrid = secItemHrid;
+                    }
+
+                    // Fallback to direct field
+                    if (!protectionItemHrid && action.enhancingProtectionItemHrid) {
+                        protectionItemHrid = action.enhancingProtectionItemHrid;
+                    }
+
+                    if (protectionItemHrid) {
+                        const byHrid = inventoryLookup?.byHrid || {};
+                        const availableProtections = byHrid[protectionItemHrid] || 0;
+
+                        if (availableProtections < expectedProtections) {
+                            // Protection items are the bottleneck — estimate how many attempts
+                            // we can sustain. Protection usage ratio = expectedProtections / expectedAttempts
+                            const protectionRatio = expectedProtections / expectedAttempts;
+                            const maxAttemptsFromProtection =
+                                protectionRatio > 0 ? Math.floor(availableProtections / protectionRatio) : Infinity;
+
+                            if (maxAttemptsFromProtection < queuedActions) {
+                                queuedActions = maxAttemptsFromProtection;
+                                materialLimit = maxAttemptsFromProtection;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Realistic time: min of queued actions and expected attempts
+            const realisticActions =
+                queuedActions === Infinity ? expectedAttempts : Math.min(queuedActions, expectedAttempts);
+            const realisticTime = realisticActions * perActionTime;
+
+            // Apply CSS overrides for non-combat display
+            if (displayMode === 'compact') {
+                actionNameElement.style.setProperty('max-width', '800px', 'important');
+                actionNameElement.style.setProperty('overflow', 'hidden', 'important');
+                actionNameElement.style.setProperty('text-overflow', 'clip', 'important');
+                actionNameElement.style.setProperty('white-space', 'nowrap', 'important');
+                actionNameElement.style.setProperty('width', '', 'important');
+            } else if (displayMode === 'minimal') {
+                actionNameElement.style.setProperty('overflow', 'visible', 'important');
+                actionNameElement.style.setProperty('text-overflow', 'clip', 'important');
+                actionNameElement.style.setProperty('white-space', 'nowrap', 'important');
+                actionNameElement.style.setProperty('max-width', 'none', 'important');
+                actionNameElement.style.setProperty('width', '', 'important');
+            } else {
+                actionNameElement.style.setProperty('overflow', 'visible', 'important');
+                actionNameElement.style.setProperty('text-overflow', 'clip', 'important');
+                actionNameElement.style.setProperty('white-space', 'nowrap', 'important');
+                actionNameElement.style.setProperty('max-width', 'none', 'important');
+                actionNameElement.style.setProperty('width', 'auto', 'important');
+
+                const parent1 = actionNameElement.parentElement;
+                const parent2 = parent1?.parentElement;
+                if (parent1) {
+                    parent1.style.setProperty('max-width', 'none', 'important');
+                    parent1.style.setProperty('width', 'auto', 'important');
+                    parent1.style.setProperty('overflow', 'visible', 'important');
+                }
+                if (parent2) {
+                    parent2.style.setProperty('max-width', 'none', 'important');
+                    parent2.style.setProperty('width', 'auto', 'important');
+                    parent2.style.setProperty('overflow', 'visible', 'important');
+                }
+            }
+
+            // Build stats line — enhancing is always infinite, so skip queue count display
+            const statsToAppend = [];
+
+            if (displayMode === 'minimal') {
+                statsToAppend.push(`${actualSuccessRate.toFixed(1)}% success`);
+                statsToAppend.push(`~${formatters_js.formatWithSeparator(expectedAttempts)} to target`);
+            } else {
+                statsToAppend.push(`${perActionTime.toFixed(2)}s/action`);
+                statsToAppend.push(`${actualSuccessRate.toFixed(1)}% success`);
+                statsToAppend.push(`~${formatters_js.formatWithSeparator(expectedAttempts)} to target`);
+
+                if (protectFrom > 0 && expectedProtections > 0) {
+                    statsToAppend.push(`~${formatters_js.formatWithSeparator(expectedProtections)} protections`);
+                }
+            }
+
+            this.appendStatsToActionName(actionNameElement, statsToAppend.join(' · '));
+
+            // Line 2: Time estimate (always show for enhancing since expectedAttempts gives a realistic time)
+            if (realisticActions > 0 && realisticTime > 0 && isFinite(realisticTime)) {
+                const timeStr = formatters_js.timeReadable(realisticTime);
+
+                const completionTime = new Date();
+                completionTime.setSeconds(completionTime.getSeconds() + realisticTime);
+
+                const now = new Date();
+                const isToday = completionTime.toDateString() === now.toDateString();
+
+                let clockTime;
+                if (isToday) {
+                    clockTime = completionTime.toLocaleString('en-US', {
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true,
+                    });
+                } else {
+                    clockTime = completionTime.toLocaleString('en-US', {
+                        month: 'numeric',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true,
+                    });
+                }
+
+                this.displayElement.innerHTML = `<span style="display: inline-block; margin-right: 0.25em;">⏱</span> ${timeStr} → ${clockTime}`;
+            } else {
+                this.displayElement.innerHTML = '';
+            }
+        }
+
+        /**
+         * Calculate time for an enhancing action in the queue
+         * Uses enhancement predictions to determine realistic time based on min(queued, expected attempts)
+         * @param {Object} actionObj - Action object from dataManager
+         * @param {Object} actionDetails - Action details
+         * @param {Object} inventoryLookup - Inventory lookup maps
+         * @returns {Object|null} { count, totalTime } or null if cannot calculate
+         */
+        calculateEnhancingQueueTime(actionObj, actionDetails, inventoryLookup) {
+            if (!actionObj.primaryItemHash) return null;
+
+            const { itemHrid, level: currentLevel } = this.parseItemHash(actionObj.primaryItemHash);
+            if (!itemHrid) return null;
+
+            const targetLevel = actionObj.enhancingMaxLevel || 0;
+            const protectFrom = actionObj.enhancingProtectionMinLevel || 0;
+
+            if (targetLevel <= currentLevel) return null;
+
+            const predictions = calculateEnhancementPredictions(itemHrid, currentLevel, targetLevel, protectFrom);
+            if (!predictions || predictions.expectedAttempts <= 0) return null;
+
+            const perActionTime = predictions.perActionTime;
+
+            // Determine queue count
+            let queuedActions;
+            if (actionObj.hasMaxCount) {
+                queuedActions = actionObj.maxCount - actionObj.currentCount;
+            } else {
+                const limitResult = this.calculateMaterialLimit(actionDetails, inventoryLookup, 0, actionObj);
+                queuedActions = limitResult?.maxActions ?? Infinity;
+            }
+
+            if (queuedActions === Infinity) return null;
+
+            const realisticActions = Math.min(queuedActions, predictions.expectedAttempts);
+            const totalTime = realisticActions * perActionTime;
+
+            return { count: realisticActions, totalTime };
+        }
+
         parseActionNameFromDom(actionNameText) {
             // Strip ALL trailing parentheses groups (e.g., "(T3) (Party)" or "(50)")
             // This handles combat tiers and party indicators: "Infernal Abyss (T3) (Party)" → "Infernal Abyss"
@@ -6043,6 +6521,37 @@
             return `/items/${itemName.toLowerCase().replace(/\s+/g, '_')}`;
         }
 
+        /**
+         * Parse primaryItemHash to extract item HRID and enhancement level
+         * Handles both formats:
+         *   "/item_locations/inventory::/items/cheese_sword::1" (3 parts)
+         *   "161296::/item_locations/inventory::/items/cheese_sword::5" (4 parts)
+         * @param {string} hash - primaryItemHash string
+         * @returns {Object} {itemHrid, level} or {itemHrid: null, level: 0} on failure
+         */
+        parseItemHash(hash) {
+            try {
+                const parts = hash.split('::');
+
+                // Find the part that starts with /items/
+                const itemHrid = parts.find((part) => part.startsWith('/items/')) || null;
+
+                // Level is the last part if it's numeric (not a path)
+                let level = 0;
+                const lastPart = parts[parts.length - 1];
+                if (lastPart && !lastPart.startsWith('/')) {
+                    const parsed = parseInt(lastPart, 10);
+                    if (!isNaN(parsed)) {
+                        level = parsed;
+                    }
+                }
+
+                return { itemHrid, level };
+            } catch {
+                return { itemHrid: null, level: 0 };
+            }
+        }
+
         matchCurrentActionFromText(currentActions, actionNameText) {
             const { actionNameFromDom, itemNameFromDom } = this.parseActionNameFromDom(actionNameText);
             const itemHridFromDom = this.buildItemHridFromName(itemNameFromDom || actionNameFromDom);
@@ -6051,6 +6560,17 @@
                 const actionDetails = dataManager.getActionDetails(currentAction.actionHrid);
                 if (!actionDetails) {
                     return false;
+                }
+
+                // Enhancing actions: DOM shows item name (e.g. "Cheese Sword +1"), not "Enhance: ..."
+                // Match by checking if the action is enhancing and primaryItemHash contains the base item
+                if (actionDetails.type === '/action_types/enhancing' && currentAction.primaryItemHash) {
+                    // Strip enhancement level suffix (e.g. "Cheese Sword +1" → "Cheese Sword")
+                    const baseItemName = actionNameFromDom.replace(/\s*\+\d+$/, '');
+                    const baseItemHrid = this.buildItemHridFromName(baseItemName);
+                    if (currentAction.primaryItemHash.includes(baseItemHrid)) {
+                        return true;
+                    }
                 }
 
                 const outputItems = actionDetails.outputItems || [];
@@ -6252,18 +6772,39 @@
             // Check for primaryItemHash (ONLY for Alchemy actions: Coinify, Decompose, Transmute)
             // Crafting actions also have primaryItemHash but should use the standard input/upgrade logic
             // Format: "characterID::itemLocation::itemHrid::enhancementLevel"
+            const isEnhancingAction = actionDetails.type === '/action_types/enhancing';
+            if (isEnhancingAction && actionObj && actionObj.primaryItemHash) {
+                const { itemHrid } = this.parseItemHash(actionObj.primaryItemHash);
+                if (itemHrid) {
+                    const itemData = dataManager.getItemDetails(itemHrid);
+                    const costs = itemData?.enhancementCosts;
+                    if (costs && Array.isArray(costs) && costs.length > 0) {
+                        let minLimit = Infinity;
+                        let limitingType = 'unknown';
+                        for (const cost of costs) {
+                            const available = byHrid[cost.itemHrid] || 0;
+                            const maxFromThis = Math.floor(available / cost.count);
+                            if (maxFromThis < minLimit) {
+                                minLimit = maxFromThis;
+                                limitingType = cost.itemHrid.includes('coin') ? 'gold' : `material:${cost.itemHrid}`;
+                            }
+                        }
+                        if (minLimit !== Infinity) {
+                            return { maxActions: minLimit, limitType: limitingType };
+                        }
+                    }
+                }
+            }
+
             const isAlchemyAction = actionDetails.type === '/action_types/alchemy';
             if (isAlchemyAction && actionObj && actionObj.primaryItemHash) {
-                const parts = actionObj.primaryItemHash.split('::');
-                if (parts.length >= 3) {
-                    const itemHrid = parts[2]; // Extract item HRID
-                    const enhancementLevel = parts.length >= 4 ? parseInt(parts[3]) : 0;
-
-                    const enhancedKey = `${itemHrid}::${enhancementLevel}`;
+                const { itemHrid: alchItemHrid, level: enhancementLevel } = this.parseItemHash(actionObj.primaryItemHash);
+                if (alchItemHrid) {
+                    const enhancedKey = `${alchItemHrid}::${enhancementLevel}`;
                     const availableCount = byEnhancedKey[enhancedKey] || 0;
 
                     // Get bulk multiplier from item details (how many items per action)
-                    const itemDetails = dataManager.getItemDetails(itemHrid);
+                    const itemDetails = dataManager.getItemDetails(alchItemHrid);
                     const bulkMultiplier = itemDetails?.alchemyDetail?.bulkMultiplier || 1;
 
                     // Calculate max queued actions based on available items
@@ -6515,6 +7056,8 @@
                 if (currentAction) {
                     const actionDetails = dataManager.getActionDetails(currentAction.actionHrid);
                     if (actionDetails) {
+                        const isEnhancing = actionDetails.type === '/action_types/enhancing';
+
                         // Check if infinite BEFORE calculating count
                         const isInfinite = !currentAction.hasMaxCount || currentAction.actionHrid.includes('/combat/');
 
@@ -6522,7 +7065,21 @@
                         let count = 0; // Queued action count for profit calculation
                         let baseActionsNeeded = 0; // Time-consuming actions for time calculation
 
-                        if (isInfinite) {
+                        if (isEnhancing) {
+                            // Enhancing: use enhancement-specific time calculation
+                            const enhancingTime = this.calculateEnhancingQueueTime(
+                                currentAction,
+                                actionDetails,
+                                inventoryLookup
+                            );
+                            if (enhancingTime) {
+                                count = enhancingTime.count;
+                                actionTimeSeconds = enhancingTime.totalTime;
+                                accumulatedTime += enhancingTime.totalTime;
+                            } else if (isInfinite) {
+                                hasInfinite = true;
+                            }
+                        } else if (isInfinite) {
                             // Check for material limit on infinite actions
                             const equipment = dataManager.getEquipment();
                             const itemDetailMap = dataManager.getInitClientData()?.itemDetailMap || {};
@@ -6574,7 +7131,8 @@
                         }
 
                         // Store action for profit calculation (done async after UI renders)
-                        if (actionTimeSeconds > 0) {
+                        // Skip enhancing actions — no profit applies
+                        if (actionTimeSeconds > 0 && !isEnhancing) {
                             actionsToCalculate.push({
                                 actionHrid: currentAction.actionHrid,
                                 timeSeconds: actionTimeSeconds,
@@ -6632,70 +7190,93 @@
                         continue;
                     }
 
+                    const isEnhancing = actionDetails.type === '/action_types/enhancing';
+
                     // Check if infinite BEFORE calculating count
                     const isInfinite = !actionObj.hasMaxCount || actionObj.actionHrid.includes('/combat/');
 
-                    // Calculate action time first to get efficiency
-                    const timeData = this.calculateActionTime(actionDetails, actionObj.actionHrid);
-                    if (!timeData) continue;
-
-                    const { actionTime, totalEfficiency } = timeData;
-
-                    // Calculate material limit for infinite actions
+                    let totalTime;
+                    let actionTimeSeconds = 0;
+                    let baseActionsNeeded = 0;
+                    let count = 0;
+                    let isTrulyInfinite = false;
                     let materialLimit = null;
                     let limitType = null;
-                    if (isInfinite) {
-                        const equipment = dataManager.getEquipment();
-                        const itemDetailMap = dataManager.getInitClientData()?.itemDetailMap || {};
-                        const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, itemDetailMap);
-                        const activeDrinks = dataManager.getActionDrinkSlots(actionDetails.type);
-                        const artisanBonus = teaParser_js.parseArtisanBonus(activeDrinks, itemDetailMap, drinkConcentration);
 
-                        const limitResult = this.calculateMaterialLimit(
-                            actionDetails,
-                            inventoryLookup,
-                            artisanBonus,
-                            actionObj
-                        );
+                    if (isEnhancing) {
+                        // Enhancing: use enhancement-specific time calculation
+                        const enhancingTime = this.calculateEnhancingQueueTime(actionObj, actionDetails, inventoryLookup);
+                        if (enhancingTime) {
+                            count = enhancingTime.count;
+                            totalTime = enhancingTime.totalTime;
+                            actionTimeSeconds = enhancingTime.totalTime;
+                            accumulatedTime += enhancingTime.totalTime;
+                        } else if (isInfinite) {
+                            isTrulyInfinite = true;
+                            hasInfinite = true;
+                            totalTime = Infinity;
+                        } else {
+                            totalTime = 0;
+                        }
+                    } else {
+                        // Non-enhancing: use standard calculation
+                        // Calculate action time first to get efficiency
+                        const timeData = this.calculateActionTime(actionDetails, actionObj.actionHrid);
+                        if (!timeData) continue;
 
-                        if (limitResult) {
-                            materialLimit = limitResult.maxActions;
-                            limitType = limitResult.limitType;
+                        const { actionTime, totalEfficiency } = timeData;
+
+                        // Calculate material limit for infinite actions
+                        if (isInfinite) {
+                            const equipment = dataManager.getEquipment();
+                            const itemDetailMap = dataManager.getInitClientData()?.itemDetailMap || {};
+                            const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, itemDetailMap);
+                            const activeDrinks = dataManager.getActionDrinkSlots(actionDetails.type);
+                            const artisanBonus = teaParser_js.parseArtisanBonus(activeDrinks, itemDetailMap, drinkConcentration);
+
+                            const limitResult = this.calculateMaterialLimit(
+                                actionDetails,
+                                inventoryLookup,
+                                artisanBonus,
+                                actionObj
+                            );
+
+                            if (limitResult) {
+                                materialLimit = limitResult.maxActions;
+                                limitType = limitResult.limitType;
+                            }
+                        }
+
+                        // Determine if truly infinite (no material limit)
+                        isTrulyInfinite = isInfinite && materialLimit === null;
+
+                        if (isTrulyInfinite) {
+                            hasInfinite = true;
+                        }
+
+                        // Calculate count for finite actions or material-limited infinite actions
+                        if (!isInfinite) {
+                            count = actionObj.maxCount - actionObj.currentCount;
+                        } else if (materialLimit !== null) {
+                            count = materialLimit;
+                        }
+
+                        // Calculate total time for this action
+                        if (isTrulyInfinite) {
+                            totalTime = Infinity;
+                        } else {
+                            // Calculate time-consuming actions needed
+                            const avgActionsPerBaseAction = efficiency_js.calculateEfficiencyMultiplier(totalEfficiency);
+                            baseActionsNeeded = Math.ceil(count / avgActionsPerBaseAction);
+                            totalTime = baseActionsNeeded * actionTime;
+                            accumulatedTime += totalTime;
+                            actionTimeSeconds = totalTime;
                         }
                     }
 
-                    // Determine if truly infinite (no material limit)
-                    const isTrulyInfinite = isInfinite && materialLimit === null;
-
-                    if (isTrulyInfinite) {
-                        hasInfinite = true;
-                    }
-
-                    // Calculate count for finite actions or material-limited infinite actions
-                    let count = 0;
-                    if (!isInfinite) {
-                        count = actionObj.maxCount - actionObj.currentCount;
-                    } else if (materialLimit !== null) {
-                        count = materialLimit;
-                    }
-
-                    // Calculate total time for this action
-                    let totalTime;
-                    let actionTimeSeconds = 0; // Time spent on this action (for profit calculation)
-                    let baseActionsNeeded = 0; // Time-consuming actions for time calculation
-                    if (isTrulyInfinite) {
-                        totalTime = Infinity;
-                    } else {
-                        // Calculate time-consuming actions needed
-                        const avgActionsPerBaseAction = efficiency_js.calculateEfficiencyMultiplier(totalEfficiency);
-                        baseActionsNeeded = Math.ceil(count / avgActionsPerBaseAction);
-                        totalTime = baseActionsNeeded * actionTime;
-                        accumulatedTime += totalTime;
-                        actionTimeSeconds = totalTime;
-                    }
-
                     // Store action for profit calculation (done async after UI renders)
-                    if (actionTimeSeconds > 0 && !isTrulyInfinite) {
+                    // Skip enhancing actions — no profit applies
+                    if (actionTimeSeconds > 0 && !isTrulyInfinite && !isEnhancing) {
                         actionsToCalculate.push({
                             actionHrid: actionObj.actionHrid,
                             timeSeconds: actionTimeSeconds,
@@ -6760,7 +7341,8 @@
                     }
 
                     // Create empty profit div for this action (will be populated asynchronously)
-                    if (!isTrulyInfinite && actionTimeSeconds > 0) {
+                    // Skip enhancing actions — no profit applies
+                    if (!isTrulyInfinite && actionTimeSeconds > 0 && !isEnhancing) {
                         const profitDiv = document.createElement('div');
                         profitDiv.className = 'mwi-queue-action-profit';
                         profitDiv.dataset.divIndex = divIndex;
@@ -17812,4 +18394,4 @@ self.onmessage = function (e) {
 
     console.log('[Toolasha] Actions library loaded');
 
-})(Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.config, Toolasha.Utils.enhancementConfig, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.formatters, Toolasha.Core.marketAPI, Toolasha.Utils.domObserverHelpers, Toolasha.Utils.equipmentParser, Toolasha.Utils.teaParser, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.profitConstants, Toolasha.Utils.efficiency, Toolasha.Utils.profitHelpers, Toolasha.Utils.houseEfficiency, Toolasha.Utils.uiComponents, Toolasha.Utils.actionPanelHelper, Toolasha.Utils.dom, Toolasha.Utils.timerRegistry, Toolasha.Core.storage, Toolasha.Utils.actionCalculator, Toolasha.Utils.cleanupRegistry, Toolasha.Utils.experienceParser, Toolasha.Utils.reactInput, Toolasha.Utils.experienceCalculator, Toolasha.Utils.materialCalculator, Toolasha.Core.webSocketHook, Toolasha.Utils.tokenValuation, Toolasha.Utils.buffParser);
+})(Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.config, Toolasha.Utils.enhancementConfig, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.profitConstants, Toolasha.Utils.formatters, Toolasha.Core.marketAPI, Toolasha.Utils.domObserverHelpers, Toolasha.Utils.equipmentParser, Toolasha.Utils.teaParser, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.efficiency, Toolasha.Utils.profitHelpers, Toolasha.Utils.houseEfficiency, Toolasha.Utils.uiComponents, Toolasha.Utils.actionPanelHelper, Toolasha.Utils.dom, Toolasha.Utils.timerRegistry, Toolasha.Core.storage, Toolasha.Utils.actionCalculator, Toolasha.Utils.cleanupRegistry, Toolasha.Utils.experienceParser, Toolasha.Utils.reactInput, Toolasha.Utils.experienceCalculator, Toolasha.Utils.materialCalculator, Toolasha.Core.webSocketHook, Toolasha.Utils.tokenValuation, Toolasha.Utils.buffParser);

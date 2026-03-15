@@ -1,11 +1,11 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.36.4
+ * Version: 1.37.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (config, dataManager, domObserver, formatters_js, timerRegistry_js, domObserverHelpers_js, webSocketHook, reactInput_js, actionPanelHelper_js, marketAPI, tokenValuation_js, marketData_js, profitHelpers_js, equipmentParser_js, teaParser_js, bonusRevenueCalculator_js, profitConstants_js, efficiency_js, houseEfficiency_js, selectors_js, storage, cleanupRegistry_js, settingsSchema_js, settingsStorage, enhancementCalculator_js) {
+(function (config, dataManager, domObserver, formatters_js, timerRegistry_js, domObserverHelpers_js, webSocketHook, reactInput_js, actionPanelHelper_js, marketAPI, tokenValuation_js, marketData_js, profitHelpers_js, equipmentParser_js, teaParser_js, bonusRevenueCalculator_js, profitConstants_js, efficiency_js, houseEfficiency_js, selectors_js, storage, cleanupRegistry_js, settingsSchema_js, settingsStorage, enhancementCalculator_js, enhancementConfig_js) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -3352,7 +3352,7 @@
   function formatTime(isoString) {
     if (!isoString) return '';
     const d = new Date(isoString);
-    const use12Hour = config.getSettingValue('market_listingTimeFormat', '24hour') === '12hour';
+    const use12Hour = ${config.getSettingValue('market_listingTimeFormat', '24hour') === '12hour'};
     return d
         .toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', hour12: use12Hour })
         .trim();
@@ -9371,11 +9371,6 @@ self.onmessage = function (e) {
             // Calculate needed materials from all tasks
             await this.calculateNeededMaterials();
 
-            if (this.neededItems.size === 0) {
-                console.warn('[TaskInventoryHighlighter] No materials needed for current tasks');
-                return;
-            }
-
             // Apply opacity to inventory items
             this.applyInventoryOpacity();
 
@@ -10606,10 +10601,10 @@ self.onmessage = function (e) {
      */
 
 
-    const STORE_NAME = 'xpHistory';
-    const WINDOW_10M = 10 * 60 * 1000;
-    const WINDOW_1H = 60 * 60 * 1000;
-    const WINDOW_1W = 7 * 24 * 60 * 60 * 1000;
+    const STORE_NAME$1 = 'xpHistory';
+    const WINDOW_10M$1 = 10 * 60 * 1000;
+    const WINDOW_1H$1 = 60 * 60 * 1000;
+    const WINDOW_1W$1 = 7 * 24 * 60 * 60 * 1000;
 
     /**
      * Skill definitions matching game skill HRIDs
@@ -10648,7 +10643,7 @@ self.onmessage = function (e) {
      * @param {Array} arr - Existing history array (mutated in place)
      * @param {{t: number, xp: number}} d - New data point
      */
-    function pushXP(arr, d) {
+    function pushXP$1(arr, d) {
         if (arr.length === 0 || d.xp >= arr[arr.length - 1].xp) {
             arr.push(d);
         } else {
@@ -10661,7 +10656,7 @@ self.onmessage = function (e) {
         // Rule 1: within the last 10 minutes, keep only first + last
         let recentLength = 0;
         for (let i = arr.length - 1; i >= 0; i--) {
-            if (d.t - arr[i].t <= WINDOW_10M) {
+            if (d.t - arr[i].t <= WINDOW_10M$1) {
                 recentLength++;
             } else {
                 break;
@@ -10674,7 +10669,7 @@ self.onmessage = function (e) {
         // Rule 2: collapse consecutive same-XP entries that are within 1 hour apart
         let sameLength = 0;
         for (let i = arr.length - 1; i >= 0; i--) {
-            if (arr[i].xp === d.xp && d.t - arr[i].t <= WINDOW_1H) {
+            if (arr[i].xp === d.xp && d.t - arr[i].t <= WINDOW_1H$1) {
                 sameLength++;
             } else {
                 break;
@@ -10687,7 +10682,7 @@ self.onmessage = function (e) {
         // Rule 3: drop entries older than 1 week
         let oldLength = 0;
         for (let i = 0; i < arr.length; i++) {
-            if (d.t - arr[i].t > WINDOW_1W) {
+            if (d.t - arr[i].t > WINDOW_1W$1) {
                 oldLength++;
             } else {
                 break;
@@ -10704,7 +10699,7 @@ self.onmessage = function (e) {
      * @param {number} interval - ms
      * @returns {Array}
      */
-    function inLastInterval(arr, interval) {
+    function inLastInterval$1(arr, interval) {
         const now = Date.now();
         const result = [];
         for (let i = arr.length - 1; i >= 0; i--) {
@@ -10723,7 +10718,7 @@ self.onmessage = function (e) {
      * @param {{t: number, xp: number}} cur
      * @returns {number} XP per hour
      */
-    function calcXPH(prev, cur) {
+    function calcXPH$1(prev, cur) {
         const xpDelta = cur.xp - prev.xp;
         const tDeltaMs = cur.t - prev.t;
         return (xpDelta / tDeltaMs) * 3600000;
@@ -10734,14 +10729,14 @@ self.onmessage = function (e) {
      * @param {Array} arr - History array for one skill
      * @returns {{lastXPH: number, lastHourXPH: number}}
      */
-    function calcStats(arr) {
+    function calcStats$1(arr) {
         if (arr.length < 2) return { lastXPH: 0, lastHourXPH: 0 };
 
-        const last10m = inLastInterval(arr, WINDOW_10M);
-        const lastXPH = last10m.length >= 2 ? calcXPH(last10m[0], last10m[last10m.length - 1]) : 0;
+        const last10m = inLastInterval$1(arr, WINDOW_10M$1);
+        const lastXPH = last10m.length >= 2 ? calcXPH$1(last10m[0], last10m[last10m.length - 1]) : 0;
 
-        const last1h = inLastInterval(arr, WINDOW_1H);
-        const lastHourXPH = last1h.length >= 2 ? calcXPH(last1h[0], last1h[last1h.length - 1]) : 0;
+        const last1h = inLastInterval$1(arr, WINDOW_1H$1);
+        const lastHourXPH = last1h.length >= 2 ? calcXPH$1(last1h[0], last1h[last1h.length - 1]) : 0;
 
         return { lastXPH, lastHourXPH };
     }
@@ -10751,7 +10746,7 @@ self.onmessage = function (e) {
      * @param {number} ms
      * @returns {string}
      */
-    function formatTimeLeft(ms) {
+    function formatTimeLeft$1(ms) {
         const m1 = 60 * 1000;
         const h1 = 60 * 60 * 1000;
         const d1 = 24 * 60 * 60 * 1000;
@@ -10824,7 +10819,7 @@ self.onmessage = function (e) {
             this.characterId = charId;
 
             // Load persisted history for this character
-            const stored = await storage.get(`xpHistory_${charId}`, STORE_NAME, {});
+            const stored = await storage.get(`xpHistory_${charId}`, STORE_NAME$1, {});
             this.xpHistory = stored;
 
             const t = data.currentTimestamp ? +new Date(data.currentTimestamp) : Date.now();
@@ -10838,10 +10833,10 @@ self.onmessage = function (e) {
                     this.xpHistory[skillId] = [];
                 }
 
-                pushXP(this.xpHistory[skillId], { t, xp: skillEntry.experience });
+                pushXP$1(this.xpHistory[skillId], { t, xp: skillEntry.experience });
             });
 
-            await storage.set(`xpHistory_${charId}`, this.xpHistory, STORE_NAME);
+            await storage.set(`xpHistory_${charId}`, this.xpHistory, STORE_NAME$1);
 
             this._updateNavBars();
         }
@@ -10865,10 +10860,10 @@ self.onmessage = function (e) {
                     this.xpHistory[skillId] = [];
                 }
 
-                pushXP(this.xpHistory[skillId], { t, xp: skillEntry.experience });
+                pushXP$1(this.xpHistory[skillId], { t, xp: skillEntry.experience });
             });
 
-            storage.set(`xpHistory_${this.characterId}`, this.xpHistory, STORE_NAME);
+            storage.set(`xpHistory_${this.characterId}`, this.xpHistory, STORE_NAME$1);
 
             this._updateNavBars();
         }
@@ -10894,7 +10889,7 @@ self.onmessage = function (e) {
                 const history = this.xpHistory[skillId];
                 if (!history) return;
 
-                const stats = calcStats(history);
+                const stats = calcStats$1(history);
                 const rate = stats.lastXPH;
 
                 // Remove existing rate span (may be inline or standalone)
@@ -10975,7 +10970,7 @@ self.onmessage = function (e) {
             const history = this.xpHistory[skillId];
             if (!history) return;
 
-            const stats = calcStats(history);
+            const stats = calcStats$1(history);
             if (stats.lastXPH <= 0) return;
 
             // Parse "XP to next level: 12,345" — strip all non-digit characters to handle
@@ -10991,7 +10986,7 @@ self.onmessage = function (e) {
             tooltipEl.querySelector('.mwi-xp-time-left')?.remove();
 
             const msLeft = (xpTillLevel / stats.lastXPH) * 3600000;
-            const timeStr = formatTimeLeft(msLeft);
+            const timeStr = formatTimeLeft$1(msLeft);
 
             const div = document.createElement('div');
             div.className = 'mwi-xp-time-left';
@@ -18757,6 +18752,74 @@ self.onmessage = function (e) {
     }
 
     /**
+     * Calculate enhancing action time from the game's buff maps
+     * Reads the pre-computed action_speed flatBoost values from all buff sources
+     * and adds level advantage, matching the game's actual speed calculation
+     * @param {string} itemHrid - Item HRID being enhanced
+     * @returns {number} Per-action time in seconds
+     */
+    function getEnhancingActionTime(itemHrid) {
+        try {
+            const charData = dataManager.characterData;
+            if (!charData) return 12;
+
+            // Get base time from game data
+            const actionDetails = dataManager.getActionDetails('/actions/enhancing/enhance');
+            const baseTime = actionDetails?.baseTimeCost ? actionDetails.baseTimeCost / 1e9 : 12;
+
+            // Get enhancing skill level
+            const enhancingSkill = charData.characterSkills?.find((s) => s.skillHrid === '/skills/enhancing');
+            const baseLevel = enhancingSkill?.level || 1;
+
+            // Get tea level bonus from consumable buff map
+            let teaLevelBonus = 0;
+            const consumableBuffs = charData.consumableActionTypeBuffsMap?.['/action_types/enhancing'];
+            if (Array.isArray(consumableBuffs)) {
+                for (const buff of consumableBuffs) {
+                    if (buff.typeHrid === '/buff_types/enhancing_level') {
+                        teaLevelBonus = buff.flatBoost || 0;
+                    }
+                }
+            }
+
+            // Sum action_speed flatBoost from ALL buff sources (equipment, house, community, tea)
+            let totalSpeedBuff = 0;
+
+            const buffMaps = [
+                charData.equipmentActionTypeBuffsMap,
+                charData.houseActionTypeBuffsMap,
+                charData.communityActionTypeBuffsMap,
+                charData.consumableActionTypeBuffsMap,
+            ];
+
+            for (const buffMap of buffMaps) {
+                const enhancingBuffs = buffMap?.['/action_types/enhancing'];
+                if (!Array.isArray(enhancingBuffs)) continue;
+
+                for (const buff of enhancingBuffs) {
+                    if (buff.typeHrid === '/buff_types/action_speed') {
+                        totalSpeedBuff += buff.flatBoost || 0;
+                    }
+                }
+            }
+
+            // Add personal buffs (Labyrinth seals)
+            totalSpeedBuff += dataManager.getPersonalBuffFlatBoost('/action_types/enhancing', '/buff_types/action_speed');
+
+            // Add level advantage: (effectiveLevel - itemLevel) / 100
+            const effectiveLevel = baseLevel + teaLevelBonus;
+            const itemLevel = getBaseItemLevel(itemHrid);
+            if (effectiveLevel > itemLevel) {
+                totalSpeedBuff += (effectiveLevel - itemLevel) / 100;
+            }
+
+            return Math.max(profitConstants_js.MIN_ACTION_TIME_SECONDS, baseTime / (1 + totalSpeedBuff));
+        } catch {
+            return 12;
+        }
+    }
+
+    /**
      * Calculate enhancement predictions using character stats
      * @param {string} itemHrid - Item HRID being enhanced
      * @param {number} startLevel - Starting enhancement level
@@ -18766,116 +18829,42 @@ self.onmessage = function (e) {
      */
     function calculateEnhancementPredictions(itemHrid, startLevel, targetLevel, protectFrom) {
         try {
-            // Use dataManager for character data (NOT localStorage)
-            const charData = dataManager.characterData;
-            const gameData = dataManager.getInitClientData();
-
-            if (!charData || !gameData) {
-                return null;
-            }
-
             // Get item level
-            const itemData = gameData.itemDetailMap?.[itemHrid];
-            if (!itemData) {
-                return null;
-            }
-            const itemLevel = itemData.level || 0;
+            const itemLevel = getBaseItemLevel(itemHrid);
 
-            // Get enhancing skill level
-            const enhancingSkill = charData.characterSkills?.find((s) => s.skillHrid === '/skills/enhancing');
-            if (!enhancingSkill) {
-                console.error('[EnhancementXP] Skill not found: /skills/enhancing');
-            }
-            const enhancingLevel = enhancingSkill?.level || 1;
-
-            // Get house level (Observatory)
-            const houseRooms = charData.characterHouseRoomMap;
-            let houseLevel = 0;
-            if (houseRooms) {
-                for (const roomHrid in houseRooms) {
-                    const room = houseRooms[roomHrid];
-                    if (room.houseRoomHrid === '/house_rooms/observatory') {
-                        houseLevel = room.level || 0;
-                        break;
-                    }
-                }
-            }
-
-            // Get equipment buffs for enhancing
-            let toolBonus = 0;
-            let speedBonus = 0;
-            const equipmentBuffs = charData.equipmentActionTypeBuffsMap?.['/action_types/enhancing'];
-            if (Array.isArray(equipmentBuffs)) {
-                equipmentBuffs.forEach((buff) => {
-                    if (buff.typeHrid === '/buff_types/enhancing_success') {
-                        toolBonus += (buff.flatBoost || 0) * 100; // Convert to percentage
-                    }
-                    if (buff.typeHrid === '/buff_types/enhancing_speed') {
-                        speedBonus += (buff.flatBoost || 0) * 100; // Convert to percentage
-                    }
-                });
-            }
-
-            // Add house buffs
-            const houseBuffs = charData.houseActionTypeBuffsMap?.['/action_types/enhancing'];
-            if (Array.isArray(houseBuffs)) {
-                houseBuffs.forEach((buff) => {
-                    if (buff.typeHrid === '/buff_types/enhancing_success') {
-                        toolBonus += (buff.flatBoost || 0) * 100;
-                    }
-                    if (buff.typeHrid === '/buff_types/enhancing_speed') {
-                        speedBonus += (buff.flatBoost || 0) * 100;
-                    }
-                });
-            }
-
-            // Add achievement buffs
-            toolBonus +=
-                dataManager.getAchievementBuffFlatBoost('/action_types/enhancing', '/buff_types/enhancing_success') * 100;
+            // Use getEnhancingParams() for all character stats (level, speed, success, teas, etc.)
+            const params = enhancementConfig_js.getEnhancingParams();
 
             // Check for blessed tea
-            let hasBlessed = false;
-            let guzzlingBonus = 1.0;
-            const enhancingTeas = charData.actionTypeDrinkSlotsMap?.['/action_types/enhancing'] || [];
-            const activeTeas = enhancingTeas.filter((tea) => tea?.isActive);
+            const hasBlessed = params.teas?.blessed || false;
 
-            activeTeas.forEach((tea) => {
-                if (tea.itemHrid === '/items/blessed_tea') {
-                    hasBlessed = true;
-                }
-            });
-
-            // Get guzzling pouch bonus (drink concentration)
-            const consumableBuffs = charData.consumableActionTypeBuffsMap?.['/action_types/enhancing'];
-            if (Array.isArray(consumableBuffs)) {
-                consumableBuffs.forEach((buff) => {
-                    if (buff.typeHrid === '/buff_types/drink_concentration') {
-                        guzzlingBonus = 1.0 + (buff.flatBoost || 0);
-                    }
-                });
-            }
-
-            // Calculate predictions
+            // Calculate predictions (Markov chain for attempts, protections, success rates)
             const result = enhancementCalculator_js.calculateEnhancement({
-                enhancingLevel,
-                houseLevel,
-                toolBonus,
-                speedBonus,
+                enhancingLevel: params.enhancingLevel,
+                houseLevel: params.houseLevel,
+                toolBonus: params.toolBonus,
+                speedBonus: params.speedBonus,
                 itemLevel,
                 targetLevel,
+                startLevel,
                 protectFrom,
                 blessedTea: hasBlessed,
-                guzzlingBonus,
+                guzzlingBonus: params.guzzlingBonus,
             });
 
             if (!result) {
                 return null;
             }
 
+            // Calculate per-action time from the game's buff maps (authoritative source)
+            // instead of the hardcoded formula in calculateEnhancement
+            const perActionTime = getEnhancingActionTime(itemHrid);
+
             return {
                 expectedAttempts: Math.round(result.attemptsRounded),
                 expectedProtections: Math.round(result.protectionCount),
-                expectedTime: result.totalTime,
+                expectedTime: perActionTime * result.attempts,
+                perActionTime,
                 successMultiplier: result.successMultiplier,
             };
         } catch {
@@ -20904,6 +20893,1309 @@ self.onmessage = function (e) {
     const enhancementFeature = new EnhancementFeature();
 
     /**
+     * Guild XP Tracker
+     * Records guild-level and per-member XP over time via WebSocket messages.
+     * Stores history in IndexedDB for XP/hr rate calculations.
+     *
+     * Data sources:
+     * - character_initialized (via dataManager) — initial snapshot on login
+     * - guild_updated — guild total XP changes
+     * - guild_characters_updated — per-member XP changes
+     * - leaderboard_updated (category: guild) — XP for all guilds on leaderboard
+     */
+
+
+    const STORE_NAME = 'guildHistory';
+    const WINDOW_10M = 10 * 60 * 1000;
+    const WINDOW_1H = 60 * 60 * 1000;
+    const WINDOW_1D = 24 * 60 * 60 * 1000;
+    const WINDOW_1W = 7 * 24 * 60 * 60 * 1000;
+
+    /**
+     * Guild level experience table (same thresholds as skill levels).
+     * Hardcoded because initClientData may not expose guild-specific thresholds.
+     */
+    const LEVEL_EXPERIENCE_TABLE = [
+        0, 33, 76, 132, 202, 286, 386, 503, 637, 791, 964, 1159, 1377, 1620, 1891, 2192, 2525, 2893, 3300, 3750, 4247, 4795,
+        5400, 6068, 6805, 7618, 8517, 9508, 10604, 11814, 13151, 14629, 16262, 18068, 20064, 22271, 24712, 27411, 30396,
+        33697, 37346, 41381, 45842, 50773, 56222, 62243, 68895, 76242, 84355, 93311, 103195, 114100, 126127, 139390, 154009,
+        170118, 187863, 207403, 228914, 252584, 278623, 307256, 338731, 373318, 411311, 453030, 498824, 549074, 604193,
+        664632, 730881, 803472, 882985, 970050, 1065351, 1169633, 1283701, 1408433, 1544780, 1693774, 1856536, 2034279,
+        2228321, 2440088, 2671127, 2923113, 3197861, 3497335, 3823663, 4179145, 4566274, 4987741, 5446463, 5945587, 6488521,
+        7078945, 7720834, 8418485, 9176537, 10000000, 11404976, 12904567, 14514400, 16242080, 18095702, 20083886, 22215808,
+        24501230, 26950540, 29574787, 32385721, 35395838, 38618420, 42067584, 45758332, 49706603, 53929328, 58444489,
+        63271179, 68429670, 73941479, 79829440, 86117783, 92832214, 100000000, 114406130, 130118394, 147319656, 166147618,
+        186752428, 209297771, 233962072, 260939787, 290442814, 322702028, 357968938, 396517495, 438646053, 484679494,
+        534971538, 589907252, 649905763, 715423218, 786955977, 865044093, 950275074, 1043287971, 1144777804, 1255500373,
+        1376277458, 1508002470, 1651646566, 1808265285, 1979005730, 2165114358, 2367945418, 2588970089, 2829786381,
+        3092129857, 3377885250, 3689099031, 4027993033, 4396979184, 4798675471, 5235923207, 5711805728, 6229668624,
+        6793141628, 7406162301, 8073001662, 8798291902, 9587056372, 10444742007, 11377254401, 12390995728, 13492905745,
+        14690506120, 15991948361, 17406065609, 18942428633, 20611406335, 22424231139, 24393069640, 26531098945, 28852589138,
+        31372992363, 34109039054, 37078841860, 40302007875, 43799759843, 47595067021, 51712786465, 56179815564, 61025256696,
+        66280594953, 71979889960, 78159982881, 84860719814, 92125192822, 100000000000,
+    ];
+
+    // ─── History compaction helpers ──────────────────────────────────────────────
+    // Same compaction rules as src/features/skills/xp-tracker.js
+
+    /**
+     * Append an XP data point to a history array, compacting as needed.
+     * @param {Array} arr - Existing history array (mutated in place)
+     * @param {{t: number, xp: number}} d - New data point
+     */
+    function pushXP(arr, d) {
+        if (arr.length === 0 || d.xp >= arr[arr.length - 1].xp) {
+            arr.push(d);
+        } else {
+            return; // XP should never decrease
+        }
+
+        if (arr.length <= 2) return;
+
+        // Rule 1: within the last 10 minutes, keep only first + last
+        let recentLength = 0;
+        for (let i = arr.length - 1; i >= 0; i--) {
+            if (d.t - arr[i].t <= WINDOW_10M) {
+                recentLength++;
+            } else {
+                break;
+            }
+        }
+        if (recentLength > 2) {
+            arr.splice(arr.length - recentLength + 1, recentLength - 2);
+        }
+
+        // Rule 2: collapse consecutive same-XP entries within 1 hour
+        let sameLength = 0;
+        for (let i = arr.length - 1; i >= 0; i--) {
+            if (arr[i].xp === d.xp && d.t - arr[i].t <= WINDOW_1H) {
+                sameLength++;
+            } else {
+                break;
+            }
+        }
+        if (sameLength > 1) {
+            arr.splice(arr.length - sameLength, sameLength - 1);
+        }
+
+        // Rule 3: drop entries older than 1 week
+        let oldLength = 0;
+        for (let i = 0; i < arr.length; i++) {
+            if (d.t - arr[i].t > WINDOW_1W) {
+                oldLength++;
+            } else {
+                break;
+            }
+        }
+        if (oldLength > 0) {
+            arr.splice(0, oldLength);
+        }
+    }
+
+    /**
+     * Filter history to entries within a time interval from now.
+     * @param {Array} arr - History array
+     * @param {number} interval - Window in ms
+     * @returns {Array}
+     */
+    function inLastInterval(arr, interval) {
+        const now = Date.now();
+        const result = [];
+        for (let i = arr.length - 1; i >= 0; i--) {
+            if (now - arr[i].t <= interval) {
+                result.unshift(arr[i]);
+            } else {
+                break;
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Keep at most one entry per interval (for chart resolution).
+     * @param {Array} arr - History array
+     * @param {number} interval - Minimum gap between kept entries
+     * @returns {Array}
+     */
+    function keepOneInInterval(arr, interval) {
+        const filtered = [];
+        for (let i = arr.length - 1; i >= 0; i--) {
+            if (filtered.length === 0) {
+                filtered.unshift(arr[i]);
+            } else if (filtered[0].t - arr[i].t >= interval) {
+                filtered.unshift(arr[i]);
+            } else if (i === 0) {
+                filtered.unshift(arr[i]);
+            }
+        }
+        return filtered;
+    }
+
+    /**
+     * Calculate XP/hr between two data points.
+     * @param {{t: number, xp: number}} prev
+     * @param {{t: number, xp: number}} cur
+     * @returns {number} XP per hour
+     */
+    function calcXPH(prev, cur) {
+        const tDeltaMs = cur.t - prev.t;
+        if (tDeltaMs <= 0) return 0;
+        return ((cur.xp - prev.xp) / tDeltaMs) * 3600000;
+    }
+
+    // ─── Stats calculation ──────────────────────────────────────────────────────
+
+    /**
+     * Compute XP/hr stats for a history array.
+     * @param {Array} arr - [{t, xp}, ...]
+     * @returns {{lastXPH: number, lastHourXPH: number, lastDayXPH: number, chart: Array}}
+     */
+    function calcStats(arr) {
+        const empty = { lastXPH: 0, lastHourXPH: 0, lastDayXPH: 0, chart: [] };
+        if (!arr || arr.length < 2) return empty;
+
+        // Last XP/h (between last two entries)
+        const lastXPH = calcXPH(arr[arr.length - 2], arr[arr.length - 1]);
+
+        // Last hour XP/h
+        const last1h = inLastInterval(arr, WINDOW_1H);
+        const lastHourXPH = last1h.length >= 2 ? calcXPH(last1h[0], last1h[last1h.length - 1]) : 0;
+
+        // Last day XP/h
+        const last1d = inLastInterval(arr, WINDOW_1D);
+        const lastDayXPH = last1d.length >= 2 ? calcXPH(last1d[0], last1d[last1d.length - 1]) : 0;
+
+        // Chart: weekly data at 10m resolution
+        const last1w = inLastInterval(arr, WINDOW_1W);
+        const chartData = keepOneInInterval(last1w, WINDOW_10M);
+        const chart = [];
+        for (let i = 1; i < chartData.length; i++) {
+            const prev = chartData[i - 1];
+            const cur = chartData[i];
+            chart.push({
+                t: cur.t,
+                tD: cur.t - prev.t,
+                xpH: calcXPH(prev, cur),
+            });
+        }
+
+        return { lastXPH, lastHourXPH, lastDayXPH, chart };
+    }
+
+    /**
+     * Calculate time to next guild level.
+     * @param {number} currentXP - Current guild XP
+     * @param {number} xpPerHour - Current XP/hr rate
+     * @returns {number|null} Milliseconds to next level, or null if cannot calculate
+     */
+    function calcTimeToLevel(currentXP, xpPerHour) {
+        if (xpPerHour <= 0) return null;
+
+        const nextLvlIndex = LEVEL_EXPERIENCE_TABLE.findIndex((xp) => currentXP <= xp);
+        if (nextLvlIndex < 0) return null;
+
+        const xpTillLevel = LEVEL_EXPERIENCE_TABLE[nextLvlIndex] - currentXP;
+        if (xpTillLevel <= 0) return null;
+
+        return (xpTillLevel / xpPerHour) * 3600000;
+    }
+
+    // ─── Tracker class ──────────────────────────────────────────────────────────
+
+    class GuildXPTracker {
+        constructor() {
+            this.initialized = false;
+            this.ownGuildName = null;
+            this.ownGuildID = null;
+            this.guildCreatedAt = null;
+            this.guildXPHistory = {}; // guildName → [{t, xp}]
+            this.memberXPHistory = {}; // characterID → [{t, xp}]
+            this.memberMeta = {}; // characterID → {name, gameMode, joinTime, invitedBy}
+            this.unregisterHandlers = [];
+        }
+
+        async initialize() {
+            if (this.initialized) return;
+            if (!config.getSetting('guildXPTracker', true)) return;
+
+            // Bind handlers
+            this._boundOnCharacterInit = (data) => this._onCharacterInit(data);
+            this._boundOnGuildUpdated = (data) => this._onGuildUpdated(data);
+            this._boundOnMembersUpdated = (data) => this._onMembersUpdated(data);
+            this._boundOnLeaderboardUpdated = (data) => this._onLeaderboardUpdated(data);
+
+            // Register dataManager listener for init data
+            dataManager.on('character_initialized', this._boundOnCharacterInit);
+            this.unregisterHandlers.push(() => dataManager.off('character_initialized', this._boundOnCharacterInit));
+
+            // Register WebSocket listeners
+            webSocketHook.on('guild_updated', this._boundOnGuildUpdated);
+            webSocketHook.on('guild_characters_updated', this._boundOnMembersUpdated);
+            webSocketHook.on('leaderboard_updated', this._boundOnLeaderboardUpdated);
+            this.unregisterHandlers.push(() => {
+                webSocketHook.off('guild_updated', this._boundOnGuildUpdated);
+                webSocketHook.off('guild_characters_updated', this._boundOnMembersUpdated);
+                webSocketHook.off('leaderboard_updated', this._boundOnLeaderboardUpdated);
+            });
+
+            // If character data already loaded, initialize immediately
+            if (dataManager.characterData) {
+                await this._onCharacterInit(dataManager.characterData);
+            }
+
+            this.initialized = true;
+        }
+
+        /**
+         * Handle character initialization — load persisted history and record initial snapshot.
+         * @param {Object} data - Full init_character_data message
+         */
+        async _onCharacterInit(data) {
+            const guild = data.guild;
+            if (!guild) return; // Player not in a guild
+
+            const guildName = guild.name;
+            const guildXP = guild.experience;
+            this.ownGuildName = guildName;
+            this.guildCreatedAt = guild.createdAt;
+
+            // Extract guild ID and member metadata
+            const guildCharacterMap = data.guildCharacterMap || {};
+            const sharableMap = data.guildSharableCharacterMap || {};
+
+            const charIds = Object.keys(guildCharacterMap);
+            if (charIds.length > 0) {
+                this.ownGuildID = guildCharacterMap[charIds[0]].guildID;
+            }
+
+            // Build member metadata
+            this.memberMeta = {};
+            for (const [charId, sharableData] of Object.entries(sharableMap)) {
+                const guildChar = guildCharacterMap[charId];
+                const inviterId = guildChar?.inviterCharacterID;
+                this.memberMeta[charId] = {
+                    name: sharableData.name,
+                    gameMode: sharableData.gameMode,
+                    joinTime: guildChar?.joinTime || null,
+                    invitedBy: sharableMap[inviterId]?.name || null,
+                };
+            }
+
+            // Load persisted histories
+            this.guildXPHistory = await storage.get(`guildXP_${guildName}`, STORE_NAME, {});
+            if (this.ownGuildID) {
+                this.memberXPHistory = await storage.get(`memberXP_${this.ownGuildID}`, STORE_NAME, {});
+            }
+
+            const t = data.currentTimestamp ? +new Date(data.currentTimestamp) : Date.now();
+
+            // Record guild XP snapshot
+            if (!this.guildXPHistory[guildName]) {
+                this.guildXPHistory[guildName] = [];
+            }
+            pushXP(this.guildXPHistory[guildName], { t, xp: guildXP });
+
+            // Record member XP snapshots
+            for (const [charId, guildChar] of Object.entries(guildCharacterMap)) {
+                if (!this.memberXPHistory[charId]) {
+                    this.memberXPHistory[charId] = [];
+                }
+                pushXP(this.memberXPHistory[charId], { t, xp: guildChar.guildExperience });
+            }
+
+            // Persist
+            await storage.set(`guildXP_${guildName}`, this.guildXPHistory, STORE_NAME);
+            if (this.ownGuildID) {
+                await storage.set(`memberXP_${this.ownGuildID}`, this.memberXPHistory, STORE_NAME);
+            }
+        }
+
+        /**
+         * Handle guild_updated — record guild-level XP.
+         * @param {Object} data - guild_updated message
+         */
+        _onGuildUpdated(data) {
+            const guild = data.guild;
+            if (!guild) return;
+
+            const name = guild.name;
+            this.ownGuildName = name;
+            this.guildCreatedAt = guild.createdAt;
+
+            if (!this.guildXPHistory[name]) {
+                this.guildXPHistory[name] = [];
+            }
+
+            const t = Date.now();
+            pushXP(this.guildXPHistory[name], { t, xp: guild.experience });
+            storage.set(`guildXP_${name}`, this.guildXPHistory, STORE_NAME);
+        }
+
+        /**
+         * Handle guild_characters_updated — record per-member XP.
+         * @param {Object} data - guild_characters_updated message
+         */
+        _onMembersUpdated(data) {
+            const guildCharacterMap = data.guildCharacterMap || {};
+            const sharableMap = data.guildSharableCharacterMap || {};
+
+            // Update guild ID
+            const charIds = Object.keys(guildCharacterMap);
+            if (charIds.length > 0) {
+                this.ownGuildID = guildCharacterMap[charIds[0]].guildID;
+            }
+
+            // Update member metadata
+            for (const [charId, sharableData] of Object.entries(sharableMap)) {
+                const guildChar = guildCharacterMap[charId];
+                const inviterId = guildChar?.inviterCharacterID;
+                this.memberMeta[charId] = {
+                    name: sharableData.name,
+                    gameMode: sharableData.gameMode,
+                    joinTime: guildChar?.joinTime || null,
+                    invitedBy: sharableMap[inviterId]?.name || null,
+                };
+            }
+
+            const t = Date.now();
+
+            for (const [charId, guildChar] of Object.entries(guildCharacterMap)) {
+                if (!this.memberXPHistory[charId]) {
+                    this.memberXPHistory[charId] = [];
+                }
+                pushXP(this.memberXPHistory[charId], { t, xp: guildChar.guildExperience });
+            }
+
+            if (this.ownGuildID) {
+                storage.set(`memberXP_${this.ownGuildID}`, this.memberXPHistory, STORE_NAME);
+            }
+        }
+
+        /**
+         * Handle leaderboard_updated — record XP for all guilds on leaderboard.
+         * @param {Object} data - leaderboard_updated message
+         */
+        _onLeaderboardUpdated(data) {
+            if (data.leaderboardCategory !== 'guild') return;
+
+            const rows = data.leaderboard?.rows;
+            if (!rows || rows.length === 0) return;
+
+            const t = Date.now();
+
+            for (const row of rows) {
+                const name = row.name;
+                const xp = row.value2;
+                if (!name || xp === undefined) continue;
+
+                if (!this.guildXPHistory[name]) {
+                    this.guildXPHistory[name] = [];
+                }
+                pushXP(this.guildXPHistory[name], { t, xp });
+            }
+
+            // Persist using own guild name as key (all guild histories stored together)
+            if (this.ownGuildName) {
+                storage.set(`guildXP_${this.ownGuildName}`, this.guildXPHistory, STORE_NAME);
+            }
+        }
+
+        // ─── Public API (for display module) ─────────────────────────────────────
+
+        /**
+         * Get XP/hr stats for a guild.
+         * @param {string} guildName
+         * @returns {{lastXPH: number, lastHourXPH: number, lastDayXPH: number, chart: Array}}
+         */
+        getGuildStats(guildName) {
+            return calcStats(this.guildXPHistory[guildName]);
+        }
+
+        /**
+         * Get XP/hr stats for a guild member.
+         * @param {string} characterID
+         * @returns {{lastXPH: number, lastHourXPH: number, lastDayXPH: number, chart: Array}}
+         */
+        getMemberStats(characterID) {
+            return calcStats(this.memberXPHistory[characterID]);
+        }
+
+        /**
+         * Get metadata for a guild member.
+         * @param {string} characterID
+         * @returns {{name: string, gameMode: string, joinTime: string, invitedBy: string}|null}
+         */
+        getMemberMeta(characterID) {
+            return this.memberMeta[characterID] || null;
+        }
+
+        /**
+         * Get own guild name.
+         * @returns {string|null}
+         */
+        getOwnGuildName() {
+            return this.ownGuildName;
+        }
+
+        /**
+         * Get own guild ID.
+         * @returns {string|null}
+         */
+        getOwnGuildID() {
+            return this.ownGuildID;
+        }
+
+        /**
+         * Get guild creation date.
+         * @returns {string|null}
+         */
+        getGuildCreatedAt() {
+            return this.guildCreatedAt;
+        }
+
+        /**
+         * Get member list with IDs.
+         * @returns {Array<{characterID: string, name: string, gameMode: string, joinTime: string, invitedBy: string}>}
+         */
+        getMemberList() {
+            return Object.entries(this.memberMeta).map(([charId, meta]) => ({
+                characterID: charId,
+                ...meta,
+            }));
+        }
+
+        /**
+         * Get all guild XP histories (for leaderboard stats).
+         * @returns {Object} guildName → [{t, xp}]
+         */
+        getAllGuildHistories() {
+            return this.guildXPHistory;
+        }
+
+        /**
+         * Get current guild XP (latest recorded value).
+         * @param {string} guildName
+         * @returns {number|null}
+         */
+        getCurrentGuildXP(guildName) {
+            const history = this.guildXPHistory[guildName];
+            if (!history || history.length === 0) return null;
+            return history[history.length - 1].xp;
+        }
+
+        /**
+         * Get latest member XP.
+         * @param {string} characterID
+         * @returns {number|null}
+         */
+        getMemberXP(characterID) {
+            const history = this.memberXPHistory[characterID];
+            if (!history || history.length === 0) return null;
+            return history[history.length - 1].xp;
+        }
+
+        /**
+         * Calculate time to next guild level.
+         * @param {string} guildName
+         * @returns {number|null} Milliseconds, or null
+         */
+        getTimeToLevel(guildName) {
+            const currentXP = this.getCurrentGuildXP(guildName);
+            if (currentXP === null) return null;
+
+            const stats = this.getGuildStats(guildName);
+            const rate = stats.lastDayXPH > 0 ? stats.lastDayXPH : stats.lastXPH;
+            return calcTimeToLevel(currentXP, rate);
+        }
+
+        /**
+         * Cleanup when disabled.
+         */
+        disable() {
+            for (const unregister of this.unregisterHandlers) {
+                unregister();
+            }
+            this.unregisterHandlers = [];
+
+            this.ownGuildName = null;
+            this.ownGuildID = null;
+            this.guildCreatedAt = null;
+            this.guildXPHistory = {};
+            this.memberXPHistory = {};
+            this.memberMeta = {};
+            this.initialized = false;
+        }
+    }
+
+    const guildXPTracker = new GuildXPTracker();
+
+    var guildXPTracker$1 = {
+        name: 'Guild XP Tracker',
+        initialize: () => guildXPTracker.initialize(),
+        cleanup: () => guildXPTracker.disable(),
+    };
+
+    /**
+     * Guild XP Display
+     * Injects XP/hr stats, charts, and sortable columns into
+     * the Guild Overview, Members, and Guild Leaderboard tabs.
+     */
+
+
+    const CSS_PREFIX = 'mwi-guild-xp';
+
+    // ─── Formatting helpers ─────────────────────────────────────────────────────
+
+    /**
+     * Format a duration in ms to a human-readable string.
+     * @param {number} ms
+     * @returns {string}
+     */
+    function formatTimeLeft(ms) {
+        const m1 = 60 * 1000;
+        const h1 = 60 * 60 * 1000;
+        const d1 = 24 * 60 * 60 * 1000;
+        const w1 = 7 * d1;
+
+        const w = Math.floor(ms / w1);
+        const d = Math.floor((ms % w1) / d1);
+        const h = Math.floor((ms % d1) / h1);
+        const m = Math.ceil((ms % h1) / m1);
+
+        const s = (n) => (n === 1 ? '' : 's');
+        const parts = [];
+
+        if (w >= 1) parts.push(`${w} week${s(w)}`);
+        if (d >= 1) parts.push(`${d} day${s(d)}`);
+        if (ms < w1 && h >= 1) parts.push(`${h} hour${s(h)}`);
+        if (ms < 6 * h1 && m >= 1) parts.push(`${m} minute${s(m)}`);
+
+        return parts.join(' ') || '< 1 minute';
+    }
+
+    /**
+     * Format number with non-breaking spaces as thousands separator (for chart display).
+     * @param {number} n
+     * @returns {string}
+     */
+    function fNum(n) {
+        return formatters_js.formatWithSeparator(Math.round(n));
+    }
+
+    /**
+     * Get ranking emoji for top 3 places.
+     * @param {number} rank - 1-indexed rank
+     * @returns {string} HTML
+     */
+    function rankBadge(rank) {
+        if (rank <= 3) {
+            return ['&#x1F947;', '&#x1F948;', '&#x1F949;'][rank - 1];
+        }
+        return `<span style="color: var(--color-disabled);">#${rank}</span>`;
+    }
+
+    // ─── Chart rendering ────────────────────────────────────────────────────────
+
+    /**
+     * Build a bar chart HTML string from chart data.
+     * @param {Array<{t: number, tD: number, xpH: number}>} chart
+     * @returns {string} HTML
+     */
+    function buildChart(chart) {
+        if (chart.length === 0) return '<div style="color: var(--color-disabled);">Not enough data for chart</div>';
+
+        // Truncate outliers at 2x the median
+        let maxXPH = 0;
+        let tDSum = 0;
+        let hasTruncated = false;
+
+        if (chart.length >= 2) {
+            const sorted = chart.slice().sort((a, b) => a.xpH - b.xpH);
+            const per50 = sorted[Math.ceil(chart.length / 2)].xpH;
+
+            for (const d of chart) {
+                if (d.xpH > per50 * 2) {
+                    d.truncated = true;
+                    hasTruncated = true;
+                }
+            }
+        }
+
+        for (const d of chart) {
+            tDSum += d.tD;
+            if (!d.truncated) {
+                maxXPH = Math.max(maxXPH, d.xpH);
+            }
+        }
+
+        if (hasTruncated) {
+            maxXPH *= 1.1;
+        }
+
+        if (maxXPH <= 0) return '';
+
+        const minT = chart[0].t;
+        const maxT = chart[chart.length - 1].t;
+
+        // Horizontal legend (day boundaries)
+        const hLegend = [];
+        const lastDayStart = new Date(maxT);
+        lastDayStart.setHours(0, 0, 0, 0);
+        let lt = lastDayStart.getTime();
+
+        while (lt > minT) {
+            hLegend.unshift({ t: lt });
+            lt = new Date(lt);
+            lt.setDate(lt.getDate() - 1);
+            lt = lt.getTime();
+        }
+
+        if (hLegend.length === 0) {
+            hLegend.unshift({ t: minT });
+        } else if (hLegend[0].t - minT > tDSum / 10) {
+            hLegend.unshift({ t: minT });
+        }
+
+        if (hLegend.length > 0 && maxT - hLegend[hLegend.length - 1].t > tDSum / 10) {
+            hLegend.push({ t: maxT });
+        }
+
+        // Build bars
+        let barsHTML = '';
+        for (const d of chart) {
+            const heightPct = ((d.truncated ? maxXPH : d.xpH) / maxXPH) * 100;
+            const widthPct = (d.tD / tDSum) * 100;
+            const bgStyle = d.truncated
+                ? 'background-image: linear-gradient(45deg, var(--color-space-300) 25%, transparent 25%, transparent 50%, var(--color-space-300) 50%, var(--color-space-300) 75%, transparent 75%); background-size: 10px 10px;'
+                : 'background-color: var(--color-space-300);';
+
+            barsHTML += `<div class="${CSS_PREFIX}__bar"
+            style="height: ${heightPct}%; width: ${widthPct}%; ${bgStyle}"
+            data-xph="${d.xpH}"
+            ${d.truncated ? 'data-truncated="true"' : ''}
+            data-t="${d.t}"></div>`;
+        }
+
+        // Build legend
+        let legendHTML = '';
+        for (const d of hLegend) {
+            const leftPct = ((d.t - minT) / tDSum) * 100;
+            legendHTML += `<div style="position: absolute; top: 0; left: ${leftPct}%; flex-direction: column;">
+            <div style="width: 1px; height: 8px; background-color: var(--color-space-300);"></div>
+            <div style="font-size: 10px; width: 80px; transform: translate(-50%, 0);">${new Date(d.t).toLocaleString()}</div>
+        </div>`;
+        }
+
+        return `
+        <div class="${CSS_PREFIX}" style="
+            display: grid;
+            grid-template-columns: auto auto 1fr;
+            grid-template-rows: 1fr auto;
+            width: calc(100% - 56px);
+            height: calc(100% - 70px);
+            margin-top: 28px;
+            margin-left: 28px;
+            gap: 2px;
+        ">
+            <div style="display: flex; flex-direction: column; justify-content: space-between; height: 100%;">
+                <div style="font-size: 10px; transform: translate(0, -50%);">${fNum(maxXPH)}</div>
+                <div style="font-size: 10px;">${fNum(maxXPH / 2)}</div>
+                <div style="font-size: 10px; transform: translate(0, 50%);">0</div>
+            </div>
+            <div style="display: flex; flex-direction: column; justify-content: space-between; height: 100%;">
+                <div style="width: 8px; height: 1px; background-color: var(--color-space-300);"></div>
+                <div style="width: 8px; height: 1px; background-color: var(--color-space-300);"></div>
+                <div style="width: 8px; height: 1px; background-color: var(--color-space-300);"></div>
+            </div>
+            <div style="flex: 1 1; display: flex; align-items: flex-end; height: 100%; gap: 1px;">
+                ${barsHTML}
+            </div>
+            <div></div>
+            <div></div>
+            <div style="flex: 0 0; position: relative; height: 28px;">
+                ${legendHTML}
+            </div>
+        </div>`;
+    }
+
+    // ─── Column sort helpers ────────────────────────────────────────────────────
+
+    /**
+     * Sort icon HTML.
+     * @param {string} direction - 'asc', 'desc', or 'none'
+     * @returns {string} HTML
+     */
+    function sortIcon(direction) {
+        return `<span class="${CSS_PREFIX}__sort-icon" style="display: inline-flex; flex-direction: column; vertical-align: middle; margin-left: 2px;">
+        <span style="font-size: 8px; line-height: 8px;">${direction === 'asc' ? '\u25B2' : '\u25B3'}</span>
+        <span style="font-size: 8px; line-height: 8px;">${direction === 'desc' ? '\u25BC' : '\u25BD'}</span>
+    </span>`;
+    }
+
+    /**
+     * Make a column header sortable.
+     * @param {HTMLElement} thEl - Header cell
+     * @param {Object} options
+     * @param {string} options.sortId - Unique sort identifier
+     * @param {Function} options.valueGetter - (trEl) => number|string
+     * @param {boolean} [options.skipFirst=false] - Skip first body row (sticky row)
+     */
+    function makeColumnSortable(thEl, options) {
+        const tableEl = thEl.closest('table');
+        if (!tableEl) return;
+
+        thEl.dataset.sortId = options.sortId;
+        thEl.style.cursor = 'pointer';
+        thEl.insertAdjacentHTML('beforeend', sortIcon('none'));
+
+        thEl.addEventListener('click', () => {
+            const tbodyEl = tableEl.querySelector('tbody');
+            if (!tbodyEl) return;
+
+            // Toggle direction
+            if (tableEl.dataset.sortId === options.sortId) {
+                tableEl.dataset.sortDirection = tableEl.dataset.sortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                tableEl.dataset.sortId = options.sortId;
+                tableEl.dataset.sortDirection = 'desc';
+            }
+
+            const direction = tableEl.dataset.sortDirection;
+
+            let rows = Array.from(tbodyEl.children);
+            if (options.skipFirst) {
+                rows = rows.slice(1);
+            }
+
+            rows.sort((a, b) => {
+                const av = options.valueGetter(a);
+                const bv = options.valueGetter(b);
+                if (typeof av === 'number' && typeof bv === 'number') {
+                    return direction === 'asc' ? av - bv : bv - av;
+                }
+                const sa = String(av);
+                const sb = String(bv);
+                return direction === 'asc' ? sa.localeCompare(sb) : sb.localeCompare(sa);
+            });
+
+            for (const row of rows) {
+                tbodyEl.appendChild(row);
+            }
+
+            // Update all sort icons in this table
+            const theadTr = thEl.parentElement;
+            for (const th of theadTr.children) {
+                const icon = th.querySelector(`.${CSS_PREFIX}__sort-icon`);
+                if (icon) {
+                    const d = th.dataset.sortId === tableEl.dataset.sortId ? direction : 'none';
+                    icon.outerHTML = sortIcon(d);
+                }
+            }
+        });
+    }
+
+    /**
+     * Add a column to a table.
+     * @param {HTMLElement} tableEl
+     * @param {Object} options
+     * @param {string} options.name - Column header text
+     * @param {Array} options.data - One value per body row
+     * @param {Function} [options.format] - (value, index) => HTML string
+     * @param {number} [options.insertAfter] - Column index to insert after
+     * @param {boolean} [options.makeSortable] - Whether to make column sortable
+     * @param {string} [options.sortId] - Sort identifier
+     * @param {boolean} [options.skipFirst] - Skip first row for sorting (leaderboard)
+     * @param {Array} [options.sortData] - Custom sort values (numbers) per row
+     */
+    function addColumn(tableEl, options) {
+        // Don't add duplicate columns
+        if (tableEl.querySelector(`th.${CSS_PREFIX}[data-name="${options.name}"]`)) return;
+
+        const theadTr = tableEl.querySelector('thead tr');
+        if (!theadTr) return;
+
+        const insertAfter = options.insertAfter !== undefined ? options.insertAfter : theadTr.children.length - 1;
+
+        // Add header
+        const th = document.createElement('th');
+        th.className = CSS_PREFIX;
+        th.dataset.name = options.name;
+        th.textContent = options.name;
+
+        if (insertAfter < theadTr.children.length - 1) {
+            theadTr.children[insertAfter + 1].insertAdjacentElement('beforebegin', th);
+        } else {
+            theadTr.appendChild(th);
+        }
+
+        // Add body cells
+        const tbodyEl = tableEl.querySelector('tbody');
+        const rows = Array.from(tbodyEl.children);
+
+        for (let i = 0; i < rows.length; i++) {
+            const td = document.createElement('td');
+            td.className = CSS_PREFIX;
+
+            const value = i < options.data.length ? options.data[i] : null;
+            if (options.format) {
+                td.innerHTML = options.format(value, i);
+            } else if (value === null || value === undefined || (typeof value === 'number' && isNaN(value))) {
+                td.textContent = '';
+            } else if (typeof value === 'number') {
+                td.textContent = fNum(value);
+            } else {
+                td.textContent = value;
+            }
+
+            // Store sort value
+            if (options.sortData) {
+                td._sortValue = options.sortData[i];
+            } else if (typeof value === 'number') {
+                td._sortValue = value;
+            }
+
+            const refChild = rows[i].children[insertAfter + 1];
+            if (refChild) {
+                refChild.insertAdjacentElement('beforebegin', td);
+            } else {
+                rows[i].appendChild(td);
+            }
+        }
+
+        // Make sortable
+        if (options.makeSortable) {
+            const colIndex = Array.from(theadTr.children).indexOf(th);
+            makeColumnSortable(th, {
+                sortId: options.sortId || options.name,
+                skipFirst: options.skipFirst || false,
+                valueGetter: (trEl) => {
+                    const cell = trEl.children[colIndex];
+                    if (cell && cell._sortValue !== undefined) return cell._sortValue;
+                    const text = cell?.textContent?.replace(/[^\d.-]/g, '');
+                    return text ? parseFloat(text) : 0;
+                },
+            });
+        }
+    }
+
+    // ─── Display class ──────────────────────────────────────────────────────────
+
+    class GuildXPDisplay {
+        constructor() {
+            this.initialized = false;
+            this.unregisterObservers = [];
+            this.timerRegistry = timerRegistry_js.createTimerRegistry();
+        }
+
+        initialize() {
+            if (this.initialized) return;
+            if (!config.getSetting('guildXPDisplay', true)) return;
+
+            // Watch for Guild panel tabs
+            const unregOverview = domObserver.onClass('GuildXPDisplay-Overview', 'GuildPanel_dataGrid', (el) =>
+                this._renderOverview(el)
+            );
+            this.unregisterObservers.push(unregOverview);
+
+            const unregMembers = domObserver.onClass('GuildXPDisplay-Members', 'GuildPanel_membersTable', (el) =>
+                this._renderMembers(el)
+            );
+            this.unregisterObservers.push(unregMembers);
+
+            // Watch for guild leaderboard
+            const unregLeaderboard = domObserver.onClass(
+                'GuildXPDisplay-Leaderboard',
+                'LeaderboardPanel_leaderboardTable',
+                (el) => this._renderLeaderboard(el)
+            );
+            this.unregisterObservers.push(unregLeaderboard);
+
+            // Live refresh on data updates
+            this._boundRefreshOverview = () => this._refreshOverviewIfVisible();
+            this._boundRefreshMembers = () => this._refreshMembersIfVisible();
+            this._boundRefreshLeaderboard = (data) => {
+                if (data.leaderboardCategory === 'guild') this._refreshLeaderboardIfVisible();
+            };
+
+            webSocketHook.on('guild_updated', this._boundRefreshOverview);
+            webSocketHook.on('guild_characters_updated', this._boundRefreshMembers);
+            webSocketHook.on('leaderboard_updated', this._boundRefreshLeaderboard);
+
+            this.unregisterObservers.push(() => {
+                webSocketHook.off('guild_updated', this._boundRefreshOverview);
+                webSocketHook.off('guild_characters_updated', this._boundRefreshMembers);
+                webSocketHook.off('leaderboard_updated', this._boundRefreshLeaderboard);
+            });
+
+            this.initialized = true;
+        }
+
+        // ─── Overview tab ────────────────────────────────────────────────────────
+
+        _renderOverview(dataGridEl) {
+            // Remove previous injection
+            dataGridEl.querySelectorAll(`.${CSS_PREFIX}`).forEach((el) => el.remove());
+
+            const guildName = guildXPTracker.getOwnGuildName();
+            if (!guildName) return;
+
+            const stats = guildXPTracker.getGuildStats(guildName);
+
+            // XP/h stats row
+            const rateLabel = stats.lastHourXPH > 0 ? 'Last hour XP/h' : 'Last XP/h';
+            const rateValue = stats.lastHourXPH > 0 ? stats.lastHourXPH : stats.lastXPH;
+
+            const statsHTML = `
+            <div class="GuildPanel_dataBlockGroup__1d2rR ${CSS_PREFIX}">
+                <div class="GuildPanel_dataBlock__3qVhK">
+                    <div class="GuildPanel_label__-A63g">${rateLabel}</div>
+                    <div class="GuildPanel_value__Hm2I9">${fNum(rateValue)}</div>
+                </div>
+                <div class="GuildPanel_dataBlock__3qVhK">
+                    <div class="GuildPanel_label__-A63g">Last day XP/h</div>
+                    <div class="GuildPanel_value__Hm2I9">${fNum(stats.lastDayXPH)}</div>
+                </div>
+            </div>`;
+
+            // Chart row
+            const chartHTML = `
+            <div class="GuildPanel_dataBlockGroup__1d2rR ${CSS_PREFIX}" style="grid-column: 1 / 3; max-width: none;">
+                <div class="GuildPanel_dataBlock__3qVhK" style="height: 240px;">
+                    <div class="GuildPanel_label__-A63g">Last week XP/h</div>
+                    ${buildChart(stats.chart)}
+                </div>
+            </div>`;
+
+            dataGridEl.insertAdjacentHTML('beforeend', statsHTML + chartHTML);
+
+            // Attach chart bar event listeners
+            dataGridEl.querySelectorAll(`.${CSS_PREFIX}__bar`).forEach((bar) => {
+                bar.addEventListener('mouseenter', this._onBarEnter);
+                bar.addEventListener('mouseleave', this._onBarLeave);
+            });
+
+            // Time to level
+            const timeToLevel = guildXPTracker.getTimeToLevel(guildName);
+            if (timeToLevel !== null) {
+                const ttlHTML = `<div class="${CSS_PREFIX}" style="color: var(--color-space-300); font-size: 13px;">${formatTimeLeft(timeToLevel)}</div>`;
+                // Find the "Exp to Next Level" data block and append
+                const dataBlocks = dataGridEl.querySelectorAll('.GuildPanel_dataBlock__3qVhK');
+                for (const block of dataBlocks) {
+                    const label = block.querySelector('.GuildPanel_label__-A63g');
+                    if (label && label.textContent.includes('Exp to')) {
+                        block.insertAdjacentHTML('beforeend', ttlHTML);
+                        break;
+                    }
+                }
+            }
+        }
+
+        _refreshOverviewIfVisible() {
+            const dataGridEl = document.querySelector('[class*="GuildPanel_dataGrid"]');
+            if (dataGridEl) {
+                this._renderOverview(dataGridEl);
+            }
+        }
+
+        // ─── Members tab ─────────────────────────────────────────────────────────
+
+        _renderMembers(tableEl) {
+            // Skip if already rendered
+            if (tableEl.querySelector(`.${CSS_PREFIX}`)) return;
+
+            const guildID = guildXPTracker.getOwnGuildID();
+            if (!guildID) return;
+
+            const memberList = guildXPTracker.getMemberList();
+            if (memberList.length === 0) return;
+
+            // Widen the container
+            const containerEl = tableEl.closest('[class*="GuildPanel_membersTab"]');
+            if (containerEl) {
+                containerEl.style.maxWidth = '1100px';
+            }
+
+            // Build name → characterID map from table rows
+            const tbodyEl = tableEl.querySelector('tbody');
+            if (!tbodyEl) return;
+
+            const rows = Array.from(tbodyEl.children);
+            const nameToCharId = {};
+            for (const member of memberList) {
+                nameToCharId[member.name] = member.characterID;
+            }
+
+            // Calculate stats for each row
+            const allStats = [];
+            for (const row of rows) {
+                const name = row.children[0]?.textContent?.trim();
+                const charId = nameToCharId[name];
+                const memberStats = charId ? guildXPTracker.getMemberStats(charId) : { lastXPH: 0, lastDayXPH: 0 };
+                const meta = charId ? guildXPTracker.getMemberMeta(charId) : null;
+                const xp = charId ? guildXPTracker.getMemberXP(charId) : 0;
+
+                allStats.push({
+                    name,
+                    charId,
+                    lastXPH: memberStats.lastXPH,
+                    lastDayXPH: memberStats.lastDayXPH,
+                    gameMode: meta?.gameMode || 'standard',
+                    joinTime: meta?.joinTime || null,
+                    xp: xp || 0,
+                });
+            }
+
+            // Compute rankings
+            const byLastXPH = allStats.slice().sort((a, b) => b.lastXPH - a.lastXPH);
+            const byLastDayXPH = allStats.slice().sort((a, b) => b.lastDayXPH - a.lastDayXPH);
+            for (let i = 0; i < byLastXPH.length; i++) byLastXPH[i].lastXPH_rank = i + 1;
+            for (let i = 0; i < byLastDayXPH.length; i++) byLastDayXPH[i].lastDayXPH_rank = i + 1;
+
+            const theadTr = tableEl.querySelector('thead tr');
+            if (!theadTr) return;
+
+            // Find Activity column index for inserting before it
+            const activityIndex = Array.from(theadTr.children).findIndex((el) => el.textContent.trim() === 'Activity');
+            const insertAfter = activityIndex > 0 ? activityIndex - 1 : theadTr.children.length - 1;
+
+            const gameModes = { standard: 'MC', ironcow: 'IC', legacy_ironcow: 'LC' };
+
+            // Game Mode column
+            addColumn(tableEl, {
+                name: 'Game Mode',
+                insertAfter,
+                data: allStats.map((s) => s.gameMode),
+                format: (v) => gameModes[v] || v || '',
+                makeSortable: true,
+                sortId: 'gameMode',
+                sortData: allStats.map((s) => s.gameMode || ''),
+            });
+
+            // Joined column
+            addColumn(tableEl, {
+                name: 'Joined',
+                insertAfter: insertAfter + 1,
+                data: allStats.map((s) => s.joinTime),
+                format: (v) => (v ? new Date(v).toLocaleDateString() : ''),
+                makeSortable: true,
+                sortId: 'joinTime',
+                sortData: allStats.map((s) => (s.joinTime ? +new Date(s.joinTime) : 0)),
+            });
+
+            // Last XP/h column
+            addColumn(tableEl, {
+                name: 'Last XP/h',
+                insertAfter: insertAfter + 2,
+                data: allStats.map((s) => s.lastXPH),
+                format: (v, i) => {
+                    if (!v || v <= 0) return '';
+                    return `${fNum(v)} ${rankBadge(allStats[i].lastXPH_rank)}`;
+                },
+                makeSortable: true,
+                sortId: 'lastXPH',
+                sortData: allStats.map((s) => s.lastXPH),
+            });
+
+            // Last day XP/h column
+            addColumn(tableEl, {
+                name: 'Last day XP/h',
+                insertAfter: insertAfter + 3,
+                data: allStats.map((s) => s.lastDayXPH),
+                format: (v, i) => {
+                    if (!v || v <= 0) return '';
+                    return `${fNum(v)} ${rankBadge(allStats[i].lastDayXPH_rank)}`;
+                },
+                makeSortable: true,
+                sortId: 'lastDayXPH',
+                sortData: allStats.map((s) => s.lastDayXPH),
+            });
+
+            // Make existing columns sortable
+            const nameHeader = theadTr.children[0];
+            if (nameHeader && !nameHeader.querySelector(`.${CSS_PREFIX}__sort-icon`)) {
+                makeColumnSortable(nameHeader, {
+                    sortId: 'name',
+                    valueGetter: (trEl) => trEl.children[0]?.textContent?.trim() || '',
+                });
+            }
+
+            // Guild Exp column
+            const expHeader = Array.from(theadTr.children).find((el) => el.textContent.includes('Guild Exp'));
+            if (expHeader && !expHeader.querySelector(`.${CSS_PREFIX}__sort-icon`)) {
+                makeColumnSortable(expHeader, {
+                    sortId: 'xp',
+                    valueGetter: (trEl) => {
+                        const name = trEl.children[0]?.textContent?.trim();
+                        const stat = allStats.find((s) => s.name === name);
+                        return stat?.xp || 0;
+                    },
+                });
+            }
+        }
+
+        _refreshMembersIfVisible() {
+            // Members tab re-renders fully on data change, so DOM observer will re-fire.
+            // No explicit refresh needed.
+        }
+
+        // ─── Leaderboard tab ─────────────────────────────────────────────────────
+
+        _renderLeaderboard(tableEl) {
+            // Skip if already rendered
+            if (tableEl.querySelector(`.${CSS_PREFIX}`)) return;
+
+            const allHistories = guildXPTracker.getAllGuildHistories();
+            if (!allHistories || Object.keys(allHistories).length === 0) return;
+
+            // Widen container
+            const containerEl = tableEl.closest('[class*="LeaderboardPanel_content"]');
+            if (containerEl) {
+                containerEl.style.maxWidth = '1000px';
+            }
+
+            const tbodyEl = tableEl.querySelector('tbody');
+            if (!tbodyEl) return;
+
+            const rows = Array.from(tbodyEl.children);
+            const theadTr = tableEl.querySelector('thead tr');
+            if (!theadTr) return;
+
+            // Calculate stats for each guild row
+            const allStats = [];
+            for (const row of rows) {
+                // Leaderboard: col[0]=Rank, col[1]=Name
+                const name = row.children[1]?.textContent?.trim();
+                const stats = name ? guildXPTracker.getGuildStats(name) : { lastXPH: 0, lastDayXPH: 0 };
+                allStats.push({
+                    name,
+                    lastXPH: stats.lastXPH,
+                    lastDayXPH: stats.lastDayXPH,
+                });
+            }
+
+            // Compute rankings
+            const byLastXPH = allStats.slice().sort((a, b) => b.lastXPH - a.lastXPH);
+            const byLastDayXPH = allStats.slice().sort((a, b) => b.lastDayXPH - a.lastDayXPH);
+            for (let i = 0; i < byLastXPH.length; i++) byLastXPH[i].lastXPH_rank = i + 1;
+            for (let i = 0; i < byLastDayXPH.length; i++) byLastDayXPH[i].lastDayXPH_rank = i + 1;
+
+            const insertAfter = theadTr.children.length - 1;
+
+            // Last XP/h
+            addColumn(tableEl, {
+                name: 'Last XP/h',
+                insertAfter,
+                data: allStats.map((s) => s.lastXPH),
+                format: (v, i) => {
+                    if (!v || v <= 0) return '';
+                    return `${fNum(v)} ${rankBadge(allStats[i].lastXPH_rank)}`;
+                },
+                makeSortable: true,
+                sortId: 'lastXPH',
+                skipFirst: true,
+                sortData: allStats.map((s) => s.lastXPH),
+            });
+
+            // Last day XP/h
+            addColumn(tableEl, {
+                name: 'Last day XP/h',
+                insertAfter: insertAfter + 1,
+                data: allStats.map((s) => s.lastDayXPH),
+                format: (v, i) => {
+                    if (!v || v <= 0) return '';
+                    return `${fNum(v)} ${rankBadge(allStats[i].lastDayXPH_rank)}`;
+                },
+                makeSortable: true,
+                sortId: 'lastDayXPH',
+                skipFirst: true,
+                sortData: allStats.map((s) => s.lastDayXPH),
+            });
+
+            // Make Rank column sortable
+            const rankHeader = Array.from(theadTr.children).find((el) => el.textContent.trim() === 'Rank');
+            if (rankHeader && !rankHeader.querySelector(`.${CSS_PREFIX}__sort-icon`)) {
+                makeColumnSortable(rankHeader, {
+                    sortId: 'rank',
+                    skipFirst: true,
+                    valueGetter: (trEl) => {
+                        const text = trEl.children[0]?.textContent?.replace(/[^\d]/g, '');
+                        return text ? parseInt(text, 10) : 0;
+                    },
+                });
+            }
+        }
+
+        _refreshLeaderboardIfVisible() {
+            const tableEl = document.querySelector('[class*="LeaderboardPanel_leaderboardTable"]');
+            if (tableEl) {
+                // Remove existing columns and re-render
+                tableEl.querySelectorAll(`.${CSS_PREFIX}`).forEach((el) => el.remove());
+                this._renderLeaderboard(tableEl);
+            }
+        }
+
+        // ─── Chart tooltip handlers ──────────────────────────────────────────────
+
+        _onBarEnter(event) {
+            const el = event.target;
+            const xpH = parseFloat(el.dataset.xph);
+            const t = parseInt(el.dataset.t, 10);
+            const truncated = el.dataset.truncated === 'true';
+
+            const bb = el.getBoundingClientRect();
+            const dbb = document.body.getBoundingClientRect();
+
+            const tooltipHTML = `<div role="tooltip"
+            class="${CSS_PREFIX}__tooltip MuiPopper-root MuiTooltip-popper css-112l0a2"
+            style="position: absolute; inset: auto auto 0px 0px; margin: 0px; transform: translate(${Math.floor(bb.x - dbb.x)}px, ${Math.floor(bb.y - dbb.bottom)}px) translate(-50%, 0);"
+            data-popper-placement="top">
+            <div class="MuiTooltip-tooltip MuiTooltip-tooltipPlacementTop css-1spb1s5" style="opacity: 1;">
+                <div class="ItemTooltipText_itemTooltipText__zFq3A">
+                    <div class="ItemTooltipText_name__2JAHA">
+                        <span>${new Date(t).toLocaleString()}</span>
+                    </div>
+                    <div>
+                        <span>${fNum(xpH)} XP/h${truncated ? ' (anomalous)' : ''}</span>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+
+            // Remove existing tooltip
+            document.body.querySelectorAll(`.${CSS_PREFIX}__tooltip`).forEach((el) => el.remove());
+            document.body.insertAdjacentHTML('beforeend', tooltipHTML);
+        }
+
+        _onBarLeave() {
+            document.body.querySelectorAll(`.${CSS_PREFIX}__tooltip`).forEach((el) => el.remove());
+        }
+
+        // ─── Cleanup ─────────────────────────────────────────────────────────────
+
+        disable() {
+            for (const unregister of this.unregisterObservers) {
+                unregister();
+            }
+            this.unregisterObservers = [];
+            this.timerRegistry.clearAll();
+
+            // Remove all injected elements
+            document.querySelectorAll(`.${CSS_PREFIX}`).forEach((el) => el.remove());
+            document.querySelectorAll(`.${CSS_PREFIX}__tooltip`).forEach((el) => el.remove());
+
+            this.initialized = false;
+        }
+    }
+
+    const guildXPDisplay = new GuildXPDisplay();
+
+    var guildXPDisplay$1 = {
+        name: 'Guild XP Display',
+        initialize: () => guildXPDisplay.initialize(),
+        cleanup: () => guildXPDisplay.disable(),
+    };
+
+    /**
      * Empty Queue Notification
      * Sends browser notification when action queue becomes empty
      */
@@ -21106,9 +22398,11 @@ self.onmessage = function (e) {
         coinifyHistoryTracker: coinifyHistoryTracker$1,
         coinifyHistoryViewer: coinifyHistoryViewer$1,
         enhancementFeature,
+        guildXPTracker: guildXPTracker$1,
+        guildXPDisplay: guildXPDisplay$1,
         emptyQueueNotification,
     };
 
     console.log('[Toolasha] UI library loaded');
 
-})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Utils.formatters, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Core.webSocketHook, Toolasha.Utils.reactInput, Toolasha.Utils.actionPanelHelper, Toolasha.Core.marketAPI, Toolasha.Utils.tokenValuation, Toolasha.Utils.marketData, Toolasha.Utils.profitHelpers, Toolasha.Utils.equipmentParser, Toolasha.Utils.teaParser, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.profitConstants, Toolasha.Utils.efficiency, Toolasha.Utils.houseEfficiency, Toolasha.Utils.selectors, Toolasha.Core.storage, Toolasha.Utils.cleanupRegistry, Toolasha.Core, Toolasha.Core.settingsStorage, Toolasha.Utils.enhancementCalculator);
+})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Utils.formatters, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Core.webSocketHook, Toolasha.Utils.reactInput, Toolasha.Utils.actionPanelHelper, Toolasha.Core.marketAPI, Toolasha.Utils.tokenValuation, Toolasha.Utils.marketData, Toolasha.Utils.profitHelpers, Toolasha.Utils.equipmentParser, Toolasha.Utils.teaParser, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.profitConstants, Toolasha.Utils.efficiency, Toolasha.Utils.houseEfficiency, Toolasha.Utils.selectors, Toolasha.Core.storage, Toolasha.Utils.cleanupRegistry, Toolasha.Core, Toolasha.Core.settingsStorage, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.enhancementConfig);
