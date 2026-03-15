@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.37.3
+ * Version: 1.37.4
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -16516,6 +16516,16 @@ self.onmessage = function (e) {
         }
 
         /**
+         * Invalidate caches so next renderAllBadges() uses fresh data.
+         * Call this when inventory contents change (items_updated events).
+         */
+        invalidateCache() {
+            this.inventoryLookupCache = null;
+            this.inventoryLookupCacheTime = 0;
+            this.clearProcessedTracking();
+        }
+
+        /**
          * Render all badges on all items from all providers
          */
         async renderAllBadges() {
@@ -17097,6 +17107,7 @@ self.onmessage = function (e) {
                 clearTimeout(this.itemsUpdatedDebounceTimer);
                 this.itemsUpdatedDebounceTimer = setTimeout(() => {
                     if (this.currentInventoryElem) {
+                        inventoryBadgeManager.invalidateCache();
                         this.applyCurrentSort();
                     }
                 }, this.DEBOUNCE_DELAY);
@@ -17407,12 +17418,19 @@ self.onmessage = function (e) {
                 }
             }
 
-            // Show badge if enabled and doesn't already exist
+            // Show badge if enabled
             if (showBadges && badgeValueKey) {
                 const stackValue = parseFloat(itemElem.dataset[badgeValueKey]) || 0;
+                const existingBadge = itemElem.querySelector('.mwi-stack-price');
 
-                if (stackValue > 0 && !itemElem.querySelector('.mwi-stack-price')) {
-                    this.renderPriceBadge(itemElem, stackValue);
+                if (stackValue > 0) {
+                    if (existingBadge) {
+                        existingBadge.textContent = formatters_js.formatKMB(stackValue, 0);
+                    } else {
+                        this.renderPriceBadge(itemElem, stackValue);
+                    }
+                } else if (existingBadge) {
+                    existingBadge.remove();
                 }
             }
         }
@@ -17612,6 +17630,7 @@ self.onmessage = function (e) {
                 clearTimeout(this.itemsUpdatedDebounceTimer);
                 this.itemsUpdatedDebounceTimer = setTimeout(() => {
                     if (this.currentInventoryElem) {
+                        inventoryBadgeManager.invalidateCache();
                         this.updateBadges();
                     }
                 }, this.DEBOUNCE_DELAY);
@@ -17674,12 +17693,28 @@ self.onmessage = function (e) {
             const bidPrice = parseFloat(itemElem.dataset.bidPrice) || 0;
             const askPrice = parseFloat(itemElem.dataset.askPrice) || 0;
 
-            // Show badges if they have values and don't already exist
-            if (bidPrice > 0 && !itemElem.querySelector('.mwi-badge-price-bid')) {
-                this.renderPriceBadge(itemElem, bidPrice, 'bid');
+            // Create or update bid badge
+            const existingBid = itemElem.querySelector('.mwi-badge-price-bid');
+            if (bidPrice > 0) {
+                if (existingBid) {
+                    existingBid.textContent = formatters_js.formatKMB(Math.round(bidPrice), 0);
+                } else {
+                    this.renderPriceBadge(itemElem, bidPrice, 'bid');
+                }
+            } else if (existingBid) {
+                existingBid.remove();
             }
-            if (askPrice > 0 && !itemElem.querySelector('.mwi-badge-price-ask')) {
-                this.renderPriceBadge(itemElem, askPrice, 'ask');
+
+            // Create or update ask badge
+            const existingAsk = itemElem.querySelector('.mwi-badge-price-ask');
+            if (askPrice > 0) {
+                if (existingAsk) {
+                    existingAsk.textContent = formatters_js.formatKMB(Math.round(askPrice), 0);
+                } else {
+                    this.renderPriceBadge(itemElem, askPrice, 'ask');
+                }
+            } else if (existingAsk) {
+                existingAsk.remove();
             }
         }
 
