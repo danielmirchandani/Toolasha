@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.38.0
+ * Version: 1.39.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -18912,8 +18912,14 @@ self.onmessage = function (e) {
                 return;
             }
 
-            const mode = config.getSetting('invCategoryTotals_mode') || 'ask';
-            const valueKey = mode === 'bid' ? 'bidValue' : 'askValue';
+            // Derive pricing mode from inventory sort controls (same source as badges)
+            let valueKey;
+            if (inventorySort.currentMode === 'none') {
+                const badgesOnNone = config.getSettingValue('invSort_badgesOnNone', 'None');
+                valueKey = badgesOnNone !== 'None' ? badgesOnNone.toLowerCase() + 'Value' : 'askValue';
+            } else {
+                valueKey = inventorySort.currentMode + 'Value';
+            }
 
             for (const categoryDiv of inventoryElem.children) {
                 const labelEl = categoryDiv.querySelector('[class*="Inventory_label"]');
