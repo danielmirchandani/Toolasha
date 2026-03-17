@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.41.1
+ * Version: 1.42.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1300,6 +1300,12 @@
                 loadoutEnhancementDisplay: {
                     id: 'loadoutEnhancementDisplay',
                     label: 'Loadout panel: Show highest-owned enhancement level on equipment icons',
+                    type: 'checkbox',
+                    default: true,
+                },
+                loadout_sortEnabled: {
+                    id: 'loadout_sortEnabled',
+                    label: 'Loadout panel: Enable drag-and-drop reordering',
                     type: 'checkbox',
                     default: true,
                 },
