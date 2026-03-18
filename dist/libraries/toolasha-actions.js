@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.42.1
+ * Version: 1.42.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1795,7 +1795,7 @@
     };
     const formatRareFindBonusSummary = (bonusRevenue) => {
         const rareFindBonus = bonusRevenue?.rareFindBonus || 0;
-        return `${rareFindBonus.toFixed(1)}% rare find`;
+        return `${rareFindBonus.toFixed(2)}% rare find`;
     };
 
     /**
@@ -1898,14 +1898,14 @@
                 consumedLine.style.marginLeft = '8px';
                 const consumedMissingNote = getMissingPriceIndicator(conversion.missingPrice);
                 const consumedRevenue = conversion.rawConsumedPerHour * conversion.rawPriceEach;
-                consumedLine.textContent = `• ${conversion.rawItem} consumed: -${conversion.rawConsumedPerHour.toFixed(1)}/hr @ ${formatters_js.formatWithSeparator(conversion.rawPriceEach)}${consumedMissingNote} → -${formatters_js.formatLargeNumber(Math.round(consumedRevenue))}/hr`;
+                consumedLine.textContent = `• ${conversion.rawItem} consumed: -${conversion.rawConsumedPerHour.toFixed(2)}/hr @ ${formatters_js.formatWithSeparator(conversion.rawPriceEach)}${consumedMissingNote} → -${formatters_js.formatLargeNumber(Math.round(consumedRevenue))}/hr`;
                 processingContent.appendChild(consumedLine);
 
                 const producedLine = document.createElement('div');
                 producedLine.style.marginLeft = '8px';
                 const producedMissingNote = getMissingPriceIndicator(conversion.missingPrice);
                 const producedRevenue = conversion.conversionsPerHour * conversion.processedPriceEach;
-                producedLine.textContent = `• ${conversion.processedItem} produced: ${conversion.conversionsPerHour.toFixed(1)}/hr @ ${formatters_js.formatWithSeparator(conversion.processedPriceEach)}${producedMissingNote} → ${formatters_js.formatLargeNumber(Math.round(producedRevenue))}/hr`;
+                producedLine.textContent = `• ${conversion.processedItem} produced: ${conversion.conversionsPerHour.toFixed(2)}/hr @ ${formatters_js.formatWithSeparator(conversion.processedPriceEach)}${producedMissingNote} → ${formatters_js.formatLargeNumber(Math.round(producedRevenue))}/hr`;
                 processingContent.appendChild(producedLine);
             }
 
@@ -1964,7 +1964,7 @@
             const essenceFindBonus = profitData.bonusRevenue?.essenceFindBonus || 0;
             essenceSection = uiComponents_js.createCollapsibleSection(
                 '',
-                `Essence Drops: ${essenceRevenueLabel}/hr (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(1)}% essence find)`,
+                `Essence Drops: ${essenceRevenueLabel}/hr (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(2)}% essence find)`,
                 null,
                 essenceContent,
                 false,
@@ -2022,7 +2022,7 @@
                 const line = document.createElement('div');
                 line.style.marginLeft = '8px';
                 const missingPriceNote = getMissingPriceIndicator(drink.missingPrice);
-                line.textContent = `• ${drink.name}: ${drink.drinksPerHour.toFixed(1)}/hr @ ${formatters_js.formatWithSeparator(drink.priceEach)}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(drink.costPerHour))}/hr`;
+                line.textContent = `• ${drink.name}: ${drink.drinksPerHour.toFixed(2)}/hr @ ${formatters_js.formatWithSeparator(drink.priceEach)}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(drink.costPerHour))}/hr`;
                 drinkCostsContent.appendChild(line);
             }
         }
@@ -2078,35 +2078,35 @@
         // Efficiency
         const effRows = [];
         if (profitData.details.levelEfficiency > 0) {
-            effRows.push(`+${profitData.details.levelEfficiency.toFixed(1)}% Level advantage`);
+            effRows.push(`+${profitData.details.levelEfficiency.toFixed(2)}% Level advantage`);
         }
         if (profitData.details.houseEfficiency > 0) {
-            effRows.push(`+${profitData.details.houseEfficiency.toFixed(1)}% House room`);
+            effRows.push(`+${profitData.details.houseEfficiency.toFixed(2)}% House room`);
         }
         if (profitData.details.teaEfficiency > 0) {
-            effRows.push(`+${profitData.details.teaEfficiency.toFixed(1)}% Tea`);
+            effRows.push(`+${profitData.details.teaEfficiency.toFixed(2)}% Tea`);
         }
         if ((profitData.details.equipmentEfficiencyItems || []).length > 0) {
             for (const item of profitData.details.equipmentEfficiencyItems) {
                 const enh = item.enhancementLevel > 0 ? ` +${item.enhancementLevel}` : '';
-                effRows.push(`+${item.value.toFixed(1)}% ${item.name}${enh}`);
+                effRows.push(`+${item.value.toFixed(2)}% ${item.name}${enh}`);
             }
         } else if (profitData.details.equipmentEfficiency > 0) {
-            effRows.push(`+${profitData.details.equipmentEfficiency.toFixed(1)}% Equipment`);
+            effRows.push(`+${profitData.details.equipmentEfficiency.toFixed(2)}% Equipment`);
         }
         if (profitData.details.communityEfficiency > 0) {
-            effRows.push(`+${profitData.details.communityEfficiency.toFixed(1)}% Community buff`);
+            effRows.push(`+${profitData.details.communityEfficiency.toFixed(2)}% Community buff`);
         }
         if (profitData.details.achievementEfficiency > 0) {
-            effRows.push(`+${profitData.details.achievementEfficiency.toFixed(1)}% Achievement`);
+            effRows.push(`+${profitData.details.achievementEfficiency.toFixed(2)}% Achievement`);
         }
         if (profitData.details.personalEfficiency > 0) {
-            effRows.push(`+${profitData.details.personalEfficiency.toFixed(1)}% Seal of Efficiency`);
+            effRows.push(`+${profitData.details.personalEfficiency.toFixed(2)}% Seal of Efficiency`);
         }
         if (effRows.length > 0) {
-            modifierSummaryParts.push(`+${profitData.totalEfficiency.toFixed(1)}% eff`);
+            modifierSummaryParts.push(`+${profitData.totalEfficiency.toFixed(2)}% eff`);
             modifierSubSections.push(
-                makeModifierSection('Efficiency', `${profitData.totalEfficiency.toFixed(1)}%`, effRows)
+                makeModifierSection('Efficiency', `${profitData.totalEfficiency.toFixed(2)}%`, effRows)
             );
         }
 
@@ -2114,19 +2114,19 @@
         if (profitData.gatheringQuantity > 0) {
             const gatherRows = [];
             if (profitData.details.communityBuffQuantity > 0) {
-                gatherRows.push(`+${(profitData.details.communityBuffQuantity * 100).toFixed(1)}% Community buff`);
+                gatherRows.push(`+${(profitData.details.communityBuffQuantity * 100).toFixed(2)}% Community buff`);
             }
             if (profitData.details.gatheringTeaBonus > 0) {
-                gatherRows.push(`+${(profitData.details.gatheringTeaBonus * 100).toFixed(1)}% Tea`);
+                gatherRows.push(`+${(profitData.details.gatheringTeaBonus * 100).toFixed(2)}% Tea`);
             }
             if (profitData.details.achievementGathering > 0) {
-                gatherRows.push(`+${(profitData.details.achievementGathering * 100).toFixed(1)}% Achievement`);
+                gatherRows.push(`+${(profitData.details.achievementGathering * 100).toFixed(2)}% Achievement`);
             }
             if (profitData.details.personalGathering > 0) {
-                gatherRows.push(`+${(profitData.details.personalGathering * 100).toFixed(1)}% Seal of Gathering`);
+                gatherRows.push(`+${(profitData.details.personalGathering * 100).toFixed(2)}% Seal of Gathering`);
             }
-            const gatherTotal = `${(profitData.gatheringQuantity * 100).toFixed(1)}%`;
-            modifierSummaryParts.push(`+${(profitData.gatheringQuantity * 100).toFixed(1)}% gather`);
+            const gatherTotal = `${(profitData.gatheringQuantity * 100).toFixed(2)}%`;
+            modifierSummaryParts.push(`+${(profitData.gatheringQuantity * 100).toFixed(2)}% gather`);
             modifierSubSections.push(makeModifierSection('Gathering Quantity', gatherTotal, gatherRows));
         }
 
@@ -2137,19 +2137,19 @@
             const rareRows = [];
             for (const item of rareFindBreakdown.equipmentItems || []) {
                 const enh = item.enhancementLevel > 0 ? ` +${item.enhancementLevel}` : '';
-                rareRows.push(`+${item.value.toFixed(1)}% ${item.name}${enh}`);
+                rareRows.push(`+${item.value.toFixed(2)}% ${item.name}${enh}`);
             }
             if (rareFindBreakdown.house > 0) {
-                rareRows.push(`+${rareFindBreakdown.house.toFixed(1)}% House rooms`);
+                rareRows.push(`+${rareFindBreakdown.house.toFixed(2)}% House rooms`);
             }
             if (rareFindBreakdown.achievement > 0) {
-                rareRows.push(`+${rareFindBreakdown.achievement.toFixed(1)}% Achievement`);
+                rareRows.push(`+${rareFindBreakdown.achievement.toFixed(2)}% Achievement`);
             }
             if (rareFindBreakdown.personal > 0) {
-                rareRows.push(`+${rareFindBreakdown.personal.toFixed(1)}% Seal of Rare Find`);
+                rareRows.push(`+${rareFindBreakdown.personal.toFixed(2)}% Seal of Rare Find`);
             }
-            modifierSummaryParts.push(`+${rareFindBonus.toFixed(1)}% rare`);
-            modifierSubSections.push(makeModifierSection('Rare Find', `${rareFindBonus.toFixed(1)}%`, rareRows));
+            modifierSummaryParts.push(`+${rareFindBonus.toFixed(2)}% rare`);
+            modifierSubSections.push(makeModifierSection('Rare Find', `${rareFindBonus.toFixed(2)}%`, rareRows));
         }
 
         // Assemble Detailed Breakdown (WITHOUT net profit - that goes in top level)
@@ -2175,7 +2175,7 @@
         // Create "Detailed Breakdown" collapsible
         const topLevelContent = document.createElement('div');
         topLevelContent.innerHTML = `
-        <div style="margin-bottom: 4px;">Actions: ${profitData.actionsPerHour.toFixed(1)}/hr | Efficiency: +${profitData.totalEfficiency.toFixed(1)}%</div>
+        <div style="margin-bottom: 4px;">Actions: ${profitData.actionsPerHour.toFixed(2)}/hr | Efficiency: +${profitData.totalEfficiency.toFixed(2)}%</div>
     `;
 
         // Add Net Profit line at top level (always visible when Profitability is expanded)
@@ -2443,13 +2443,13 @@
         const baseOutputMissingNote = getMissingPriceIndicator(
             profitData.outputPriceMissing || profitData.outputPriceEstimated
         );
-        baseOutputLine.textContent = `• ${profitData.itemName} (Base): ${profitData.itemsPerHour.toFixed(1)}/hr @ ${formatters_js.formatWithSeparator(Math.round(profitData.outputPrice))}${baseOutputMissingNote} each → ${formatters_js.formatLargeNumber(Math.round(profitData.itemsPerHour * profitData.outputPrice))}/hr`;
+        baseOutputLine.textContent = `• ${profitData.itemName} (Base): ${profitData.itemsPerHour.toFixed(2)}/hr @ ${formatters_js.formatWithSeparator(Math.round(profitData.outputPrice))}${baseOutputMissingNote} each → ${formatters_js.formatLargeNumber(Math.round(profitData.itemsPerHour * profitData.outputPrice))}/hr`;
         primaryOutputContent.appendChild(baseOutputLine);
 
         if (profitData.gourmetBonusItems > 0) {
             const gourmetLine = document.createElement('div');
             gourmetLine.style.marginLeft = '8px';
-            gourmetLine.textContent = `• ${profitData.itemName} (Gourmet +${formatters_js.formatPercentage(profitData.gourmetBonus, 1)}): ${profitData.gourmetBonusItems.toFixed(1)}/hr @ ${formatters_js.formatWithSeparator(Math.round(profitData.outputPrice))}${baseOutputMissingNote} each → ${formatters_js.formatLargeNumber(Math.round(profitData.gourmetBonusItems * profitData.outputPrice))}/hr`;
+            gourmetLine.textContent = `• ${profitData.itemName} (Gourmet +${formatters_js.formatPercentage(profitData.gourmetBonus, 1)}): ${profitData.gourmetBonusItems.toFixed(2)}/hr @ ${formatters_js.formatWithSeparator(Math.round(profitData.outputPrice))}${baseOutputMissingNote} each → ${formatters_js.formatLargeNumber(Math.round(profitData.gourmetBonusItems * profitData.outputPrice))}/hr`;
             primaryOutputContent.appendChild(gourmetLine);
         }
 
@@ -2496,7 +2496,7 @@
             const essenceFindBonus = profitData.bonusRevenue?.essenceFindBonus || 0;
             essenceSection = uiComponents_js.createCollapsibleSection(
                 '',
-                `Essence Drops: ${essenceRevenueLabel}/hr (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(1)}% essence find)`,
+                `Essence Drops: ${essenceRevenueLabel}/hr (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(2)}% essence find)`,
                 null,
                 essenceContent,
                 false,
@@ -2562,12 +2562,12 @@
                 const amountPerHour = amountPerAction * profitData.actionsPerHour * efficiencyMultiplier;
 
                 // Build material line with embedded Artisan information
-                let materialText = `• ${material.itemName}: ${amountPerHour.toFixed(1)}/hr`;
+                let materialText = `• ${material.itemName}: ${amountPerHour.toFixed(2)}/hr`;
 
                 // Add Artisan reduction info if present (only show if actually reduced)
                 if (profitData.artisanBonus > 0 && material.baseAmount && material.amount !== material.baseAmount) {
                     const baseAmountPerHour = material.baseAmount * profitData.actionsPerHour * efficiencyMultiplier;
-                    materialText += ` (${baseAmountPerHour.toFixed(1)} base -${formatters_js.formatPercentage(profitData.artisanBonus, 1)} 🍵)`;
+                    materialText += ` (${baseAmountPerHour.toFixed(2)} base -${formatters_js.formatPercentage(profitData.artisanBonus, 1)} 🍵)`;
                 }
 
                 const missingPriceNote = getMissingPriceIndicator(material.missingPrice);
@@ -2599,7 +2599,7 @@
                 line.style.marginLeft = '8px';
                 // Tea structure: { itemName, pricePerDrink, drinksPerHour, totalCost }
                 const missingPriceNote = getMissingPriceIndicator(tea.missingPrice);
-                line.textContent = `• ${tea.itemName}: ${tea.drinksPerHour.toFixed(1)}/hr @ ${formatters_js.formatWithSeparator(Math.round(tea.pricePerDrink))}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(tea.totalCost))}/hr`;
+                line.textContent = `• ${tea.itemName}: ${tea.drinksPerHour.toFixed(2)}/hr @ ${formatters_js.formatWithSeparator(Math.round(tea.pricePerDrink))}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(tea.totalCost))}/hr`;
                 teaCostsContent.appendChild(line);
             }
         }
@@ -2663,32 +2663,32 @@
             effRows.push(`+${profitData.levelEfficiency}% Level advantage`);
         }
         if (profitData.houseEfficiency > 0) {
-            effRows.push(`+${profitData.houseEfficiency.toFixed(1)}% House room`);
+            effRows.push(`+${profitData.houseEfficiency.toFixed(2)}% House room`);
         }
         if (profitData.teaEfficiency > 0) {
-            effRows.push(`+${profitData.teaEfficiency.toFixed(1)}% Tea`);
+            effRows.push(`+${profitData.teaEfficiency.toFixed(2)}% Tea`);
         }
         if ((profitData.equipmentEfficiencyItems || []).length > 0) {
             for (const item of profitData.equipmentEfficiencyItems) {
                 const enh = item.enhancementLevel > 0 ? ` +${item.enhancementLevel}` : '';
-                effRows.push(`+${item.value.toFixed(1)}% ${item.name}${enh}`);
+                effRows.push(`+${item.value.toFixed(2)}% ${item.name}${enh}`);
             }
         } else if (profitData.equipmentEfficiency > 0) {
-            effRows.push(`+${profitData.equipmentEfficiency.toFixed(1)}% Equipment`);
+            effRows.push(`+${profitData.equipmentEfficiency.toFixed(2)}% Equipment`);
         }
         if (profitData.communityEfficiency > 0) {
-            effRows.push(`+${profitData.communityEfficiency.toFixed(1)}% Community buff`);
+            effRows.push(`+${profitData.communityEfficiency.toFixed(2)}% Community buff`);
         }
         if (profitData.achievementEfficiency > 0) {
-            effRows.push(`+${profitData.achievementEfficiency.toFixed(1)}% Achievement`);
+            effRows.push(`+${profitData.achievementEfficiency.toFixed(2)}% Achievement`);
         }
         if (profitData.personalEfficiency > 0) {
-            effRows.push(`+${profitData.personalEfficiency.toFixed(1)}% Seal of Efficiency`);
+            effRows.push(`+${profitData.personalEfficiency.toFixed(2)}% Seal of Efficiency`);
         }
         if (effRows.length > 0) {
-            modifierSummaryParts.push(`+${profitData.totalEfficiency.toFixed(1)}% eff`);
+            modifierSummaryParts.push(`+${profitData.totalEfficiency.toFixed(2)}% eff`);
             modifierSubSections.push(
-                makeModifierSectionProd('Efficiency', `${profitData.totalEfficiency.toFixed(1)}%`, effRows)
+                makeModifierSectionProd('Efficiency', `${profitData.totalEfficiency.toFixed(2)}%`, effRows)
             );
         }
 
@@ -2699,20 +2699,20 @@
             const rareRows = [];
             for (const item of productionRareFindBreakdown.equipmentItems || []) {
                 const enh = item.enhancementLevel > 0 ? ` +${item.enhancementLevel}` : '';
-                rareRows.push(`+${item.value.toFixed(1)}% ${item.name}${enh}`);
+                rareRows.push(`+${item.value.toFixed(2)}% ${item.name}${enh}`);
             }
             if (productionRareFindBreakdown.house > 0) {
-                rareRows.push(`+${productionRareFindBreakdown.house.toFixed(1)}% House rooms`);
+                rareRows.push(`+${productionRareFindBreakdown.house.toFixed(2)}% House rooms`);
             }
             if (productionRareFindBreakdown.achievement > 0) {
-                rareRows.push(`+${productionRareFindBreakdown.achievement.toFixed(1)}% Achievement`);
+                rareRows.push(`+${productionRareFindBreakdown.achievement.toFixed(2)}% Achievement`);
             }
             if (productionRareFindBreakdown.personal > 0) {
-                rareRows.push(`+${productionRareFindBreakdown.personal.toFixed(1)}% Seal of Rare Find`);
+                rareRows.push(`+${productionRareFindBreakdown.personal.toFixed(2)}% Seal of Rare Find`);
             }
-            modifierSummaryParts.push(`+${productionRareFindBonus.toFixed(1)}% rare`);
+            modifierSummaryParts.push(`+${productionRareFindBonus.toFixed(2)}% rare`);
             modifierSubSections.push(
-                makeModifierSectionProd('Rare Find', `${productionRareFindBonus.toFixed(1)}%`, rareRows)
+                makeModifierSectionProd('Rare Find', `${productionRareFindBonus.toFixed(2)}%`, rareRows)
             );
         }
 
@@ -2774,7 +2774,7 @@
         const topLevelContent = document.createElement('div');
         const effectiveActionsPerHour = profitData.actionsPerHour * profitData.efficiencyMultiplier;
         topLevelContent.innerHTML = `
-        <div style="margin-bottom: 4px;">Actions: ${effectiveActionsPerHour.toFixed(1)}/hr</div>
+        <div style="margin-bottom: 4px;">Actions: ${effectiveActionsPerHour.toFixed(2)}/hr</div>
     `;
 
         // Add Net Profit line at top level (always visible when Profitability is expanded)
@@ -2939,7 +2939,7 @@
     function formatPerAction(value) {
         const abs = Math.abs(value);
         if (abs >= 1000) return formatters_js.formatLargeNumber(Math.round(value));
-        if (abs >= 10) return value.toFixed(1);
+        if (abs >= 10) return value.toFixed(2);
         if (abs >= 1) return value.toFixed(2);
         if (abs === 0) return '0';
         return value.toFixed(2);
@@ -3098,7 +3098,7 @@
             const essenceFindBonus = profitData.bonusRevenue?.essenceFindBonus || 0;
             essenceSection = uiComponents_js.createCollapsibleSection(
                 '',
-                `Essence Drops: ${essenceRevenueLabel} (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(1)}% essence find)`,
+                `Essence Drops: ${essenceRevenueLabel} (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(2)}% essence find)`,
                 null,
                 essenceContent,
                 false,
@@ -3345,7 +3345,7 @@
             const essenceFindBonus = profitData.bonusRevenue?.essenceFindBonus || 0;
             essenceSection = uiComponents_js.createCollapsibleSection(
                 '',
-                `Essence Drops: ${essenceRevenueLabel} (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(1)}% essence find)`,
+                `Essence Drops: ${essenceRevenueLabel} (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(2)}% essence find)`,
                 null,
                 essenceContent,
                 false,
@@ -3584,7 +3584,7 @@
                 const line = document.createElement('div');
                 line.style.marginLeft = '8px';
                 const missingPriceNote = getMissingPriceIndicator(output.missingPrice);
-                line.textContent = `• ${output.name} (Base): ${totalItems.toFixed(1)} items @ ${formatters_js.formatWithSeparator(output.priceEach)}${missingPriceNote} each → ${formatters_js.formatLargeNumber(Math.round(totalRevenueLine))}`;
+                line.textContent = `• ${output.name} (Base): ${totalItems.toFixed(2)} items @ ${formatters_js.formatWithSeparator(output.priceEach)}${missingPriceNote} each → ${formatters_js.formatLargeNumber(Math.round(totalRevenueLine))}`;
                 primaryDropsContent.appendChild(line);
             }
         }
@@ -3598,7 +3598,7 @@
                 const line = document.createElement('div');
                 line.style.marginLeft = '8px';
                 const missingPriceNote = getMissingPriceIndicator(output.missingPrice);
-                line.textContent = `• ${output.name} (Gourmet ${formatters_js.formatPercentage(profitData.gourmetBonus || 0, 1)}): ${totalItems.toFixed(1)} items @ ${formatters_js.formatWithSeparator(output.priceEach)}${missingPriceNote} each → ${formatters_js.formatLargeNumber(Math.round(totalRevenueLine))}`;
+                line.textContent = `• ${output.name} (Gourmet ${formatters_js.formatPercentage(profitData.gourmetBonus || 0, 1)}): ${totalItems.toFixed(2)} items @ ${formatters_js.formatWithSeparator(output.priceEach)}${missingPriceNote} each → ${formatters_js.formatLargeNumber(Math.round(totalRevenueLine))}`;
                 primaryDropsContent.appendChild(line);
             }
         }
@@ -3624,12 +3624,12 @@
 
                 const consumedLine = document.createElement('div');
                 consumedLine.style.marginLeft = '8px';
-                consumedLine.textContent = `• ${conversion.rawItem} consumed: -${totalConsumed.toFixed(1)} items @ ${formatters_js.formatWithSeparator(conversion.rawPriceEach)}${missingPriceNote} → -${formatters_js.formatLargeNumber(Math.round(consumedRevenue))}`;
+                consumedLine.textContent = `• ${conversion.rawItem} consumed: -${totalConsumed.toFixed(2)} items @ ${formatters_js.formatWithSeparator(conversion.rawPriceEach)}${missingPriceNote} → -${formatters_js.formatLargeNumber(Math.round(consumedRevenue))}`;
                 processingContent.appendChild(consumedLine);
 
                 const producedLine = document.createElement('div');
                 producedLine.style.marginLeft = '8px';
-                producedLine.textContent = `• ${conversion.processedItem} produced: ${totalProduced.toFixed(1)} items @ ${formatters_js.formatWithSeparator(conversion.processedPriceEach)}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(producedRevenue))}`;
+                producedLine.textContent = `• ${conversion.processedItem} produced: ${totalProduced.toFixed(2)} items @ ${formatters_js.formatWithSeparator(conversion.processedPriceEach)}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(producedRevenue))}`;
                 processingContent.appendChild(producedLine);
             }
 
@@ -3694,7 +3694,7 @@
             const essenceFindBonus = profitData.bonusRevenue?.essenceFindBonus || 0;
             essenceSection = uiComponents_js.createCollapsibleSection(
                 '',
-                `Essence Drops: ${essenceRevenueLabel} (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(1)}% essence find)`,
+                `Essence Drops: ${essenceRevenueLabel} (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(2)}% essence find)`,
                 null,
                 essenceContent,
                 false,
@@ -3756,7 +3756,7 @@
                 const line = document.createElement('div');
                 line.style.marginLeft = '8px';
                 const missingPriceNote = getMissingPriceIndicator(drink.missingPrice);
-                line.textContent = `• ${drink.name}: ${totalDrinks.toFixed(1)} drinks @ ${formatters_js.formatWithSeparator(drink.priceEach)}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(totalCostLine))}`;
+                line.textContent = `• ${drink.name}: ${totalDrinks.toFixed(2)} drinks @ ${formatters_js.formatWithSeparator(drink.priceEach)}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(totalCostLine))}`;
                 drinkCostsContent.appendChild(line);
             }
         }
@@ -3888,7 +3888,7 @@
         const baseOutputMissingNote = getMissingPriceIndicator(
             profitData.outputPriceMissing || profitData.outputPriceEstimated
         );
-        baseOutputLine.textContent = `• ${profitData.itemName} (Base): ${totalBaseItems.toFixed(1)} items @ ${formatters_js.formatWithSeparator(Math.round(profitData.outputPrice))}${baseOutputMissingNote} each → ${formatters_js.formatLargeNumber(Math.round(totalBaseRevenue))}`;
+        baseOutputLine.textContent = `• ${profitData.itemName} (Base): ${totalBaseItems.toFixed(2)} items @ ${formatters_js.formatWithSeparator(Math.round(profitData.outputPrice))}${baseOutputMissingNote} each → ${formatters_js.formatLargeNumber(Math.round(totalBaseRevenue))}`;
         primaryOutputContent.appendChild(baseOutputLine);
 
         if (profitData.gourmetBonus > 0) {
@@ -3896,7 +3896,7 @@
             const totalGourmetRevenue = totals.totalGourmetRevenue;
             const gourmetLine = document.createElement('div');
             gourmetLine.style.marginLeft = '8px';
-            gourmetLine.textContent = `• ${profitData.itemName} (Gourmet +${formatters_js.formatPercentage(profitData.gourmetBonus, 1)}): ${totalGourmetItems.toFixed(1)} items @ ${formatters_js.formatWithSeparator(Math.round(profitData.outputPrice))}${baseOutputMissingNote} each → ${formatters_js.formatLargeNumber(Math.round(totalGourmetRevenue))}`;
+            gourmetLine.textContent = `• ${profitData.itemName} (Gourmet +${formatters_js.formatPercentage(profitData.gourmetBonus, 1)}): ${totalGourmetItems.toFixed(2)} items @ ${formatters_js.formatWithSeparator(Math.round(profitData.outputPrice))}${baseOutputMissingNote} each → ${formatters_js.formatLargeNumber(Math.round(totalGourmetRevenue))}`;
             primaryOutputContent.appendChild(gourmetLine);
         }
 
@@ -3951,7 +3951,7 @@
             const essenceFindBonus = profitData.bonusRevenue?.essenceFindBonus || 0;
             essenceSection = uiComponents_js.createCollapsibleSection(
                 '',
-                `Essence Drops: ${essenceRevenueLabel} (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(1)}% essence find)`,
+                `Essence Drops: ${essenceRevenueLabel} (${essenceDrops.length} item${essenceDrops.length !== 1 ? 's' : ''}, ${essenceFindBonus.toFixed(2)}% essence find)`,
                 null,
                 essenceContent,
                 false,
@@ -4019,12 +4019,12 @@
                 const line = document.createElement('div');
                 line.style.marginLeft = '8px';
 
-                let materialText = `• ${material.itemName}: ${totalMaterial.toFixed(1)} items`;
+                let materialText = `• ${material.itemName}: ${totalMaterial.toFixed(2)} items`;
 
                 // Add Artisan reduction info if present
                 if (profitData.artisanBonus > 0 && material.baseAmount && material.amount !== material.baseAmount) {
                     const baseTotalAmount = material.baseAmount * actionsCount;
-                    materialText += ` (${baseTotalAmount.toFixed(1)} base -${formatters_js.formatPercentage(profitData.artisanBonus, 1)} 🍵)`;
+                    materialText += ` (${baseTotalAmount.toFixed(2)} base -${formatters_js.formatPercentage(profitData.artisanBonus, 1)} 🍵)`;
                 }
 
                 const missingPriceNote = getMissingPriceIndicator(material.missingPrice);
@@ -4055,7 +4055,7 @@
                 const line = document.createElement('div');
                 line.style.marginLeft = '8px';
                 const missingPriceNote = getMissingPriceIndicator(tea.missingPrice);
-                line.textContent = `• ${tea.itemName}: ${totalDrinks.toFixed(1)} drinks @ ${formatters_js.formatWithSeparator(Math.round(tea.pricePerDrink))}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(totalTeaCost))}`;
+                line.textContent = `• ${tea.itemName}: ${totalDrinks.toFixed(2)} drinks @ ${formatters_js.formatWithSeparator(Math.round(tea.pricePerDrink))}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(totalTeaCost))}`;
                 teaCostsContent.appendChild(line);
             }
         }
@@ -7819,9 +7819,9 @@
                         for (const item of speedBreakdown.consumables) {
                             const detailText =
                                 item.drinkConcentration > 0
-                                    ? ` (${item.baseSpeed.toFixed(1)}% × ${(1 + item.drinkConcentration / 100).toFixed(2)})`
+                                    ? ` (${item.baseSpeed.toFixed(2)}% × ${(1 + item.drinkConcentration / 100).toFixed(2)})`
                                     : '';
-                            speedLines.push(`  - ${item.name}: +${item.speed.toFixed(1)}%${detailText}`);
+                            speedLines.push(`  - ${item.name}: +${item.speed.toFixed(2)}%${detailText}`);
                         }
 
                         // Personal buff (Seal of Action Speed)
@@ -7834,7 +7834,7 @@
                     if (isTaskAction && taskSpeedBonus > 0) {
                         speedLines.push(''); // Empty line separator
                         speedLines.push(
-                            `<span style="font-weight: 500;">Task Speed (multiplicative): +${taskSpeedBonus.toFixed(1)}%</span>`
+                            `<span style="font-weight: 500;">Task Speed (multiplicative): +${taskSpeedBonus.toFixed(2)}%</span>`
                         );
                         speedLines.push(
                             `${displayTimeAfterEquipment.toFixed(2)}s${equipmentClampSuffix} → ${actionTime.toFixed(2)}s | ${profitHelpers_js.calculateActionsPerHour(actionTime).toFixed(0)}/hr`
@@ -7855,11 +7855,11 @@
 
                                 const detailText =
                                     enhancementBonus > 0
-                                        ? ` (${(baseTaskSpeed * 100).toFixed(1)}% + ${(enhancementBonus * enhancementLevel * 100).toFixed(1)}%)`
+                                        ? ` (${(baseTaskSpeed * 100).toFixed(2)}% + ${(enhancementBonus * enhancementLevel * 100).toFixed(2)}%)`
                                         : '';
 
                                 speedLines.push(
-                                    `  - ${itemDetails.name}${enhText}: +${taskSpeedBonus.toFixed(1)}%${detailText}`
+                                    `  - ${itemDetails.name}${enhText}: +${taskSpeedBonus.toFixed(2)}%${detailText}`
                                 );
                             }
                         }
@@ -7868,7 +7868,7 @@
                     // Add Efficiency breakdown
                     speedLines.push(''); // Empty line
                     speedLines.push(
-                        `<span style="font-weight: 500; color: var(--text-color-primary, ${config.COLOR_TEXT_PRIMARY});">Efficiency: +${totalEfficiency.toFixed(1)}% → Output: ×${efficiencyMultiplier.toFixed(2)} (${Math.round(profitHelpers_js.calculateActionsPerHour(actionTime) * efficiencyMultiplier)}/hr)</span>`
+                        `<span style="font-weight: 500; color: var(--text-color-primary, ${config.COLOR_TEXT_PRIMARY});">Efficiency: +${totalEfficiency.toFixed(2)}% → Output: ×${efficiencyMultiplier.toFixed(2)} (${Math.round(profitHelpers_js.calculateActionsPerHour(actionTime) * efficiencyMultiplier)}/hr)</span>`
                     );
 
                     // Detailed efficiency breakdown
@@ -7880,11 +7880,11 @@
                         const rawLevelDelta = efficiencyBreakdown.skillLevel - efficiencyBreakdown.baseRequirement;
 
                         // Show final level efficiency
-                        speedLines.push(`  - Level: +${efficiencyBreakdown.levelEfficiency.toFixed(1)}%`);
+                        speedLines.push(`  - Level: +${efficiencyBreakdown.levelEfficiency.toFixed(2)}%`);
 
                         // Show raw level delta (what you'd get without Action Level bonuses)
                         speedLines.push(
-                            `    - Raw level delta: +${rawLevelDelta.toFixed(1)}% (${efficiencyBreakdown.skillLevel} - ${efficiencyBreakdown.baseRequirement} base requirement)`
+                            `    - Raw level delta: +${rawLevelDelta.toFixed(2)}% (${efficiencyBreakdown.skillLevel} - ${efficiencyBreakdown.baseRequirement} base requirement)`
                         );
 
                         // Show Action Level bonus teas that reduce level efficiency
@@ -7896,13 +7896,13 @@
                                 // Calculate impact: base tea effect reduces efficiency
                                 const baseTeaImpact = -tea.baseActionLevel;
                                 speedLines.push(
-                                    `    - ${tea.name} impact: ${baseTeaImpact.toFixed(1)}% (raises requirement)`
+                                    `    - ${tea.name} impact: ${baseTeaImpact.toFixed(2)}% (raises requirement)`
                                 );
 
                                 // Show DC contribution as additional reduction if > 0
                                 if (tea.dcContribution > 0) {
                                     const dcImpact = -tea.dcContribution;
-                                    speedLines.push(`      - Drink Concentration: ${dcImpact.toFixed(1)}%`);
+                                    speedLines.push(`      - Drink Concentration: ${dcImpact.toFixed(2)}%`);
                                 }
                             }
                         }
@@ -7911,23 +7911,23 @@
                         // Get house room name
                         const houseRoomName = this.getHouseRoomName(actionDetails.type);
                         speedLines.push(
-                            `  - House: +${efficiencyBreakdown.houseEfficiency.toFixed(1)}% (${houseRoomName})`
+                            `  - House: +${efficiencyBreakdown.houseEfficiency.toFixed(2)}% (${houseRoomName})`
                         );
                     }
                     if (efficiencyBreakdown.equipmentEfficiency > 0) {
-                        speedLines.push(`  - Equipment: +${efficiencyBreakdown.equipmentEfficiency.toFixed(1)}%`);
+                        speedLines.push(`  - Equipment: +${efficiencyBreakdown.equipmentEfficiency.toFixed(2)}%`);
                     }
                     if (efficiencyBreakdown.achievementEfficiency > 0) {
-                        speedLines.push(`  - Achievement: +${efficiencyBreakdown.achievementEfficiency.toFixed(1)}%`);
+                        speedLines.push(`  - Achievement: +${efficiencyBreakdown.achievementEfficiency.toFixed(2)}%`);
                     }
                     // Break out individual teas - show BASE efficiency on main line, DC as sub-line
                     if (efficiencyBreakdown.teaBreakdown && efficiencyBreakdown.teaBreakdown.length > 0) {
                         for (const tea of efficiencyBreakdown.teaBreakdown) {
                             // Show BASE efficiency (without DC scaling) on main line
-                            speedLines.push(`  - ${tea.name}: +${tea.baseEfficiency.toFixed(1)}%`);
+                            speedLines.push(`  - ${tea.name}: +${tea.baseEfficiency.toFixed(2)}%`);
                             // Show DC contribution as sub-line if > 0
                             if (tea.dcContribution > 0) {
-                                speedLines.push(`    - Drink Concentration: +${tea.dcContribution.toFixed(1)}%`);
+                                speedLines.push(`    - Drink Concentration: +${tea.dcContribution.toFixed(2)}%`);
                             }
                         }
                     }
@@ -7936,11 +7936,11 @@
                             '/community_buff_types/production_efficiency'
                         );
                         speedLines.push(
-                            `  - Community: +${efficiencyBreakdown.communityEfficiency.toFixed(1)}% (Production Efficiency T${communityBuffLevel})`
+                            `  - Community: +${efficiencyBreakdown.communityEfficiency.toFixed(2)}% (Production Efficiency T${communityBuffLevel})`
                         );
                     }
                     if (efficiencyBreakdown.personalEfficiency > 0) {
-                        speedLines.push(`  - Seal: +${efficiencyBreakdown.personalEfficiency.toFixed(1)}%`);
+                        speedLines.push(`  - Seal: +${efficiencyBreakdown.personalEfficiency.toFixed(2)}%`);
                     }
 
                     // Total time (dynamic)
@@ -8710,18 +8710,18 @@
                 const lines = [];
 
                 // Current level and progress
-                lines.push(`Current: Level ${currentLevel} | ${progressPercent.toFixed(1)}% to Level ${nextLevel}`);
+                lines.push(`Current: Level ${currentLevel} | ${progressPercent.toFixed(2)}% to Level ${nextLevel}`);
                 lines.push('');
 
                 // Action details
                 lines.push(
-                    `XP per action: ${formatters_js.formatWithSeparator(baseXP.toFixed(1))} base → ${formatters_js.formatWithSeparator(modifiedXP.toFixed(1))} (×${xpData.totalMultiplier.toFixed(2)})`
+                    `XP per action: ${formatters_js.formatWithSeparator(baseXP.toFixed(2))} base → ${formatters_js.formatWithSeparator(modifiedXP.toFixed(2))} (×${xpData.totalMultiplier.toFixed(2)})`
                 );
 
                 // XP breakdown (if any bonuses exist)
                 if (xpData.totalWisdom > 0 || xpData.charmExperience > 0) {
                     const totalXPBonus = xpData.totalWisdom + xpData.charmExperience;
-                    lines.push(`  Total XP Bonus: +${totalXPBonus.toFixed(1)}%`);
+                    lines.push(`  Total XP Bonus: +${totalXPBonus.toFixed(2)}%`);
 
                     // List all sources that contribute
 
@@ -8729,7 +8729,7 @@
                     if (xpData.charmBreakdown && xpData.charmBreakdown.length > 0) {
                         for (const item of xpData.charmBreakdown) {
                             const enhText = item.enhancementLevel > 0 ? ` +${item.enhancementLevel}` : '';
-                            lines.push(`    • ${item.name}${enhText}: +${item.value.toFixed(1)}%`);
+                            lines.push(`    • ${item.name}${enhText}: +${item.value.toFixed(2)}%`);
                         }
                     }
 
@@ -8737,33 +8737,33 @@
                     if (xpData.wisdomBreakdown && xpData.wisdomBreakdown.length > 0) {
                         for (const item of xpData.wisdomBreakdown) {
                             const enhText = item.enhancementLevel > 0 ? ` +${item.enhancementLevel}` : '';
-                            lines.push(`    • ${item.name}${enhText}: +${item.value.toFixed(1)}%`);
+                            lines.push(`    • ${item.name}${enhText}: +${item.value.toFixed(2)}%`);
                         }
                     }
 
                     // House rooms
                     if (xpData.breakdown.houseWisdom > 0) {
-                        lines.push(`    • House Rooms: +${xpData.breakdown.houseWisdom.toFixed(1)}%`);
+                        lines.push(`    • House Rooms: +${xpData.breakdown.houseWisdom.toFixed(2)}%`);
                     }
 
                     // Community buff
                     if (xpData.breakdown.communityWisdom > 0) {
-                        lines.push(`    • Community Buff: +${xpData.breakdown.communityWisdom.toFixed(1)}%`);
+                        lines.push(`    • Community Buff: +${xpData.breakdown.communityWisdom.toFixed(2)}%`);
                     }
 
                     // Tea/Coffee
                     if (xpData.breakdown.consumableWisdom > 0) {
-                        lines.push(`    • Wisdom Tea: +${xpData.breakdown.consumableWisdom.toFixed(1)}%`);
+                        lines.push(`    • Wisdom Tea: +${xpData.breakdown.consumableWisdom.toFixed(2)}%`);
                     }
 
                     // Achievement wisdom
                     if (xpData.breakdown.achievementWisdom > 0) {
-                        lines.push(`    • Achievement: +${xpData.breakdown.achievementWisdom.toFixed(1)}%`);
+                        lines.push(`    • Achievement: +${xpData.breakdown.achievementWisdom.toFixed(2)}%`);
                     }
 
                     // Personal buff (Seal of Wisdom)
                     if (xpData.breakdown.personalWisdom > 0) {
-                        lines.push(`    • Seal of Wisdom: +${xpData.breakdown.personalWisdom.toFixed(1)}%`);
+                        lines.push(`    • Seal of Wisdom: +${xpData.breakdown.personalWisdom.toFixed(2)}%`);
                     }
                 }
 

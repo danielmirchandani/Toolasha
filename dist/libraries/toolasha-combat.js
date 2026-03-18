@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.42.1
+ * Version: 1.42.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1434,15 +1434,15 @@
 
 
     const CSS_PREFIX = 'mwi-loadout';
-    const STORAGE_KEY_PREFIX = 'loadout_sortOrder';
+    const STORAGE_KEY_PREFIX$1 = 'loadout_sortOrder';
 
     /**
      * Get character-scoped storage key for loadout sort order.
      * @returns {string}
      */
-    function getStorageKey() {
+    function getStorageKey$1() {
         const charId = dataManager.getCurrentCharacterId() || 'default';
-        return `${STORAGE_KEY_PREFIX}_${charId}`;
+        return `${STORAGE_KEY_PREFIX$1}_${charId}`;
     }
 
     class LoadoutSort {
@@ -1506,7 +1506,7 @@
          * @param {HTMLElement} containerEl
          */
         async _applyStoredOrder(containerEl) {
-            const savedOrder = await storage.getJSON(getStorageKey(), 'settings', null);
+            const savedOrder = await storage.getJSON(getStorageKey$1(), 'settings', null);
             if (!savedOrder || !Array.isArray(savedOrder) || savedOrder.length === 0) return;
 
             const loadoutEls = Array.from(containerEl.querySelectorAll('[class*="LoadoutsPanel_characterLoadout"]'));
@@ -1645,7 +1645,7 @@
         _saveOrder(containerEl) {
             const loadoutEls = Array.from(containerEl.querySelectorAll('[class*="LoadoutsPanel_characterLoadout"]'));
             const order = loadoutEls.map((el) => this._buildIdentifier(el));
-            storage.setJSON(getStorageKey(), order, 'settings');
+            storage.setJSON(getStorageKey$1(), order, 'settings');
         }
 
         disable() {
@@ -6982,8 +6982,17 @@
      */
 
 
-    const STORAGE_KEY = 'monsterBestLevels';
+    const STORAGE_KEY_PREFIX = 'monsterBestLevels';
     const STORE_NAME = 'labyrinth';
+    /**
+     * Get character-scoped storage key for labyrinth best levels.
+     * @returns {string}
+     */
+    function getStorageKey() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX}_${charId}`;
+    }
+
     const COMBAT_ROOM_TYPE = '/labyrinth_room_types/combat';
     const SKILLING_ROOM_TYPE = '/labyrinth_room_types/skilling';
 
@@ -7068,8 +7077,11 @@
                     const wasTrackable =
                         (prev.roomType === COMBAT_ROOM_TYPE || prev.roomType === SKILLING_ROOM_TYPE) && !prev.isCleared;
                     const isNowCleared = curr.isCleared === true;
+                    // Shrouded rooms go straight to cleared without entryCount;
+                    // naturally cleared rooms always had entryCount set first
+                    const wasEntered = prev.entryCount > 0;
 
-                    if (wasTrackable && isNowCleared) {
+                    if (wasTrackable && isNowCleared && wasEntered) {
                         this.recordClear(prev);
                     }
                 }
@@ -7119,7 +7131,7 @@
          */
         async loadData() {
             try {
-                const data = await storage.getJSON(STORAGE_KEY, STORE_NAME, {});
+                const data = await storage.getJSON(getStorageKey(), STORE_NAME, {});
                 this.monsterBestLevels = data || {};
             } catch (error) {
                 console.error('[LabyrinthTracker] Failed to load data:', error);
@@ -7132,7 +7144,7 @@
          */
         async saveData() {
             try {
-                await storage.setJSON(STORAGE_KEY, this.monsterBestLevels, STORE_NAME, true);
+                await storage.setJSON(getStorageKey(), this.monsterBestLevels, STORE_NAME, true);
             } catch (error) {
                 console.error('[LabyrinthTracker] Failed to save data:', error);
             }
