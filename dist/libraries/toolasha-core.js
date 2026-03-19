@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.42.3
+ * Version: 1.43.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -21,7 +21,7 @@
             this.db = null;
             this.available = false;
             this.dbName = 'ToolashaDB';
-            this.dbVersion = 12; // Bumped for guildHistory store
+            this.dbVersion = 13; // Bumped for networthHistory store
             this.saveDebounceTimers = new Map(); // Per-key debounce timers
             this.pendingWrites = new Map(); // Per-key pending write data: {value, storeName}
             this.SAVE_DEBOUNCE_DELAY = 3000; // 3 seconds
@@ -155,6 +155,11 @@
                     // Create guildHistory store if it doesn't exist (for guild XP tracker)
                     if (!db.objectStoreNames.contains('guildHistory')) {
                         db.createObjectStore('guildHistory');
+                    }
+
+                    // Create networthHistory store if it doesn't exist (for networth chart)
+                    if (!db.objectStoreNames.contains('networthHistory')) {
+                        db.createObjectStore('networthHistory');
                     }
                 };
             });
@@ -981,6 +986,13 @@
                     type: 'checkbox',
                     default: false,
                     help: 'Move ability books from Fixed Assets to Current Assets inventory value. Useful if you plan to sell them.',
+                },
+                networth_historyChart: {
+                    id: 'networth_historyChart',
+                    label: 'Enable networth history chart',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Records hourly networth snapshots and shows a chart icon next to Total Networth. Disable to stop tracking and hide the chart button.',
                 },
                 autoAllButton: {
                     id: 'autoAllButton',
