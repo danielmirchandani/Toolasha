@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.44.7
+ * Version: 1.45.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -939,6 +939,7 @@
                         { value: 'conservative', label: 'Conservative (Ask/Bid - instant trading)' },
                         { value: 'hybrid', label: 'Hybrid (Ask/Ask - instant buy, patient sell)' },
                         { value: 'optimistic', label: 'Optimistic (Bid/Ask - patient trading)' },
+                        { value: 'patientBuy', label: 'Patient Buy (Bid/Bid - patient buy, instant sell)' },
                     ],
                 },
                 actions_artisanMaterialMode: {
@@ -1209,6 +1210,13 @@
                     type: 'checkbox',
                     default: false,
                     help: 'Colors efficiency ratings relative to visible tasks.',
+                },
+                taskQueuedIndicator: {
+                    id: 'taskQueuedIndicator',
+                    label: 'Show "Queued" indicator on task cards',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Displays a status message on task cards when their action is in your action queue',
                 },
                 taskRerollTracker: {
                     id: 'taskRerollTracker',
@@ -3784,6 +3792,29 @@
                     }
                 }
             }
+        }
+
+        /**
+         * Find the combat zone actionHrid that contains a given monster
+         * @param {string} monsterHrid - Monster HRID (e.g., "/monsters/bear")
+         * @returns {string|null} Zone actionHrid or null
+         */
+        getCombatZoneForMonster(monsterHrid) {
+            if (!this.initClientData?.actionDetailMap) return null;
+
+            for (const [zoneHrid, action] of Object.entries(this.initClientData.actionDetailMap)) {
+                if (action.type !== '/action_types/combat') continue;
+
+                const spawns = action.combatZoneInfo?.fightInfo?.randomSpawnInfo?.spawns || [];
+                const bosses = action.combatZoneInfo?.fightInfo?.bossSpawns || [];
+
+                for (const spawn of [...spawns, ...bosses]) {
+                    if (spawn.combatMonsterHrid === monsterHrid) {
+                        return zoneHrid;
+                    }
+                }
+            }
+            return null;
         }
 
         /**

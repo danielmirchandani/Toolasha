@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.44.7
+ * Version: 1.45.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -10816,6 +10816,7 @@
                                     conservative: 'Conservative',
                                     hybrid: 'Hybrid',
                                     optimistic: 'Optimistic',
+                                    patientBuy: 'Patient Buy',
                                 };
                                 const pricingNote = document.createElement('div');
                                 pricingNote.style.cssText = `

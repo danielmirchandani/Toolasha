@@ -1,7 +1,7 @@
 /**
  * Toolasha Utils Library
  * All utility modules
- * Version: 1.44.7
+ * Version: 1.45.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1805,8 +1805,8 @@
 
             let marketPrice = 0;
             if (respectPricingMode) {
-                // Conservative: Bid, Hybrid/Optimistic: Ask
-                marketPrice = pricingMode === 'conservative' ? prices.bid : prices.ask;
+                // Conservative/Patient Buy: Bid, Hybrid/Optimistic: Ask
+                marketPrice = pricingMode === 'conservative' || pricingMode === 'patientBuy' ? prices.bid : prices.ask;
             } else {
                 // Always conservative
                 marketPrice = prices.bid;
@@ -1841,7 +1841,10 @@
 
                     let marketPrice = 0;
                     if (respectPricingMode) {
-                        marketPrice = pricingMode === 'conservative' ? essencePrice.bid : essencePrice.ask;
+                        marketPrice =
+                            pricingMode === 'conservative' || pricingMode === 'patientBuy'
+                                ? essencePrice.bid
+                                : essencePrice.ask;
                     } else {
                         marketPrice = essencePrice.bid;
                     }
@@ -2059,6 +2062,7 @@
                 // Conservative: Ask/Bid (instant buy materials, instant sell output)
                 // Hybrid: Ask/Ask (instant buy materials, patient sell output)
                 // Optimistic: Bid/Ask (patient buy materials, patient sell output)
+                // Patient Buy: Bid/Bid (patient buy materials, instant sell output)
                 let selectedPriceType;
                 switch (profitMode) {
                     case 'conservative':
@@ -2069,6 +2073,9 @@
                         break;
                     case 'optimistic':
                         selectedPriceType = side === 'buy' ? 'bid' : 'ask';
+                        break;
+                    case 'patientBuy':
+                        selectedPriceType = 'bid'; // Bid for both buy and sell
                         break;
                     default:
                         selectedPriceType = 'ask';
@@ -6447,8 +6454,8 @@ self.onmessage = function (e) {
         const pricingMode = config.getSettingValue(modeSetting, 'conservative');
         const respectPricingMode = config.getSettingValue(respectSetting, true);
 
-        // If not respecting mode or mode is conservative, always use bid
-        if (!respectPricingMode || pricingMode === 'conservative') {
+        // If not respecting mode or mode is conservative/patientBuy, always use bid
+        if (!respectPricingMode || pricingMode === 'conservative' || pricingMode === 'patientBuy') {
             return priceData.bid || 0;
         }
 

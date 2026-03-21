@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.44.7
+ * Version: 1.45.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2198,6 +2198,7 @@
                 conservative: 'Conservative',
                 hybrid: 'Hybrid',
                 optimistic: 'Optimistic',
+                patientBuy: 'Patient Buy',
             }[pricingMode] || 'Hybrid';
 
         const modeDiv = document.createElement('div');
@@ -2799,6 +2800,7 @@
                 conservative: 'Conservative',
                 hybrid: 'Hybrid',
                 optimistic: 'Optimistic',
+                patientBuy: 'Patient Buy',
             }[pricingMode] || 'Hybrid';
 
         const modeDiv = document.createElement('div');
@@ -16732,6 +16734,7 @@
                     conservative: 'Conservative',
                     hybrid: 'Hybrid',
                     optimistic: 'Optimistic',
+                    patientBuy: 'Patient Buy',
                 }[pricingMode] || 'Hybrid';
 
             const modeDiv = document.createElement('div');
