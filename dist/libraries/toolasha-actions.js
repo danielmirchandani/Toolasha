@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.44.4
+ * Version: 1.44.5
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -15899,6 +15899,18 @@
             };
             dataManager.on('items_updated', this.equipmentChangeHandler);
 
+            // Listen for tea/drink slot changes
+            this.consumablesChangeHandler = () => {
+                clearTimeout(this.consumablesChangeTimeout);
+                this.consumablesChangeTimeout = setTimeout(() => {
+                    if (this.isActive) {
+                        this.lastFingerprint = null;
+                        this.checkAndUpdateDisplay();
+                    }
+                }, 300);
+            };
+            dataManager.on('consumables_updated', this.consumablesChangeHandler);
+
             this.isActive = true;
         }
 
@@ -17239,6 +17251,16 @@
             if (this.equipmentChangeHandler) {
                 dataManager.off('items_updated', this.equipmentChangeHandler);
                 this.equipmentChangeHandler = null;
+            }
+
+            if (this.consumablesChangeTimeout) {
+                clearTimeout(this.consumablesChangeTimeout);
+                this.consumablesChangeTimeout = null;
+            }
+
+            if (this.consumablesChangeHandler) {
+                dataManager.off('consumables_updated', this.consumablesChangeHandler);
+                this.consumablesChangeHandler = null;
             }
 
             if (this.contentObserver) {
