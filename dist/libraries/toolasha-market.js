@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.44.5
+ * Version: 1.44.6
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -13803,6 +13803,9 @@ self.onmessage = function (e) {
          * @param {HTMLElement} actionMenu - The Item_actionMenu element
          */
         injectDropdown(actionMenu) {
+            // Check if feature is enabled
+            if (!config.getSetting('market_marketplaceShortcuts')) return;
+
             // Skip if already injected
             if (actionMenu.querySelector('.mwi-marketplace-dropdown')) {
                 return;

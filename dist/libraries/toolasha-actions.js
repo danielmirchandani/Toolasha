@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.44.5
+ * Version: 1.44.6
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -9718,6 +9718,7 @@
             data.profitPerHour = resolvedProfitPerHour;
             data.expPerHour = expPerHour;
             data.hasMissingPrices = hasMissingPrices;
+            data.outputPriceEstimated = outputPriceEstimated;
             actionPanelSort.updateExpPerHour(actionPanel, expPerHour);
 
             // Build display HTML using .mwi-action-stat-line divs so fitLineFontSizes
@@ -9827,10 +9828,11 @@
                     continue;
                 }
 
-                const { profitPerHour, expPerHour, hasMissingPrices } = data;
+                const { profitPerHour, expPerHour, hasMissingPrices, outputPriceEstimated } = data;
+                const unreliablePrice = hasMissingPrices || outputPriceEstimated;
 
-                // Skip actions with missing prices for profit comparison
-                if (!hasMissingPrices && profitPerHour !== null && profitPerHour > 0) {
+                // Skip actions with missing or estimated prices for profit comparison
+                if (!unreliablePrice && profitPerHour !== null && profitPerHour > 0) {
                     if (bestProfit === null || profitPerHour > bestProfit) {
                         bestProfit = profitPerHour;
                         bestProfitPanels = [actionPanel];
@@ -9851,7 +9853,7 @@
 
                 // Find best overall (profit × exp product)
                 if (
-                    !hasMissingPrices &&
+                    !unreliablePrice &&
                     profitPerHour !== null &&
                     profitPerHour > 0 &&
                     expPerHour !== null &&
@@ -10322,6 +10324,7 @@
             // Calculate profit/hr
             const profitData = await calculateGatheringProfit(data.actionHrid);
             const profitPerHour = profitData?.profitPerHour || null;
+            const hasMissingPrices = profitData?.hasMissingPrices || false;
 
             // Calculate exp/hr using shared utility
             const expData = experienceCalculator_js.calculateExpPerHour(data.actionHrid);
@@ -10330,6 +10333,7 @@
             // Store profit value for sorting and update shared sort manager
             data.profitPerHour = profitPerHour;
             data.expPerHour = expPerHour;
+            data.hasMissingPrices = hasMissingPrices;
             actionPanelSort.updateProfit(actionPanel, profitPerHour);
             actionPanelSort.updateExpPerHour(actionPanel, expPerHour);
 
@@ -10419,10 +10423,10 @@
                     continue;
                 }
 
-                const { profitPerHour, expPerHour } = data;
+                const { profitPerHour, expPerHour, hasMissingPrices } = data;
 
-                // Find best profit/hr (allow negative to still mark highest)
-                if (profitPerHour !== null) {
+                // Skip actions with missing prices for profit comparison
+                if (!hasMissingPrices && profitPerHour !== null) {
                     if (bestProfit === null || profitPerHour > bestProfit) {
                         bestProfit = profitPerHour;
                         bestProfitPanels = [actionPanel];
@@ -10442,7 +10446,7 @@
                 }
 
                 // Find best overall (profit × exp product)
-                if (profitPerHour !== null && expPerHour !== null && expPerHour > 0) {
+                if (!hasMissingPrices && profitPerHour !== null && expPerHour !== null && expPerHour > 0) {
                     const overallValue = profitPerHour * expPerHour;
                     if (bestOverall === null || overallValue > bestOverall) {
                         bestOverall = overallValue;

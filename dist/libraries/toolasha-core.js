@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.44.5
+ * Version: 1.44.6
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1401,6 +1401,13 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Adds 10, 100, 1000 preset quantity buttons to buy/sell dialogs',
+                },
+                market_marketplaceShortcuts: {
+                    id: 'market_marketplaceShortcuts',
+                    label: 'Marketplace: Show "Marketplace Action" button on item menus',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Adds a Marketplace Action dropdown to item menus with Sell Now, Buy Now, and listing shortcuts',
                 },
                 market_visibleItemCount: {
                     id: 'market_visibleItemCount',
