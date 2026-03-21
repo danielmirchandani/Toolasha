@@ -1,7 +1,7 @@
 /**
  * Toolasha Utils Library
  * All utility modules
- * Version: 1.45.0
+ * Version: 1.45.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -4614,7 +4614,6 @@ self.onmessage = function (e) {
      * @param {string} options.actionHrid - Action HRID for task detection (optional)
      * @param {boolean} options.includeCommunityBuff - Include community buff in efficiency (default: false)
      * @param {boolean} options.includeBreakdown - Include detailed breakdown data (default: false)
-     * @param {boolean} options.floorActionLevel - Floor Action Level bonus for requirement calculation (default: true)
      * @param {number} options.levelRequirementOverride - Override base level requirement (e.g., item level for alchemy)
      * @returns {Object} { actionTime, totalEfficiency, breakdown? }
      */
@@ -4626,7 +4625,6 @@ self.onmessage = function (e) {
             actionHrid,
             includeCommunityBuff = false,
             includeBreakdown = false,
-            floorActionLevel = true,
             levelRequirementOverride,
         } = options;
 
@@ -4670,11 +4668,8 @@ self.onmessage = function (e) {
             }
 
             // Calculate effective requirement
-            // Note: floorActionLevel flag for compatibility
-            // - quick-input-buttons uses Math.floor (can't have fractional level requirements)
-            // - action-time-display historically didn't floor (preserving for compatibility)
-            const effectiveRequirement =
-                baseRequirement + (floorActionLevel ? Math.floor(actionLevelBonus) : actionLevelBonus);
+            // Game uses full fractional action level bonus (no flooring)
+            const effectiveRequirement = baseRequirement + actionLevelBonus;
 
             // Calculate tea skill level bonus (e.g., +8 Cheesesmithing from Ultra Cheesesmithing Tea)
             const teaSkillLevelBonus = parseTeaSkillLevelBonus(
@@ -5141,7 +5136,6 @@ self.onmessage = function (e) {
             itemDetailMap: gameData.itemDetailMap,
             includeCommunityBuff: true,
             includeBreakdown: false,
-            floorActionLevel: true,
         });
 
         if (!stats) {
