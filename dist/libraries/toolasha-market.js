@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.45.3
+ * Version: 1.46.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -13865,8 +13865,32 @@ self.onmessage = function (e) {
             }
             toggle.classList.add('mwi-marketplace-dropdown-toggle');
             toggle.style.cssText = 'display: flex; justify-content: space-between; align-items: center; width: 100%;';
+            // Build top ask age subtitle if order book data is cached
+            let ageHtml = '';
+            const cacheEntry = estimatedListingAge.orderBooksCache[itemHrid];
+            if (cacheEntry) {
+                const orderBookData = cacheEntry.data || cacheEntry;
+                const orderBooks = orderBookData?.orderBooks;
+                if (orderBooks) {
+                    // Handle both array format (index = enhancement level) and object format
+                    const orderBook = Array.isArray(orderBooks)
+                        ? orderBooks[enhancementLevel]
+                        : orderBooks[enhancementLevel];
+                    const topAsk = orderBook?.asks?.[0];
+                    if (topAsk?.createdTimestamp) {
+                        const ageMs = Date.now() - new Date(topAsk.createdTimestamp).getTime();
+                        if (ageMs > 0) {
+                            const ageStr = formatters_js.formatRelativeTime(ageMs);
+                            ageHtml = `<div style="font-size: 0.7em; opacity: 0.7; margin-top: 1px;">Top ask: ~${ageStr}</div>`;
+                        }
+                    }
+                }
+            }
+
             toggle.innerHTML =
-                '<span style="flex: 1; text-align: center;">Marketplace Action</span>' +
+                '<span style="flex: 1; text-align: center;">Marketplace Action' +
+                ageHtml +
+                '</span>' +
                 '<span class="mwi-mp-chevron" style="font-size: 0.65em; transition: transform 0.15s; display: inline-block;">▼</span>';
 
             // Create dropdown panel (hidden by default)
@@ -13925,6 +13949,17 @@ self.onmessage = function (e) {
                     e.stopPropagation();
                     e.preventDefault();
                     closePanel();
+                    // Dismiss the game's action menu by simulating Escape
+                    document.dispatchEvent(
+                        new KeyboardEvent('keydown', {
+                            key: 'Escape',
+                            code: 'Escape',
+                            keyCode: 27,
+                            which: 27,
+                            bubbles: true,
+                            cancelable: true,
+                        })
+                    );
                     this.executeAction(action.type, itemHrid, enhancementLevel);
                 });
                 panel.appendChild(btn);
@@ -13971,6 +14006,20 @@ self.onmessage = function (e) {
                 const qty = parseInt(amountInput.value, 10);
                 if (qty > 0) {
                     this.pendingQuantity = qty;
+                }
+            }
+
+            // If no quantity was captured, default to inventory count for sell actions
+            if (!this.pendingQuantity && (actionType === 'sell' || actionType === 'sell-listing')) {
+                const inventory = dataManager.characterItems || [];
+                const match = inventory.find(
+                    (item) =>
+                        item.itemHrid === itemHrid &&
+                        (item.enhancementLevel || 0) === enhancementLevel &&
+                        item.itemLocationHrid === '/item_locations/inventory'
+                );
+                if (match && match.count > 0) {
+                    this.pendingQuantity = match.count;
                 }
             }
 
