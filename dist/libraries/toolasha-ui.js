@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.46.0
+ * Version: 1.46.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -853,7 +853,11 @@
             game.handleGoToAction(actionInfo.actionHrid);
             return true;
         } else if (game.handleOpenItemDictionary) {
-            // Fallback to item dictionary
+            // Validate HRID exists before passing to game (invalid HRIDs crash renderDescription)
+            const itemDetails = dataManager.getItemDetails(itemHrid);
+            if (!itemDetails) {
+                return false;
+            }
             game.handleOpenItemDictionary(itemHrid);
             return true;
         }
@@ -1228,7 +1232,8 @@
             const dictBtn = this.createNavButton('Item Dictionary', () => {
                 this.dismissPopover();
                 const game = getGameObject$1();
-                if (game?.handleOpenItemDictionary) {
+                const itemDetails = dataManager.getItemDetails(itemHrid);
+                if (game?.handleOpenItemDictionary && itemDetails) {
                     game.handleOpenItemDictionary(itemHrid);
                 }
             });
@@ -1322,7 +1327,8 @@
 
             const dictBtn = this.createNavButton('Item Dictionary', () => {
                 const game = getGameObject$1();
-                if (game?.handleOpenItemDictionary) {
+                const itemDetails = dataManager.getItemDetails(itemHrid);
+                if (game?.handleOpenItemDictionary && itemDetails) {
                     game.handleOpenItemDictionary(itemHrid);
                 }
             });
