@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.47.2
+ * Version: 1.47.3
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -7067,7 +7067,7 @@
             }
 
             // Deep-copy to snapshot current state
-            this.prevRoomData = roomData.map((row) => row.map((cell) => ({ ...cell })));
+            this.prevRoomData = roomData.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
         }
 
         /**
@@ -7239,6 +7239,17 @@
             );
             this.unregisterHandlers.push(unregister);
 
+            // Watch for skip threshold cells to appear and inject badges
+            const unregisterSkip = domObserver.onClass(
+                'LabyrinthBestLevel_skipThreshold',
+                'LabyrinthPanel_skipThreshold',
+                () => this.refreshAll()
+            );
+            this.unregisterHandlers.push(unregisterSkip);
+
+            // Catch cells that were already in the DOM before observers registered
+            this.catchupTimer = setTimeout(() => this.refreshAll(), 500);
+
             // Re-inject all badges when tracker records a new best
             this.updateHandler = () => this.refreshAll();
             labyrinthTracker.onUpdate(this.updateHandler);
@@ -7250,6 +7261,11 @@
          * Disable and clean up
          */
         disable() {
+            if (this.catchupTimer) {
+                clearTimeout(this.catchupTimer);
+                this.catchupTimer = null;
+            }
+
             if (this.updateHandler) {
                 labyrinthTracker.offUpdate(this.updateHandler);
                 this.updateHandler = null;
@@ -7293,6 +7309,11 @@
             };
 
             automationBtn.addEventListener('click', this.automationClickHandler);
+
+            // If the Automation tab is already active, inject badges immediately
+            if (automationBtn.getAttribute('aria-selected') === 'true') {
+                setTimeout(() => this.refreshAll(), 100);
+            }
         }
 
         /**
