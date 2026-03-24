@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.47.1
+ * Version: 1.47.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2789,6 +2789,7 @@ self.onmessage = function (e) {
                 totalTime: optimalTraditional.totalTime,
                 baseCost: optimalTraditional.baseCost,
                 materialCost: optimalTraditional.materialCost,
+                materialBreakdown: optimalTraditional.materialBreakdown,
                 protectionCost: optimalTraditional.protectionCost,
                 protectionItemHrid: optimalTraditional.protectionItemHrid,
                 protectionCount: optimalTraditional.protectionCount,
@@ -3002,6 +3003,7 @@ self.onmessage = function (e) {
         // Calculate per-action material cost (same for all enhancement levels)
         // enhancementCosts is a flat array of materials needed per attempt
         let perActionCost = 0;
+        const materialBreakdown = [];
         if (itemDetails.enhancementCosts) {
             for (const material of itemDetails.enhancementCosts) {
                 const materialDetail = gameData.itemDetailMap[material.itemHrid];
@@ -3034,6 +3036,16 @@ self.onmessage = function (e) {
                     }
                 }
                 perActionCost += price * material.count;
+
+                const totalQuantity = material.count * pathResult.attempts;
+                materialBreakdown.push({
+                    itemHrid: material.itemHrid,
+                    name: materialDetail?.name || material.itemHrid,
+                    countPerAction: material.count,
+                    totalQuantity,
+                    unitPrice: price,
+                    totalCost: price * totalQuantity,
+                });
             }
         }
 
@@ -3059,6 +3071,7 @@ self.onmessage = function (e) {
         return {
             baseCost,
             materialCost,
+            materialBreakdown,
             protectionCost,
             protectionItemHrid,
             protectionCount,
@@ -3315,6 +3328,27 @@ self.onmessage = function (e) {
             // Traditional (non-mirror) breakdown
             html += 'Base Item: ' + formatters_js.formatLargeNumber(optimalStrategy.baseCost);
             html += '<br>Materials: ' + formatters_js.formatLargeNumber(optimalStrategy.materialCost);
+
+            // Per-item material breakdown
+            if (optimalStrategy.materialBreakdown && optimalStrategy.materialBreakdown.length > 0) {
+                html += '<div style="margin-left: 12px;">';
+                optimalStrategy.materialBreakdown.forEach((mat, index) => {
+                    if (index > 0) html += '<br>';
+                    if (mat.itemHrid === '/items/coin') {
+                        html += mat.name + ': ' + formatters_js.formatLargeNumber(mat.totalCost);
+                    } else {
+                        html +=
+                            mat.name +
+                            ': ' +
+                            formatters_js.formatLargeNumber(mat.totalQuantity.toFixed(1)) +
+                            ' × ' +
+                            formatters_js.formatLargeNumber(mat.unitPrice) +
+                            ' = ' +
+                            formatters_js.formatLargeNumber(mat.totalCost);
+                    }
+                });
+                html += '</div>';
+            }
 
             if (optimalStrategy.protectionCost > 0) {
                 let protectionDisplay = formatters_js.formatLargeNumber(optimalStrategy.protectionCost);
