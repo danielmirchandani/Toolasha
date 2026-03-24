@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.47.4
+ * Version: 1.48.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -13863,6 +13863,7 @@ self.onmessage = function (e) {
             const unregisterModal = domObserver.onClass('MarketplaceShortcuts_modal', 'Modal_modalContainer', (modal) => {
                 this.autofillQuantity(modal);
                 this.injectQuickInputButtons(modal);
+                this.focusQuantityInput(modal);
             });
             this.unregisterHandlers.push(unregisterModal);
         }
@@ -14223,6 +14224,35 @@ self.onmessage = function (e) {
                 nativeInputValueSetter.call(quantityInput, qty.toString());
                 quantityInput.dispatchEvent(new Event('input', { bubbles: true }));
             }, 100);
+        }
+
+        /**
+         * Auto-focus the quantity input when a marketplace modal opens.
+         * Runs after autofill to avoid interfering with value setting.
+         * @param {HTMLElement} modal - Modal container element
+         */
+        focusQuantityInput(modal) {
+            const header = modal.querySelector('div[class*="MarketplacePanel_header"]');
+            if (!header) return;
+
+            const headerText = header.textContent.trim();
+            if (
+                !headerText.includes('Buy Now') &&
+                !headerText.includes('Buy Listing')
+                // !headerText.includes('Sell Now') &&
+                // !headerText.includes('Sell Listing')
+            ) {
+                return;
+            }
+
+            // Delay to run after autofill (100ms) and quick input injection
+            setTimeout(() => {
+                const quantityInput = this.findQuantityInput(modal);
+                if (quantityInput) {
+                    quantityInput.focus();
+                    quantityInput.select();
+                }
+            }, 150);
         }
 
         /**

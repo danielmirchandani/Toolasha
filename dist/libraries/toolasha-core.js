@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.47.4
+ * Version: 1.48.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -675,7 +675,7 @@
                     label: 'Show profit comparison for all item actions',
                     type: 'checkbox',
                     default: false,
-                    help: 'Displays best profit/hr highlighted, with other profitable actions (craft, coinify, decompose, transmute) summarized below',
+                    help: 'Displays best profit/hr highlighted, with other alternative actions (craft, coinify, decompose, transmute) summarized below',
                 },
                 itemTooltip_expectedValue: {
                     id: 'itemTooltip_expectedValue',
