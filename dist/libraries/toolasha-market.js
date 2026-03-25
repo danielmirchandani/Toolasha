@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.49.0
+ * Version: 1.49.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -3402,7 +3402,8 @@ self.onmessage = function (e) {
         if (itemHrid) {
             const marketPrice = marketData_js.getItemPrices(itemHrid, targetLevel);
             if (marketPrice && marketPrice.ask > 0) {
-                totalColor = optimalStrategy.totalCost < marketPrice.ask ? '#4ade80' : '#f87171';
+                totalColor =
+                    optimalStrategy.totalCost < marketPrice.ask ? config.COLOR_TOOLTIP_PROFIT : config.COLOR_TOOLTIP_LOSS;
             }
         }
         const totalStyle = 'font-weight: bold; margin-top: 4px;' + (totalColor ? ' color: ' + totalColor + ';' : '');
