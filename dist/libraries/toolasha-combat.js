@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.49.3
+ * Version: 1.49.4
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -8768,9 +8768,7 @@
                     hrid: item.itemHrid,
                 };
 
-                if (typeof item.enhancementLevel === 'number' && item.enhancementLevel > 0) {
-                    equipment.enhanceLevel = item.enhancementLevel;
-                }
+                equipment.enhanceLevel = item.enhancementLevel > 0 ? item.enhancementLevel : null;
 
                 return equipment;
             }
