@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.51.0
+ * Version: 1.52.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2298,6 +2298,8 @@
         const profitSection = uiComponents_js.createCollapsibleSection('💰', 'Profitability', summary, topLevelContent, false, 0);
         profitSection.id = 'mwi-foraging-profit';
         profitSection.setAttribute('data-mwi-profit-display', 'true');
+        profitSection.dataset.mwiActionHrid = actionHrid;
+        profitSection.dataset.mwiActionType = 'gathering';
 
         // Get the summary div to update it dynamically
         const profitSummaryDiv = profitSection.querySelector('.mwi-section-header + div');
@@ -2900,6 +2902,8 @@
         const profitSection = uiComponents_js.createCollapsibleSection('💰', 'Profitability', summary, topLevelContent, false, 0);
         profitSection.id = 'mwi-production-profit';
         profitSection.setAttribute('data-mwi-profit-display', 'true');
+        profitSection.dataset.mwiActionHrid = actionHrid;
+        profitSection.dataset.mwiActionType = 'production';
         const profitSummaryDiv = profitSection.querySelector('.mwi-section-header + div');
 
         // Set up listener to update summary with total profit when input changes
@@ -4531,6 +4535,7 @@
             this.filterValue = ''; // Current filter text
             this.filterInput = null; // Reference to the input element
             this.sortButton = null; // Reference to the sort toggle button
+            this.modeButton = null; // Reference to the profit mode toggle button
             this.noResultsMessage = null; // Reference to "No matching actions" message
             this.initialized = false;
             this.timerRegistry = timerRegistry_js.createTimerRegistry();
@@ -4581,6 +4586,7 @@
             this.panels.clear();
             this.filterInput = null;
             this.sortButton = null;
+            this.modeButton = null;
             this.noResultsMessage = null;
 
             // The h1 has display: block from game CSS, need to override it
@@ -4663,6 +4669,41 @@
             });
             input.insertAdjacentElement('afterend', sortBtn);
             this.sortButton = sortBtn;
+
+            // Create profit mode toggle button
+            const PROFIT_MODES = ['hybrid', 'conservative', 'optimistic', 'patientBuy'];
+            const PROFIT_MODE_LABELS = {
+                hybrid: 'Mode: Hybrid',
+                conservative: 'Mode: Conservative',
+                optimistic: 'Mode: Optimistic',
+                patientBuy: 'Mode: Patient Buy',
+            };
+            const modeBtn = document.createElement('button');
+            modeBtn.id = 'mwi-action-profit-mode';
+            const updateModeBtn = () => {
+                const mode = config.getSettingValue('profitCalc_pricingMode', 'hybrid');
+                modeBtn.textContent = PROFIT_MODE_LABELS[mode] || 'Mode: Hybrid';
+            };
+            modeBtn.style.cssText = `
+            padding: 8px 12px;
+            font-size: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.23);
+            border-radius: 4px;
+            background: transparent;
+            cursor: pointer;
+            font-family: inherit;
+            flex-shrink: 0;
+        `;
+            updateModeBtn();
+            modeBtn.addEventListener('click', async () => {
+                const current = config.getSettingValue('profitCalc_pricingMode', 'hybrid');
+                const nextIndex = (PROFIT_MODES.indexOf(current) + 1) % PROFIT_MODES.length;
+                config.setSettingValue('profitCalc_pricingMode', PROFIT_MODES[nextIndex]);
+                updateModeBtn();
+                await this._refreshProfitDisplays();
+            });
+            sortBtn.insertAdjacentElement('afterend', modeBtn);
+            this.modeButton = modeBtn;
 
             // Find the container for action panels to inject "No results" message
             this.setupNoResultsMessage(titleElement);
@@ -4869,6 +4910,11 @@
                 this.sortButton = null;
             }
 
+            if (this.modeButton && this.modeButton.parentElement) {
+                this.modeButton.remove();
+                this.modeButton = null;
+            }
+
             if (this.noResultsMessage && this.noResultsMessage.parentElement) {
                 this.noResultsMessage.remove();
                 this.noResultsMessage = null;
@@ -4902,6 +4948,34 @@
             }
 
             return text || null;
+        }
+
+        /**
+         * Re-render all visible profit sections using the current pricing mode.
+         * Called after the mode button changes profitCalc_pricingMode.
+         */
+        async _refreshProfitDisplays() {
+            const DROP_TABLE_SELECTOR = 'div.SkillActionDetail_dropTable__3ViVp';
+
+            // Snapshot before any re-rendering removes/replaces sections
+            const toRefresh = [];
+            document.querySelectorAll('[data-mwi-action-hrid]').forEach((section) => {
+                const panel = section.closest('div.SkillActionDetail_regularComponent__3oCgr');
+                const actionHrid = section.dataset.mwiActionHrid;
+                const actionType = section.dataset.mwiActionType;
+                if (panel && actionHrid && actionType) {
+                    toRefresh.push({ panel, actionHrid, actionType });
+                }
+            });
+
+            for (const { panel, actionHrid, actionType } of toRefresh) {
+                if (!document.body.contains(panel)) continue;
+                if (actionType === 'gathering') {
+                    await displayGatheringProfit(panel, actionHrid, DROP_TABLE_SELECTOR);
+                } else if (actionType === 'production') {
+                    await displayProductionProfit(panel, actionHrid, DROP_TABLE_SELECTOR);
+                }
+            }
         }
 
         /**
@@ -9370,6 +9444,7 @@
             this.itemsUpdatedHandler = null;
             this.actionCompletedHandler = null;
             this.characterSwitchingHandler = null; // Handler for character switch cleanup
+            this.pricingModeHandler = null; // Handler for pricing mode changes
             this.profitCalcTimeout = null; // Debounce timer for deferred profit calculations
             this.actionNameToHridCache = null; // Cached reverse lookup map (name → hrid)
             this.isInitialized = false;
@@ -9411,6 +9486,11 @@
             // Event-driven updates (no polling needed)
             dataManager.on('items_updated', this.itemsUpdatedHandler);
             dataManager.on('character_switching', this.characterSwitchingHandler);
+
+            this.pricingModeHandler = () => {
+                this.updateAllCounts();
+            };
+            config.onSettingChange('profitCalc_pricingMode', this.pricingModeHandler);
         }
 
         /**
@@ -10110,6 +10190,11 @@
                 this.characterSwitchingHandler = null;
             }
 
+            if (this.pricingModeHandler) {
+                config.offSettingChange('profitCalc_pricingMode', this.pricingModeHandler);
+                this.pricingModeHandler = null;
+            }
+
             // Clear all DOM references
             this.clearAllReferences();
 
@@ -10151,6 +10236,7 @@
             this.actionCompletedHandler = null;
             this.consumablesUpdatedHandler = null; // Handler for tea/drink changes
             this.characterSwitchingHandler = null; // Handler for character switch cleanup
+            this.pricingModeHandler = null; // Handler for pricing mode changes
             this.isInitialized = false;
             this.itemsUpdatedDebounceTimer = null; // Debounce timer for items_updated events
             this.consumablesUpdatedDebounceTimer = null; // Debounce timer for consumables_updated events
@@ -10199,6 +10285,11 @@
             dataManager.on('items_updated', this.itemsUpdatedHandler);
             dataManager.on('consumables_updated', this.consumablesUpdatedHandler);
             dataManager.on('character_switching', this.characterSwitchingHandler);
+
+            this.pricingModeHandler = () => {
+                this.updateAllStats();
+            };
+            config.onSettingChange('profitCalc_pricingMode', this.pricingModeHandler);
         }
 
         /**
@@ -10432,6 +10523,13 @@
 
             // Wait for all updates to complete
             await Promise.all(updatePromises);
+
+            // Re-render the stat text on each panel (skipRender only updated data, not DOM)
+            for (const [actionPanel, data] of this.actionElements.entries()) {
+                if (document.body.contains(actionPanel) && data.displayElement) {
+                    this.renderIndicators(actionPanel, data);
+                }
+            }
 
             // Find best actions and add indicators
             this.scheduleIndicatorUpdate();
@@ -10690,6 +10788,11 @@
             if (this.characterSwitchingHandler) {
                 dataManager.off('character_switching', this.characterSwitchingHandler);
                 this.characterSwitchingHandler = null;
+            }
+
+            if (this.pricingModeHandler) {
+                config.offSettingChange('profitCalc_pricingMode', this.pricingModeHandler);
+                this.pricingModeHandler = null;
             }
 
             // Clear all DOM references
