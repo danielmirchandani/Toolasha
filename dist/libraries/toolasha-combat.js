@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.49.5
+ * Version: 1.50.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -4606,7 +4606,7 @@
         updatePosition(container) {
             const baseStyle = `
             position: fixed;
-            z-index: 9999;
+            z-index: ${config.Z_FLOATING_PANEL};
             background: rgba(0, 0, 0, 0.85);
             border: 2px solid #4a9eff;
             border-radius: 8px;
@@ -5427,6 +5427,60 @@
     }
 
     /**
+     * Floating Panel Z-Index Manager
+     * Manages bring-to-front ordering for persistent floating panels.
+     * All panels are capped below config.Z_FLOATING_PANEL + 99 (1199)
+     * so they never cross the game's MUI modal layer (~1300).
+     */
+
+
+    const panels = new Set();
+
+    /**
+     * Register a floating panel element for z-index management
+     * @param {HTMLElement} el - The panel element
+     */
+    function registerFloatingPanel(el) {
+        panels.add(el);
+    }
+
+    /**
+     * Unregister a floating panel element
+     * @param {HTMLElement} el - The panel element
+     */
+    function unregisterFloatingPanel(el) {
+        panels.delete(el);
+    }
+
+    /**
+     * Bring a panel to the front among all registered panels,
+     * without exceeding config.Z_FLOATING_PANEL + 99.
+     * @param {HTMLElement} el - The panel to bring forward
+     */
+    function bringPanelToFront(el) {
+        const base = config.Z_FLOATING_PANEL;
+        const cap = base + 99;
+
+        let maxZ = base;
+        for (const p of panels) {
+            const z = parseInt(p.style.zIndex) || base;
+            if (z > maxZ) maxZ = z;
+        }
+
+        const next = maxZ + 1;
+        if (next > cap) {
+            // Overflow — reassign all from base upward, put el last
+            let i = base;
+            for (const p of panels) {
+                if (p !== el) p.style.zIndex = String(i++);
+            }
+            el.style.zIndex = String(i);
+        } else {
+            el.style.zIndex = String(next);
+        }
+    }
+
+    /**
      * Dungeon Tracker UI Interactions
      * Handles all user interactions: dragging, toggles, button clicks
      */
@@ -5477,6 +5531,7 @@
                 // Don't drag if clicking collapse button
                 if (e.target.id === 'mwi-dt-collapse-btn') return;
 
+                bringPanelToFront(this.container);
                 this.isDragging = true;
                 const rect = this.container.getBoundingClientRect();
                 this.dragOffset = {
@@ -5953,7 +6008,7 @@
             font-family: 'Segoe UI', sans-serif;
             font-size: 14px;
             font-weight: bold;
-            z-index: 99999;
+            z-index: ${config.Z_NOTIFICATION};
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
             pointer-events: none;
         `;
@@ -6357,6 +6412,7 @@
 
             // Add to page
             document.body.appendChild(this.container);
+            registerFloatingPanel(this.container);
 
             // Setup all interactions with callbacks
             this.interactions.setupAll(this.container, {
@@ -6683,6 +6739,10 @@
                 );
             }
             allContainers.forEach((container) => container.remove());
+
+            if (this.container) {
+                unregisterFloatingPanel(this.container);
+            }
 
             if (this.interactions && this.interactions.cleanup) {
                 this.interactions.cleanup();
@@ -13648,7 +13708,7 @@ self.onmessage = function (e) {
             min-width: 180px;
             max-width: 280px;
             font-size: 0.875rem;
-            z-index: 10001;
+            z-index: ${config.Z_FLOATING_PANEL};
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
         `;
 
@@ -13987,7 +14047,7 @@ self.onmessage = function (e) {
             max-width: 400px;
             max-height: 200px;
             font-size: 0.875rem;
-            z-index: 10001;
+            z-index: ${config.Z_FLOATING_PANEL};
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
             display: flex;
             flex-direction: column;

@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.49.5
+ * Version: 1.50.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1200,7 +1200,7 @@
             popover.className = 'mwi-collection-popover';
             popover.style.cssText = `
             position: fixed;
-            z-index: 9999;
+            z-index: ${config.Z_FLOATING_PANEL};
             background: #1a1a2e;
             border: 1px solid rgba(255,255,255,0.15);
             border-radius: 4px;
@@ -1838,6 +1838,60 @@
     };
 
     /**
+     * Floating Panel Z-Index Manager
+     * Manages bring-to-front ordering for persistent floating panels.
+     * All panels are capped below config.Z_FLOATING_PANEL + 99 (1199)
+     * so they never cross the game's MUI modal layer (~1300).
+     */
+
+
+    const panels = new Set();
+
+    /**
+     * Register a floating panel element for z-index management
+     * @param {HTMLElement} el - The panel element
+     */
+    function registerFloatingPanel(el) {
+        panels.add(el);
+    }
+
+    /**
+     * Unregister a floating panel element
+     * @param {HTMLElement} el - The panel element
+     */
+    function unregisterFloatingPanel(el) {
+        panels.delete(el);
+    }
+
+    /**
+     * Bring a panel to the front among all registered panels,
+     * without exceeding config.Z_FLOATING_PANEL + 99.
+     * @param {HTMLElement} el - The panel to bring forward
+     */
+    function bringPanelToFront(el) {
+        const base = config.Z_FLOATING_PANEL;
+        const cap = base + 99;
+
+        let maxZ = base;
+        for (const p of panels) {
+            const z = parseInt(p.style.zIndex) || base;
+            if (z > maxZ) maxZ = z;
+        }
+
+        const next = maxZ + 1;
+        if (next > cap) {
+            // Overflow — reassign all from base upward, put el last
+            let i = base;
+            for (const p of panels) {
+                if (p !== el) p.style.zIndex = String(i++);
+            }
+            el.style.zIndex = String(i);
+        } else {
+            el.style.zIndex = String(next);
+        }
+    }
+
+    /**
      * Mention Popup
      * Draggable popup showing all @mention messages for a chat channel
      */
@@ -1933,7 +1987,7 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            z-index: 9999;
+            z-index: ${config.Z_FLOATING_PANEL};
             min-width: 420px;
             max-width: 600px;
             background: rgba(0, 0, 0, 0.92);
@@ -2000,6 +2054,7 @@
             this.container.appendChild(header);
             this.container.appendChild(body);
             document.body.appendChild(this.container);
+            registerFloatingPanel(this.container);
 
             this._setupDragging(header);
             this._setupClickOutside();
@@ -2099,6 +2154,7 @@
         _setupDragging(header) {
             header.addEventListener('mousedown', (e) => {
                 if (e.target.tagName === 'BUTTON') return;
+                bringPanelToFront(this.container);
                 this.isDragging = true;
 
                 // Switch from transform-based centering to explicit coordinates
@@ -2157,6 +2213,7 @@
             }
 
             if (this.container) {
+                unregisterFloatingPanel(this.container);
                 this.container.remove();
                 this.container = null;
             }
@@ -18651,7 +18708,7 @@
                 position: 'fixed',
                 top: '50px',
                 right: '50px',
-                zIndex: '9998',
+                zIndex: String(config.Z_FLOATING_PANEL),
                 fontSize: '14px',
                 padding: '0',
                 borderRadius: STYLE.borderRadius.medium,
@@ -18688,6 +18745,7 @@
 
             // Add to page
             document.body.appendChild(this.floatingUI);
+            registerFloatingPanel(this.floatingUI);
 
             return this.floatingUI;
         }
@@ -18895,6 +18953,7 @@
             };
 
             const onMouseDown = (event) => {
+                bringPanelToFront(this.floatingUI);
                 this.isDragging = true;
 
                 // Calculate offset from panel's current screen position
@@ -19511,6 +19570,7 @@
 
             // Remove floating UI from DOM
             if (this.floatingUI && this.floatingUI.parentNode) {
+                unregisterFloatingPanel(this.floatingUI);
                 this.floatingUI.parentNode.removeChild(this.floatingUI);
                 this.floatingUI = null;
             }
