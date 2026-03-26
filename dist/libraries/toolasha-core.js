@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.50.0
+ * Version: 1.51.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1120,6 +1120,13 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Tracks the highest recommended level enemy defeated per monster type and shows it in the Automation tab',
+                },
+                labyrinthShopPrices: {
+                    id: 'labyrinthShopPrices',
+                    label: 'Labyrinth Shop: Show market prices',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Shows ask/bid market prices on tradeable items in the Labyrinth Shop tab',
                 },
                 combatSummary: {
                     id: 'combatSummary',
