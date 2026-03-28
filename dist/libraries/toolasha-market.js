@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.53.2
+ * Version: 1.53.3
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -542,6 +542,10 @@
             // Total costs per hour (materials + teas + market tax)
             const totalCostPerHour = materialCostPerHour + totalTeaCostPerHour + marketTax;
 
+            // Total costs per action (fixed, unaffected by efficiency)
+            const totalCostPerAction =
+                totalMaterialCost + totalTeaCostPerHour / actionsPerHour + marketTax / actionsPerHour;
+
             // Profit per hour (revenue + bonus revenue - total costs)
             const profitPerHour = revenuePerHour + efficiencyBoostedBonusRevenue - totalCostPerHour;
 
@@ -562,6 +566,7 @@
                 materialCosts,
                 totalMaterialCost,
                 materialCostPerHour, // Material costs per hour (with efficiency)
+                totalCostPerAction, // Total cost per action (materials + tea + tax, no efficiency)
                 teaCosts, // Tea consumption costs breakdown
                 totalTeaCostPerHour, // Total tea costs per hour
                 costPerItem,

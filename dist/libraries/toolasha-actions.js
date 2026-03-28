@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.53.2
+ * Version: 1.53.3
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -3552,7 +3552,7 @@
         const bonusRevenuePerAction = (bonusRevenueTotal * efficiencyMultiplier) / actionsPerHour;
         const revenuePerAction = baseRevenuePerAction + gourmetRevenuePerAction + bonusRevenuePerAction;
         const marketTaxPerAction = revenuePerAction * profitConstants_js.MARKET_TAX;
-        const materialCostPerAction = profitData.materialCostPerHour / actionsPerHour;
+        const materialCostPerAction = profitData.totalMaterialCost; // per-action cost is fixed, unaffected by efficiency
         const teaCostPerAction = profitData.totalTeaCostPerHour / actionsPerHour;
         const costsPerAction = materialCostPerAction + teaCostPerAction + marketTaxPerAction;
         const profitPerAction = profitData.profitPerAction;
@@ -3695,15 +3695,15 @@
         const materialCostsContent = document.createElement('div');
         if (profitData.materialCosts && profitData.materialCosts.length > 0) {
             for (const material of profitData.materialCosts) {
-                const amountPerAction = material.amount * efficiencyMultiplier;
-                const costPerAction = material.totalCost * efficiencyMultiplier;
+                const amountPerAction = material.amount; // per-action quantity is fixed, unaffected by efficiency
+                const costPerAction = material.totalCost; // per-action cost is fixed, unaffected by efficiency
                 const line = document.createElement('div');
                 line.style.marginLeft = '8px';
 
                 let materialText = `• ${material.itemName}: ${amountPerAction.toFixed(2)}/action`;
 
                 if (profitData.artisanBonus > 0 && material.baseAmount && material.amount !== material.baseAmount) {
-                    const baseAmountPerAction = material.baseAmount * efficiencyMultiplier;
+                    const baseAmountPerAction = material.baseAmount; // per-action quantity is fixed, unaffected by efficiency
                     materialText += ` (${baseAmountPerAction.toFixed(2)} base -${formatters_js.formatPercentage(profitData.artisanBonus, 1)} 🍵)`;
                 }
 
@@ -9971,7 +9971,13 @@
             // Calculate max crafts per input (using O(1) Map lookup instead of O(n) array find)
             const maxCraftsPerInput = actionDetails.inputItems.map((input) => {
                 const invItem = inventoryIndex.get(input.itemHrid);
-                const invCount = invItem?.count || 0;
+                let invCount = invItem?.count || 0;
+
+                // If this input item is also the upgrade item, 1 unit per craft is reserved
+                // for the upgrade slot and is not available for the input requirement.
+                if (actionDetails.upgradeItemHrid === input.itemHrid) {
+                    invCount = Math.max(0, invCount - 1);
+                }
 
                 // Apply Artisan reduction (10% base, scaled by Drink Concentration)
                 // Materials consumed per action = base requirement × (1 - artisan bonus)
