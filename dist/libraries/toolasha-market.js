@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.56.0
+ * Version: 1.57.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -16749,6 +16749,14 @@ self.onmessage = function (e) {
         }
 
         /**
+         * Returns true if at least one line (Total or any category) is visible
+         */
+        _hasAnyVisible() {
+            if (this.categoryVisibility.showTotal) return true;
+            return CATEGORIES.some((c) => this.categoryVisibility[c.key]);
+        }
+
+        /**
          * Save chart toggle preferences
          */
         _saveChartPrefs() {
@@ -17045,6 +17053,9 @@ self.onmessage = function (e) {
             updateTotalBtnStyle();
             totalBtn.addEventListener('click', () => {
                 this.categoryVisibility.showTotal = !this.categoryVisibility.showTotal;
+                if (!this._hasAnyVisible()) {
+                    this.categoryVisibility.showTotal = true;
+                }
                 updateTotalBtnStyle();
                 this._saveChartPrefs();
                 this.renderChart(this.currentRange, this.currentCustomFrom, this.currentCustomTo);
@@ -17083,6 +17094,10 @@ self.onmessage = function (e) {
                 updateCatBtnStyle();
                 btn.addEventListener('click', () => {
                     this.categoryVisibility[cat.key] = !this.categoryVisibility[cat.key];
+                    if (!this._hasAnyVisible()) {
+                        this.categoryVisibility.showTotal = true;
+                        updateTotalBtnStyle();
+                    }
                     updateCatBtnStyle();
                     this._saveChartPrefs();
                     this.renderChart(this.currentRange, this.currentCustomFrom, this.currentCustomTo);
@@ -17360,6 +17375,10 @@ self.onmessage = function (e) {
                 });
             }
 
+            const visibleCategories = CATEGORIES.filter((c) => this.categoryVisibility[c.key]);
+            const yAxisTitle =
+                !this.categoryVisibility.showTotal && visibleCategories.length > 0 ? 'Category Value' : 'Networth';
+
             this.chartInstance = new Chart(ctx, {
                 type: 'line',
                 data: {
@@ -17378,10 +17397,11 @@ self.onmessage = function (e) {
                         datalabels: { display: false },
                         tooltip: {
                             filter: (tooltipItem) => {
-                                // Only show tooltip for the main networth line
                                 if (tooltipItem.dataset.type === 'bar') return false;
-                                if (tooltipItem.dataset.label !== 'Total Networth') return false;
-                                return !isNaN(tooltipItem.raw.y);
+                                if (isNaN(tooltipItem.raw?.y)) return false;
+                                if (tooltipItem.dataset.label === 'Total Networth') return true;
+                                const cat = CATEGORIES.find((c) => c.label === tooltipItem.dataset.label);
+                                return cat ? this.categoryVisibility[cat.key] : false;
                             },
                             callbacks: {
                                 title: (tooltipItems) => {
@@ -17395,13 +17415,16 @@ self.onmessage = function (e) {
                                     });
                                 },
                                 label: (context) => {
-                                    const raw = context.raw._raw;
-                                    if (!raw) return '';
-                                    return `Total: ${formatters_js.networthFormatter(raw.total)}`;
+                                    if (context.dataset.label === 'Total Networth') {
+                                        const raw = context.raw._raw;
+                                        return raw ? `Total: ${formatters_js.networthFormatter(raw.total)}` : '';
+                                    }
+                                    return `${context.dataset.label}: ${formatters_js.networthFormatter(Math.round(context.raw.y))}`;
                                 },
                                 afterLabel: (context) => {
+                                    if (context.dataset.label !== 'Total Networth') return [];
                                     const raw = context.raw._raw;
-                                    if (!raw) return '';
+                                    if (!raw) return [];
                                     const lines = [];
                                     if (raw.gold) lines.push(`Gold: ${formatters_js.networthFormatter(raw.gold)}`);
                                     if (raw.inventory) lines.push(`Inventory: ${formatters_js.networthFormatter(raw.inventory)}`);
@@ -17439,7 +17462,7 @@ self.onmessage = function (e) {
                         y: {
                             title: {
                                 display: true,
-                                text: 'Networth',
+                                text: yAxisTitle,
                                 color: '#ccc',
                             },
                             ticks: {
@@ -17471,15 +17494,16 @@ self.onmessage = function (e) {
             const last = filtered[filtered.length - 1];
             const hoursElapsed = (last.t - first.t) / 3_600_000;
 
+            // Hoist 24h baseline (used by both Total and category stats)
+            const now = Date.now();
+            const oneDayAgo = now - 24 * 60 * 60 * 1000;
+            const fullHistory = networthHistory.getHistory();
+            const oldestIn24h = fullHistory.find((p) => p.t >= oneDayAgo);
+
             // Total stats — Current, 24h change, Rate
             if (this.categoryVisibility.showTotal) {
                 const currentTotal = this.networthFeature?.currentData?.totalNetworth ?? last.total;
 
-                // 24h change (always from full history)
-                const now = Date.now();
-                const oneDayAgo = now - 24 * 60 * 60 * 1000;
-                const fullHistory = networthHistory.getHistory();
-                const oldestIn24h = fullHistory.find((p) => p.t >= oneDayAgo);
                 let change24h = null;
                 let changePercent = null;
                 if (oldestIn24h) {
@@ -17511,18 +17535,23 @@ self.onmessage = function (e) {
             }
 
             // Per-category rate stats for each visible category line
-            if (hoursElapsed >= 1) {
-                for (const cat of CATEGORIES) {
-                    if (!this.categoryVisibility[cat.key]) continue;
-                    const firstVal = first[cat.key] ?? 0;
-                    const lastVal = last[cat.key] ?? 0;
-                    const rate = (lastVal - firstVal) / hoursElapsed;
-                    const color = rate >= 0 ? config.COLOR_PROFIT : config.COLOR_LOSS;
-                    const sign = rate >= 0 ? '+' : '';
-                    parts.push(
-                        `<span>${cat.label}: <strong style="color: ${color};">${sign}${formatters_js.networthFormatter(Math.round(rate))}/hr</strong></span>`
-                    );
+            for (const cat of CATEGORIES) {
+                if (!this.categoryVisibility[cat.key]) continue;
+                const firstVal = first[cat.key] ?? 0;
+                const lastVal = last[cat.key] ?? 0;
+                const rate = hoursElapsed > 0 ? (lastVal - firstVal) / hoursElapsed : 0;
+                const rateColor = rate >= 0 ? config.COLOR_PROFIT : config.COLOR_LOSS;
+                const rateSign = rate >= 0 ? '+' : '';
+
+                let statHtml = `${cat.label}: <strong style="color: ${rateColor};">${rateSign}${formatters_js.networthFormatter(Math.round(rate))}/hr</strong>`;
+
+                if (oldestIn24h?.[cat.key] != null) {
+                    const change24h = lastVal - (oldestIn24h[cat.key] ?? 0);
+                    const c24Sign = change24h >= 0 ? '+' : '';
+                    statHtml += ` <span style="font-size: 11px; color: #aaa;">(${c24Sign}${formatters_js.networthFormatter(Math.round(change24h))} 24h)</span>`;
                 }
+
+                parts.push(`<span>${statHtml}</span>`);
             }
 
             if (parts.length === 0) {
@@ -17530,7 +17559,7 @@ self.onmessage = function (e) {
                 return;
             }
 
-            statsRow.innerHTML = parts.join('');
+            statsRow.innerHTML = parts.join('<span style="color: #555; margin: 0 2px;">·</span>');
 
             // Wire up 24h click handler for item breakdown toggle
             const toggle24h = document.getElementById('mwi-nw-24h-toggle');
