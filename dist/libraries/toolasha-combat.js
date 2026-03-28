@@ -1,11 +1,11 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.55.0
+ * Version: 1.55.1
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (config, dataManager, domObserver, webSocketHook, profileManager_js, storage, timerRegistry_js, domObserverHelpers_js, marketAPI, formatters_js, reactInput_js, expectedValueCalculator, dom, abilityCostCalculator_js, houseCostCalculator_js, enhancementConfig_js, marketData_js) {
+(function (config, dataManager, domObserver, webSocketHook, profileManager_js, storage, timerRegistry_js, domObserverHelpers_js, marketAPI, formatters_js, reactInput_js, expectedValueCalculator, dom, abilityCostCalculator_js, houseCostCalculator_js, enhancementConfig_js, marketData_js, enhancementCalculator_js, teaParser_js) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -12173,7 +12173,7 @@
             <div id="tillLevelNumber" style="font-size: 0.95em;">
                 Books needed: <strong>${formatters_js.numberFormatter(booksNeeded)}</strong>
                 <br>
-                Cost: ${formatters_js.numberFormatter(Math.ceil(booksNeeded * ask))} / ${formatters_js.numberFormatter(Math.ceil(booksNeeded * bid))} (ask / bid)
+                Cost: ${formatters_js.formatKMB(Math.ceil(booksNeeded * ask))} / ${formatters_js.formatKMB(Math.ceil(booksNeeded * bid))} (ask / bid)
             </div>
             <div style="font-size: 0.85em; color: #999; margin-top: 8px; font-style: italic;">
                 Refresh page to update current level
@@ -12192,7 +12192,7 @@
                     display.innerHTML = `
                     Books needed: <strong>${formatters_js.numberFormatter(books)}</strong>
                     <br>
-                    Cost: ${formatters_js.numberFormatter(Math.ceil(books * ask))} / ${formatters_js.numberFormatter(Math.ceil(books * bid))} (ask / bid)
+                    Cost: ${formatters_js.formatKMB(Math.ceil(books * ask))} / ${formatters_js.formatKMB(Math.ceil(books * bid))} (ask / bid)
                 `;
                 } else {
                     display.innerHTML = '<span style="color: ${config.COLOR_LOSS};">Invalid target level</span>';
@@ -12668,9 +12668,11 @@ self.onmessage = function (e) {
     /**
      * Calculate production cost from crafting recipe
      * Matches original MWI Tools v25.0 getBaseItemProductionCost logic
+     * @param {string} itemHrid
+     * @param {'ask'|'bid'} [mode='ask'] - Pricing side to use for input materials
      * @private
      */
-    function getProductionCost(itemHrid) {
+    function getProductionCost(itemHrid, mode = 'ask') {
         const gameData = dataManager.getInitClientData();
         const itemDetails = gameData.itemDetailMap[itemHrid];
 
@@ -12699,27 +12701,34 @@ self.onmessage = function (e) {
         const action = gameData.actionDetailMap[actionHrid];
         let totalPrice = 0;
 
-        // Sum up input material costs
+        // Compute artisan tea reduction dynamically (same approach as material-calculator.js)
+        let artisanBonus = 0;
+        try {
+            const equipment = dataManager.getEquipment();
+            const itemDetailMap = gameData.itemDetailMap || {};
+            const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, itemDetailMap);
+            const activeDrinks = dataManager.getActionDrinkSlots(action.type);
+            artisanBonus = teaParser_js.parseArtisanBonus(activeDrinks, itemDetailMap, drinkConcentration);
+        } catch {
+            // Fall back to no reduction if data unavailable
+        }
+
+        // Sum up input material costs (artisan tea reduces material quantities, not upgrade items)
         if (action.inputItems) {
             for (const input of action.inputItems) {
-                let inputPrice = marketData_js.getItemPrice(input.itemHrid, { mode: 'ask' }) || 0;
-                // Recursively calculate production cost if no market price
+                let inputPrice = marketData_js.getItemPrice(input.itemHrid, { mode }) || 0;
                 if (inputPrice === 0) {
-                    inputPrice = getProductionCost(input.itemHrid);
+                    inputPrice = getProductionCost(input.itemHrid, mode);
                 }
-                totalPrice += inputPrice * input.count;
+                totalPrice += inputPrice * input.count * (1 - artisanBonus);
             }
         }
 
-        // Apply Artisan Tea reduction (0.9x)
-        totalPrice *= 0.9;
-
-        // Add upgrade item cost if this is an upgrade recipe (for refined items)
+        // Add upgrade item cost if this is an upgrade recipe (not affected by artisan tea)
         if (action.upgradeItemHrid) {
-            let upgradePrice = marketData_js.getItemPrice(action.upgradeItemHrid, { mode: 'ask' }) || 0;
-            // Recursively calculate production cost if no market price
+            let upgradePrice = marketData_js.getItemPrice(action.upgradeItemHrid, { mode }) || 0;
             if (upgradePrice === 0) {
-                upgradePrice = getProductionCost(action.upgradeItemHrid);
+                upgradePrice = getProductionCost(action.upgradeItemHrid, mode);
             }
             totalPrice += upgradePrice;
         }
@@ -15000,4 +15009,4 @@ self.onmessage = function (e) {
 
     console.log('[Toolasha] Combat library loaded');
 
-})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.webSocketHook, Toolasha.Core.profileManager, Toolasha.Core.storage, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Core.marketAPI, Toolasha.Utils.formatters, Toolasha.Utils.reactInput, Toolasha.Market.expectedValueCalculator, Toolasha.Utils.dom, Toolasha.Utils.abilityCalc, Toolasha.Utils.houseCostCalculator, Toolasha.Utils.enhancementConfig, Toolasha.Utils.marketData);
+})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.webSocketHook, Toolasha.Core.profileManager, Toolasha.Core.storage, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Core.marketAPI, Toolasha.Utils.formatters, Toolasha.Utils.reactInput, Toolasha.Market.expectedValueCalculator, Toolasha.Utils.dom, Toolasha.Utils.abilityCalc, Toolasha.Utils.houseCostCalculator, Toolasha.Utils.enhancementConfig, Toolasha.Utils.marketData, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.teaParser);

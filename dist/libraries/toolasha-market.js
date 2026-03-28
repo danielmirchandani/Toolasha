@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.55.0
+ * Version: 1.55.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -3317,7 +3317,7 @@ self.onmessage = function (e) {
         const baseCost = getRealisticBaseItemPrice(itemHrid);
         const baseItemPrices = marketData_js.getItemPrices(itemHrid, 0);
         const baseAskPrice = baseItemPrices?.ask > 0 ? baseItemPrices.ask : baseCost;
-        const baseBidPrice = baseItemPrices?.bid > 0 ? baseItemPrices.bid : baseCost;
+        const baseBidPrice = baseItemPrices?.bid > 0 ? baseItemPrices.bid : getProductionCost(itemHrid, 'bid');
 
         return {
             baseCost,
@@ -3379,9 +3379,11 @@ self.onmessage = function (e) {
     /**
      * Calculate production cost from crafting recipe
      * Matches original MWI Tools v25.0 getBaseItemProductionCost logic
+     * @param {string} itemHrid
+     * @param {'ask'|'bid'} [mode='ask'] - Pricing side to use for input materials
      * @private
      */
-    function getProductionCost(itemHrid) {
+    function getProductionCost(itemHrid, mode = 'ask') {
         const gameData = dataManager.getInitClientData();
         const itemDetails = gameData.itemDetailMap[itemHrid];
 
@@ -3410,27 +3412,34 @@ self.onmessage = function (e) {
         const action = gameData.actionDetailMap[actionHrid];
         let totalPrice = 0;
 
-        // Sum up input material costs
+        // Compute artisan tea reduction dynamically (same approach as material-calculator.js)
+        let artisanBonus = 0;
+        try {
+            const equipment = dataManager.getEquipment();
+            const itemDetailMap = gameData.itemDetailMap || {};
+            const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, itemDetailMap);
+            const activeDrinks = dataManager.getActionDrinkSlots(action.type);
+            artisanBonus = teaParser_js.parseArtisanBonus(activeDrinks, itemDetailMap, drinkConcentration);
+        } catch {
+            // Fall back to no reduction if data unavailable
+        }
+
+        // Sum up input material costs (artisan tea reduces material quantities, not upgrade items)
         if (action.inputItems) {
             for (const input of action.inputItems) {
-                let inputPrice = marketData_js.getItemPrice(input.itemHrid, { mode: 'ask' }) || 0;
-                // Recursively calculate production cost if no market price
+                let inputPrice = marketData_js.getItemPrice(input.itemHrid, { mode }) || 0;
                 if (inputPrice === 0) {
-                    inputPrice = getProductionCost(input.itemHrid);
+                    inputPrice = getProductionCost(input.itemHrid, mode);
                 }
-                totalPrice += inputPrice * input.count;
+                totalPrice += inputPrice * input.count * (1 - artisanBonus);
             }
         }
 
-        // Apply Artisan Tea reduction (0.9x)
-        totalPrice *= 0.9;
-
-        // Add upgrade item cost if this is an upgrade recipe (for refined items)
+        // Add upgrade item cost if this is an upgrade recipe (not affected by artisan tea)
         if (action.upgradeItemHrid) {
-            let upgradePrice = marketData_js.getItemPrice(action.upgradeItemHrid, { mode: 'ask' }) || 0;
-            // Recursively calculate production cost if no market price
+            let upgradePrice = marketData_js.getItemPrice(action.upgradeItemHrid, { mode }) || 0;
             if (upgradePrice === 0) {
-                upgradePrice = getProductionCost(action.upgradeItemHrid);
+                upgradePrice = getProductionCost(action.upgradeItemHrid, mode);
             }
             totalPrice += upgradePrice;
         }
@@ -4878,7 +4887,7 @@ self.onmessage = function (e) {
                 const profitPerDay = profitData.profitPerDay;
                 const profitColor = profitData.profitPerHour >= 0 ? config.COLOR_TOOLTIP_PROFIT : config.COLOR_TOOLTIP_LOSS;
 
-                html += `<div style="color: ${profitColor}; font-weight: bold;">Net: ${formatters_js.numberFormatter(profitData.profitPerHour)}/hr (${formatters_js.formatKMB(profitPerDay)}/day)</div>`;
+                html += `<div style="color: ${profitColor}; font-weight: bold;">Net: ${formatters_js.formatKMB(profitData.profitPerHour)}/hr (${formatters_js.formatKMB(profitPerDay)}/day)</div>`;
 
                 // Show detailed breakdown if enabled
                 if (showDetailed) {
@@ -4891,7 +4900,7 @@ self.onmessage = function (e) {
                 if (showDetailed) {
                     html += this.buildDetailedProfitDisplay(profitData, false);
                 } else {
-                    html += `<div style="font-weight: bold; color: ${config.COLOR_TOOLTIP_INFO};">Cost: ${formatters_js.numberFormatter(profitData.totalMaterialCost)}/item</div>`;
+                    html += `<div style="font-weight: bold; color: ${config.COLOR_TOOLTIP_INFO};">Cost: ${formatters_js.formatKMB(profitData.totalMaterialCost)}/item</div>`;
                 }
             }
 
@@ -4979,7 +4988,7 @@ self.onmessage = function (e) {
                 const profitPerDay = profitData.profitPerDay;
                 const profitColor = profitData.profitPerHour >= 0 ? config.COLOR_TOOLTIP_PROFIT : config.COLOR_TOOLTIP_LOSS;
 
-                html += `<div style="color: ${profitColor};">Profit: ${formatters_js.numberFormatter(profitPerAction)}/action, ${formatters_js.numberFormatter(profitData.profitPerHour)}/hour, ${formatters_js.formatKMB(profitPerDay)}/day</div>`;
+                html += `<div style="color: ${profitColor};">Profit: ${formatters_js.formatKMB(profitPerAction)}/action, ${formatters_js.formatKMB(profitData.profitPerHour)}/hour, ${formatters_js.formatKMB(profitPerDay)}/day</div>`;
                 html += '</div>';
             }
 
@@ -5333,12 +5342,12 @@ self.onmessage = function (e) {
                 const profit = allProfits[i];
                 const label = profit.actionType.charAt(0).toUpperCase() + profit.actionType.slice(1);
                 const color = profit.profitPerHour >= 0 ? config.COLOR_TOOLTIP_INFO : config.COLOR_TOOLTIP_LOSS;
-                html += `<div style="color: ${color};">• ${label}: ${formatters_js.numberFormatter(profit.profitPerHour)}/hr`;
+                html += `<div style="color: ${color};">• ${label}: ${formatters_js.formatKMB(profit.profitPerHour)}/hr`;
 
                 // Show profit per action for alchemy actions
                 if (profit.netProfitPerAttempt !== undefined) {
                     const perActionColor = profit.netProfitPerAttempt >= 0 ? 'inherit' : config.COLOR_TOOLTIP_LOSS;
-                    html += ` <span style="opacity: 0.7; color: ${perActionColor};">(${formatters_js.numberFormatter(profit.netProfitPerAttempt)}/action)</span>`;
+                    html += ` <span style="opacity: 0.7; color: ${perActionColor};">(${formatters_js.formatKMB(profit.netProfitPerAttempt)}/action)</span>`;
                 }
 
                 // Show item icons for the winning catalyst and/or tea (silence = no modifiers needed)
@@ -20467,9 +20476,9 @@ self.onmessage = function (e) {
 
                 html += `<tr style="${rowStyle}">`;
                 html += `<td style="padding: 2px 4px;">${item.name}</td>`;
-                html += `<td style="text-align: right; padding: 2px 4px;">${formatters_js.numberFormatter(item.cost)}</td>`;
-                html += `<td style="text-align: right; padding: 2px 4px;">${formatters_js.numberFormatter(item.askPrice)}</td>`;
-                html += `<td style="text-align: right; padding: 2px 4px; font-weight: ${isBestValue ? 'bold' : 'normal'};">${formatters_js.numberFormatter(Math.floor(item.goldPerToken))}</td>`;
+                html += `<td style="text-align: right; padding: 2px 4px;">${formatters_js.formatKMB(item.cost)}</td>`;
+                html += `<td style="text-align: right; padding: 2px 4px;">${formatters_js.formatKMB(item.askPrice)}</td>`;
+                html += `<td style="text-align: right; padding: 2px 4px; font-weight: ${isBestValue ? 'bold' : 'normal'};">${formatters_js.formatKMB(Math.floor(item.goldPerToken))}</td>`;
                 html += '</tr>';
             });
 

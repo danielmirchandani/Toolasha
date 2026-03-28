@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.55.0
+ * Version: 1.55.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -5431,7 +5431,7 @@
             cursor: pointer;
             user-select: none;
         `;
-            const totalProfitLabel = profitData.hasMissingPrices ? '-- ⚠' : formatters_js.numberFormatter(profitData.totalProfit);
+            const totalProfitLabel = profitData.hasMissingPrices ? '-- ⚠' : formatters_js.formatKMB(Math.round(profitData.totalProfit));
             profitLine.innerHTML = `💰 ${totalProfitLabel} | <span style="display: inline-block; margin-right: 0.25em;">⏱</span> ${timeEstimate} ▸`;
 
             // Create breakdown section (hidden by default)
@@ -5481,7 +5481,9 @@
                 e.stopPropagation();
                 const isHidden = breakdownSection.style.display === 'none';
                 breakdownSection.style.display = isHidden ? 'block' : 'none';
-                const updatedProfitLabel = profitData.hasMissingPrices ? '-- ⚠' : formatters_js.numberFormatter(profitData.totalProfit);
+                const updatedProfitLabel = profitData.hasMissingPrices
+                    ? '-- ⚠'
+                    : formatters_js.formatKMB(Math.round(profitData.totalProfit));
                 profitLine.innerHTML = `💰 ${updatedProfitLabel} | <span style="display: inline-block; margin-right: 0.25em;">⏱</span> ${timeEstimate} ${isHidden ? '▾' : '▸'}`;
             };
 
@@ -5594,8 +5596,8 @@
         buildBreakdownHTML(profitData) {
             const lines = [];
             const showTotals = !profitData.hasMissingPrices;
-            const formatTotalValue = (value) => (showTotals ? formatters_js.numberFormatter(value) : '-- ⚠');
-            const formatPerActionValue = (value) => (showTotals ? formatters_js.numberFormatter(value.toFixed(0)) : '-- ⚠');
+            const formatTotalValue = (value) => (showTotals ? formatters_js.formatKMB(value) : '-- ⚠');
+            const formatPerActionValue = (value) => (showTotals ? formatters_js.formatKMB(Math.round(value)) : '-- ⚠');
 
             lines.push('<div style="font-weight: bold; margin-bottom: 4px;">Task Profit Breakdown</div>');
             lines.push('<div style="border-bottom: 1px solid #555; margin-bottom: 4px;"></div>');
@@ -5609,20 +5611,20 @@
 
             // Task Rewards section
             lines.push('<div style="margin-bottom: 4px; color: #aaa;">Task Rewards:</div>');
-            lines.push(`<div style="margin-left: 10px;">Coins: ${formatters_js.numberFormatter(profitData.rewards.coins)}</div>`);
+            lines.push(`<div style="margin-left: 10px;">Coins: ${formatters_js.formatKMB(profitData.rewards.coins)}</div>`);
 
             if (!profitData.rewards.error) {
                 lines.push(
-                    `<div style="margin-left: 10px;">Task Tokens: ${formatters_js.numberFormatter(profitData.rewards.taskTokens)}</div>`
+                    `<div style="margin-left: 10px;">Task Tokens: ${formatters_js.formatKMB(profitData.rewards.taskTokens)}</div>`
                 );
                 lines.push(
-                    `<div style="margin-left: 20px; font-size: 0.65rem; color: #888;">(${profitData.rewards.breakdown.tokensReceived} tokens @ ${formatters_js.numberFormatter(profitData.rewards.breakdown.tokenValue.toFixed(0))} each)</div>`
+                    `<div style="margin-left: 20px; font-size: 0.65rem; color: #888;">(${profitData.rewards.breakdown.tokensReceived} tokens @ ${formatters_js.formatKMB(Math.round(profitData.rewards.breakdown.tokenValue))} each)</div>`
                 );
                 lines.push(
-                    `<div style="margin-left: 10px;">Purple's Gift: ${formatters_js.numberFormatter(profitData.rewards.purpleGift)}</div>`
+                    `<div style="margin-left: 10px;">Purple's Gift: ${formatters_js.formatKMB(profitData.rewards.purpleGift)}</div>`
                 );
                 lines.push(
-                    `<div style="margin-left: 20px; font-size: 0.65rem; color: #888;">(${formatters_js.numberFormatter(profitData.rewards.breakdown.giftPerTask.toFixed(0))} per task)</div>`
+                    `<div style="margin-left: 20px; font-size: 0.65rem; color: #888;">(${formatters_js.formatKMB(Math.round(profitData.rewards.breakdown.giftPerTask))} per task)</div>`
                 );
             } else {
                 lines.push(
@@ -5670,7 +5672,7 @@
                                 output.dropRate < 1.0 ? ` (${formatters_js.formatPercentage(output.dropRate, 1)} drop)` : '';
                             const missingPriceNote = output.missingPrice ? ' ⚠' : '';
                             lines.push(
-                                `<div>• ${output.name} (Base): ${itemsForTask.toFixed(1)} items @ ${formatters_js.numberFormatter(Math.round(output.priceEach))}${missingPriceNote} = ${formatters_js.numberFormatter(Math.round(revenueForTask))}${dropRateText}</div>`
+                                `<div>• ${output.name} (Base): ${itemsForTask.toFixed(1)} items @ ${formatters_js.formatKMB(Math.round(output.priceEach))}${missingPriceNote} = ${formatters_js.formatKMB(Math.round(revenueForTask))}${dropRateText}</div>`
                             );
                         }
                     }
@@ -5683,14 +5685,14 @@
                             const revenueForTask = revenuePerAction * quantity;
                             const missingPriceNote = output.missingPrice ? ' ⚠' : '';
                             lines.push(
-                                `<div>• ${output.name} (Gourmet ${formatters_js.formatPercentage(details.gourmetBonus || 0, 1)}): ${itemsForTask.toFixed(1)} items @ ${formatters_js.numberFormatter(Math.round(output.priceEach))}${missingPriceNote} = ${formatters_js.numberFormatter(Math.round(revenueForTask))}</div>`
+                                `<div>• ${output.name} (Gourmet ${formatters_js.formatPercentage(details.gourmetBonus || 0, 1)}): ${itemsForTask.toFixed(1)} items @ ${formatters_js.formatKMB(Math.round(output.priceEach))}${missingPriceNote} = ${formatters_js.formatKMB(Math.round(revenueForTask))}</div>`
                             );
                         }
                     }
 
                     if (details.processingConversions && details.processingConversions.length > 0) {
                         const processingBonusTotal = (details.processingRevenueBonusPerAction || 0) * quantity;
-                        const processingLabel = `${processingBonusTotal >= 0 ? '+' : '-'}${formatters_js.numberFormatter(Math.abs(Math.round(processingBonusTotal)))}`;
+                        const processingLabel = `${processingBonusTotal >= 0 ? '+' : '-'}${formatters_js.formatKMB(Math.abs(Math.round(processingBonusTotal)))}`;
                         lines.push(
                             `<div>• Processing (${formatters_js.formatPercentage(details.processingBonus || 0, 1)} proc): Net ${processingLabel}</div>`
                         );
@@ -5706,10 +5708,10 @@
                             const producedRevenue = totalProduced * conversion.processedPriceEach;
                             const missingPriceNote = conversion.missingPrice ? ' ⚠' : '';
                             lines.push(
-                                `<div style="margin-left: 10px;">• ${conversion.rawItem} consumed: -${totalConsumed.toFixed(1)} items @ ${formatters_js.numberFormatter(Math.round(conversion.rawPriceEach))}${missingPriceNote} = -${formatters_js.numberFormatter(Math.round(consumedRevenue))}</div>`
+                                `<div style="margin-left: 10px;">• ${conversion.rawItem} consumed: -${totalConsumed.toFixed(1)} items @ ${formatters_js.formatKMB(Math.round(conversion.rawPriceEach))}${missingPriceNote} = -${formatters_js.formatKMB(Math.round(consumedRevenue))}</div>`
                             );
                             lines.push(
-                                `<div style="margin-left: 10px;">• ${conversion.processedItem} produced: ${totalProduced.toFixed(1)} items @ ${formatters_js.numberFormatter(Math.round(conversion.processedPriceEach))}${missingPriceNote} = ${formatters_js.numberFormatter(Math.round(producedRevenue))}</div>`
+                                `<div style="margin-left: 10px;">• ${conversion.processedItem} produced: ${totalProduced.toFixed(1)} items @ ${formatters_js.formatKMB(Math.round(conversion.processedPriceEach))}${missingPriceNote} = ${formatters_js.formatKMB(Math.round(producedRevenue))}</div>`
                             );
                         }
                     }
@@ -5737,7 +5739,7 @@
                                 const revenueForTask = (drop.revenuePerAction || 0) * quantity;
                                 const missingPriceNote = drop.missingPrice ? ' ⚠' : '';
                                 lines.push(
-                                    `<div>• ${drop.itemName}: ${dropsForTask.toFixed(2)} drops @ ${formatters_js.numberFormatter(Math.round(drop.priceEach))}${missingPriceNote} = ${formatters_js.numberFormatter(Math.round(revenueForTask))}</div>`
+                                    `<div>• ${drop.itemName}: ${dropsForTask.toFixed(2)} drops @ ${formatters_js.formatKMB(Math.round(drop.priceEach))}${missingPriceNote} = ${formatters_js.formatKMB(Math.round(revenueForTask))}</div>`
                                 );
                             }
                         }
@@ -5755,7 +5757,7 @@
                                 const revenueForTask = (drop.revenuePerAction || 0) * quantity;
                                 const missingPriceNote = drop.missingPrice ? ' ⚠' : '';
                                 lines.push(
-                                    `<div>• ${drop.itemName}: ${dropsForTask.toFixed(2)} drops @ ${formatters_js.numberFormatter(Math.round(drop.priceEach))}${missingPriceNote} = ${formatters_js.numberFormatter(Math.round(revenueForTask))}</div>`
+                                    `<div>• ${drop.itemName}: ${dropsForTask.toFixed(2)} drops @ ${formatters_js.formatKMB(Math.round(drop.priceEach))}${missingPriceNote} = ${formatters_js.formatKMB(Math.round(revenueForTask))}</div>`
                                 );
                             }
                         }
@@ -5794,13 +5796,13 @@
                     );
 
                     lines.push(
-                        `<div>• ${details.itemName} (Base): ${totalItems.toFixed(1)} items @ ${formatters_js.numberFormatter(details.priceEach)}${outputPriceNote} = ${formatters_js.numberFormatter(Math.round(totalItems * details.priceEach))}</div>`
+                        `<div>• ${details.itemName} (Base): ${totalItems.toFixed(1)} items @ ${formatters_js.formatKMB(details.priceEach)}${outputPriceNote} = ${formatters_js.formatKMB(Math.round(totalItems * details.priceEach))}</div>`
                     );
 
                     if (details.gourmetBonus > 0) {
                         const bonusItems = outputAmount * details.gourmetBonus * profitData.action.breakdown.quantity;
                         lines.push(
-                            `<div>• ${details.itemName} (Gourmet +${formatters_js.formatPercentage(details.gourmetBonus, 1)}): ${bonusItems.toFixed(1)} items @ ${formatters_js.numberFormatter(details.priceEach)}${outputPriceNote} = ${formatters_js.numberFormatter(Math.round(bonusItems * details.priceEach))}</div>`
+                            `<div>• ${details.itemName} (Gourmet +${formatters_js.formatPercentage(details.gourmetBonus, 1)}): ${bonusItems.toFixed(1)} items @ ${formatters_js.formatKMB(details.priceEach)}${outputPriceNote} = ${formatters_js.formatKMB(Math.round(bonusItems * details.priceEach))}</div>`
                         );
                     }
                 }
@@ -5822,7 +5824,7 @@
                             const revenueForTask = (drop.revenuePerAction || 0) * profitData.action.breakdown.quantity;
                             const missingPriceNote = drop.missingPrice ? ' ⚠' : '';
                             lines.push(
-                                `<div>• ${drop.itemName}: ${dropsForTask.toFixed(2)} drops @ ${formatters_js.numberFormatter(Math.round(drop.priceEach))}${missingPriceNote} = ${formatters_js.numberFormatter(Math.round(revenueForTask))}</div>`
+                                `<div>• ${drop.itemName}: ${dropsForTask.toFixed(2)} drops @ ${formatters_js.formatKMB(Math.round(drop.priceEach))}${missingPriceNote} = ${formatters_js.formatKMB(Math.round(revenueForTask))}</div>`
                             );
                         }
                     }
@@ -5840,7 +5842,7 @@
                             const revenueForTask = (drop.revenuePerAction || 0) * profitData.action.breakdown.quantity;
                             const missingPriceNote = drop.missingPrice ? ' ⚠' : '';
                             lines.push(
-                                `<div>• ${drop.itemName}: ${dropsForTask.toFixed(2)} drops @ ${formatters_js.numberFormatter(Math.round(drop.priceEach))}${missingPriceNote} = ${formatters_js.numberFormatter(Math.round(revenueForTask))}</div>`
+                                `<div>• ${drop.itemName}: ${dropsForTask.toFixed(2)} drops @ ${formatters_js.formatKMB(Math.round(drop.priceEach))}${missingPriceNote} = ${formatters_js.formatKMB(Math.round(revenueForTask))}</div>`
                             );
                         }
                     }
@@ -5862,7 +5864,7 @@
                         const totalCost = mat.totalCost * actionsNeeded;
                         const missingPriceNote = mat.missingPrice ? ' ⚠' : '';
                         lines.push(
-                            `<div>• ${mat.itemName}: ${totalAmount.toFixed(1)} @ ${formatters_js.numberFormatter(Math.round(mat.askPrice))}${missingPriceNote} = ${formatters_js.numberFormatter(Math.round(totalCost))}</div>`
+                            `<div>• ${mat.itemName}: ${totalAmount.toFixed(1)} @ ${formatters_js.formatKMB(Math.round(mat.askPrice))}${missingPriceNote} = ${formatters_js.formatKMB(Math.round(totalCost))}</div>`
                         );
                     }
 
@@ -5872,7 +5874,7 @@
                             const totalCost = tea.totalCost * hoursNeeded;
                             const missingPriceNote = tea.missingPrice ? ' ⚠' : '';
                             lines.push(
-                                `<div>• ${tea.itemName}: ${drinksNeeded.toFixed(1)} drinks @ ${formatters_js.numberFormatter(Math.round(tea.pricePerDrink))}${missingPriceNote} = ${formatters_js.numberFormatter(Math.round(totalCost))}</div>`
+                                `<div>• ${tea.itemName}: ${drinksNeeded.toFixed(1)} drinks @ ${formatters_js.formatKMB(Math.round(tea.pricePerDrink))}${missingPriceNote} = ${formatters_js.formatKMB(Math.round(totalCost))}</div>`
                             );
                         }
                     }
@@ -6538,7 +6540,7 @@
                 parts.push(`${cowbellSpent}🔔`);
             }
             if (goldSpent > 0) {
-                parts.push(`${formatters_js.numberFormatter(goldSpent)}💰`);
+                parts.push(`${formatters_js.formatKMB(goldSpent)}💰`);
             }
 
             if (parts.length > 0) {
@@ -9298,23 +9300,23 @@
         createRewardsSection(rewards, textColor) {
             const section = this.createSection('Expected Rewards');
 
-            section.appendChild(this.createRow('Total Coins', formatters_js.numberFormatter(rewards.totalCoins), config.COLOR_GOLD));
+            section.appendChild(this.createRow('Total Coins', formatters_js.formatKMB(rewards.totalCoins), config.COLOR_GOLD));
             section.appendChild(this.createRow('Total Task Tokens', String(rewards.totalTokens), textColor));
 
             if (!rewards.rewardValue.error) {
-                const tokenValueStr = `${formatters_js.numberFormatter(Math.round(rewards.rewardValue.breakdown.tokenValue))} each`;
+                const tokenValueStr = `${formatters_js.formatKMB(Math.round(rewards.rewardValue.breakdown.tokenValue))} each`;
                 section.appendChild(this.createRow('Token Value', tokenValueStr, config.COLOR_TEXT_SECONDARY));
                 section.appendChild(
                     this.createRow(
                         'Tokens Value',
-                        formatters_js.numberFormatter(Math.round(rewards.rewardValue.taskTokens)),
+                        formatters_js.formatKMB(Math.round(rewards.rewardValue.taskTokens)),
                         config.COLOR_PROFIT
                     )
                 );
                 section.appendChild(
                     this.createRow(
                         "Purple's Gift",
-                        formatters_js.numberFormatter(Math.round(rewards.rewardValue.purpleGift)),
+                        formatters_js.formatKMB(Math.round(rewards.rewardValue.purpleGift)),
                         config.COLOR_ESSENCE
                     )
                 );
@@ -9327,7 +9329,7 @@
                 section.appendChild(
                     this.createRow(
                         'Total Reward Value',
-                        formatters_js.numberFormatter(Math.round(rewards.rewardValue.total)),
+                        formatters_js.formatKMB(Math.round(rewards.rewardValue.total)),
                         config.COLOR_ACCENT
                     )
                 );
@@ -9350,7 +9352,7 @@
                 const profitStr = detail.isCombat
                     ? 'N/A (combat)'
                     : detail.actionProfit !== null
-                      ? formatters_js.numberFormatter(Math.round(detail.actionProfit))
+                      ? formatters_js.formatKMB(Math.round(detail.actionProfit))
                       : 'N/A';
 
                 const profitColor = detail.isCombat
@@ -9369,8 +9371,7 @@
             separator.style.cssText = 'border-top: 1px solid #3a3a3a; margin: 6px 0;';
             section.appendChild(separator);
 
-            const totalStr =
-                rewards.totalActionProfit !== null ? formatters_js.numberFormatter(Math.round(rewards.totalActionProfit)) : 'N/A';
+            const totalStr = rewards.totalActionProfit !== null ? formatters_js.formatKMB(Math.round(rewards.totalActionProfit)) : 'N/A';
             const totalColor =
                 rewards.totalActionProfit !== null && rewards.totalActionProfit >= 0
                     ? config.COLOR_PROFIT
@@ -9386,7 +9387,7 @@
             section.appendChild(separator2);
 
             section.appendChild(
-                this.createRow('Combined Total', formatters_js.numberFormatter(Math.round(rewards.combinedTotal)), config.COLOR_ACCENT)
+                this.createRow('Combined Total', formatters_js.formatKMB(Math.round(rewards.combinedTotal)), config.COLOR_ACCENT)
             );
 
             return section;
