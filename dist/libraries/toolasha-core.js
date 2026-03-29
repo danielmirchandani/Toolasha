@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.57.0
+ * Version: 1.57.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1739,6 +1739,13 @@
                     type: 'color',
                     default: '#ffa500',
                     help: 'Color used for gold and currency displays',
+                },
+                color_mirror: {
+                    id: 'color_mirror',
+                    label: "Philosopher's Mirror",
+                    type: 'color',
+                    default: '#ffd700',
+                    help: "Color for the Philosopher's Mirror usage line in enhancement tooltips",
                 },
                 color_accent: {
                     id: 'color_accent',
@@ -3999,6 +4006,7 @@
             this.COLOR_TEXT_SECONDARY = '#888888'; // Secondary text color
             this.COLOR_BORDER = '#444444'; // Border color
             this.COLOR_GOLD = '#ffa500'; // Gold/currency color
+            this.COLOR_MIRROR = '#ffd700'; // Philosopher's Mirror highlight color
             this.COLOR_ACCENT = '#22c55e'; // Script accent color (green)
             this.COLOR_REMAINING_XP = '#FFFFFF'; // Remaining XP text color
             this.COLOR_XP_RATE = '#ffffff'; // XP/hr rate text color
@@ -4591,6 +4599,7 @@
             this.COLOR_TEXT_SECONDARY = this.getSettingValue('color_text_secondary', '#888888');
             this.COLOR_BORDER = this.getSettingValue('color_border', '#444444');
             this.COLOR_GOLD = this.getSettingValue('color_gold', '#ffa500');
+            this.COLOR_MIRROR = this.getSettingValue('color_mirror', '#ffd700');
             this.COLOR_ACCENT = this.getSettingValue('color_accent', '#22c55e');
             this.COLOR_REMAINING_XP = this.getSettingValue('color_remaining_xp', '#FFFFFF');
             this.COLOR_XP_RATE = this.getSettingValue('color_xp_rate', '#ffffff');

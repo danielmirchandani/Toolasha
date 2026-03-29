@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.57.0
+ * Version: 1.57.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -3272,9 +3272,9 @@ self.onmessage = function (e) {
                         price = ask;
                         bidPrice = bid;
                     } else {
-                        // Fallback to sellPrice if no market data
-                        price = materialDetail?.sellPrice || 0;
-                        bidPrice = price;
+                        // Fallback: production cost, then NPC sell price
+                        price = getProductionCost(material.itemHrid, 'ask') || materialDetail?.sellPrice || 0;
+                        bidPrice = getProductionCost(material.itemHrid, 'bid') || materialDetail?.sellPrice || 0;
                     }
                 }
                 perActionCost += price * material.count;
@@ -3539,7 +3539,9 @@ self.onmessage = function (e) {
         // Show Philosopher's Mirror usage if applicable
         if (optimalStrategy.usedMirror && optimalStrategy.mirrorStartLevel) {
             html +=
-                '<div style="color: #ffd700;">Uses Philosopher\'s Mirror from +' +
+                '<div style="color: ' +
+                config.COLOR_MIRROR +
+                ';">Uses Philosopher\'s Mirror from +' +
                 optimalStrategy.mirrorStartLevel +
                 '</div>';
         }
@@ -4947,10 +4949,21 @@ self.onmessage = function (e) {
 
                     const marketPrice = marketAPI.getPrice(itemHrid, 0);
 
+                    if (marketPrice?.ask > 0 || marketPrice?.bid > 0) {
+                        return {
+                            ...material,
+                            askPrice: marketPrice.ask > 0 ? marketPrice.ask : 0,
+                            bidPrice: marketPrice.bid > 0 ? marketPrice.bid : 0,
+                        };
+                    }
+
+                    // Fallback: production cost, then 0
+                    const prodAsk = getProductionCost(itemHrid, 'ask') || 0;
+                    const prodBid = getProductionCost(itemHrid, 'bid') || 0;
                     return {
                         ...material,
-                        askPrice: marketPrice?.ask && marketPrice.ask > 0 ? marketPrice.ask : 0,
-                        bidPrice: marketPrice?.bid && marketPrice.bid > 0 ? marketPrice.bid : 0,
+                        askPrice: prodAsk,
+                        bidPrice: prodBid,
                     };
                 });
 
