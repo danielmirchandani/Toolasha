@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.57.1
+ * Version: 1.58.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -21,7 +21,7 @@
             this.db = null;
             this.available = false;
             this.dbName = 'ToolashaDB';
-            this.dbVersion = 13; // Bumped for networthHistory store
+            this.dbVersion = 14; // Bumped for collections store
             this.saveDebounceTimers = new Map(); // Per-key debounce timers
             this.pendingWrites = new Map(); // Per-key pending write data: {value, storeName}
             this.SAVE_DEBOUNCE_DELAY = 3000; // 3 seconds
@@ -160,6 +160,11 @@
                     // Create networthHistory store if it doesn't exist (for networth chart)
                     if (!db.objectStoreNames.contains('networthHistory')) {
                         db.createObjectStore('networthHistory');
+                    }
+
+                    // Create collections store if it doesn't exist (for collection filters feature)
+                    if (!db.objectStoreNames.contains('collections')) {
+                        db.createObjectStore('collections');
                     }
                 };
             });
@@ -1808,6 +1813,27 @@
                     type: 'color',
                     default: '#60a5fa',
                     help: 'Color for estimated queue lengths (extrapolated from 20+ orders at same price)',
+                },
+            },
+        },
+
+        collectionFilters: {
+            title: 'Collection Filters',
+            icon: '⭐',
+            settings: {
+                collectionFilters: {
+                    id: 'collectionFilters',
+                    label: 'Enable Collection Filters & Favorites',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Adds count-range filters, dungeon/skilling-outfit checkboxes, and favorites (★) to the Collections panel',
+                },
+                collectionFilters_skillingBadges: {
+                    id: 'collectionFilters_skillingBadges',
+                    label: 'Show collection count badges on skilling action tiles',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Displays your collection count on skilling actions (open Collections once to populate counts)',
                 },
             },
         },
