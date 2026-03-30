@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.60.5
+ * Version: 1.61.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2277,19 +2277,20 @@
 
             // Group by dungeonName + teamKey
             const groups = new Map();
-            for (const run of allRuns) {
+            for (let i = 0; i < allRuns.length; i++) {
+                const run = allRuns[i];
                 const key = `${run.dungeonName}||${run.teamKey}`;
                 if (!groups.has(key)) groups.set(key, []);
-                groups.get(key).push(run);
+                groups.get(key).push({ run, index: i });
             }
 
-            const outlierIds = new Set();
+            const outlierIndices = new Set();
 
-            for (const [groupKey, runs] of groups) {
-                if (runs.length < 5) continue;
+            for (const [groupKey, entries] of groups) {
+                if (entries.length < 5) continue;
 
-                const durations = runs
-                    .map((r) => r.duration || r.totalTime || 0)
+                const durations = entries
+                    .map((e) => e.run.duration || e.run.totalTime || 0)
                     .filter((d) => d > 0)
                     .sort((a, b) => a - b);
 
@@ -2300,10 +2301,10 @@
 
                 const threshold = median * 3;
 
-                for (const run of runs) {
+                for (const { run, index } of entries) {
                     const duration = run.duration || run.totalTime || 0;
                     if (duration > threshold) {
-                        outlierIds.add(run);
+                        outlierIndices.add(index);
                         console.warn(
                             `[DungeonTrackerStorage] Scrubbing outlier run: ${groupKey} ` +
                                 `duration=${Math.round(duration)}s median=${Math.round(median)}s threshold=${Math.round(threshold)}s`
@@ -2312,12 +2313,12 @@
                 }
             }
 
-            if (outlierIds.size === 0) return 0;
+            if (outlierIndices.size === 0) return 0;
 
-            const cleaned = allRuns.filter((r) => !outlierIds.has(r));
+            const cleaned = allRuns.filter((_, i) => !outlierIndices.has(i));
             await storage.setJSON('allRuns', cleaned, this.unifiedStoreName, true);
-            console.log(`[DungeonTrackerStorage] Scrubbed ${outlierIds.size} outlier run(s) from storage`);
-            return outlierIds.size;
+            console.log(`[DungeonTrackerStorage] Scrubbed ${outlierIndices.size} outlier run(s) from storage`);
+            return outlierIndices.size;
         }
 
         /**
@@ -3903,6 +3904,7 @@
             this.initComplete = false; // Flag to ensure storage loads before annotation
             this.timerRegistry = timerRegistry_js.createTimerRegistry();
             this.tabClickHandlers = new Map(); // Store tab click handlers for cleanup
+            this._pendingAnnotateTimeout = null; // Debounce timer for annotateAllMessages
         }
 
         /**
@@ -4059,6 +4061,7 @@
             this.observer = domObserverHelpers_js.createMutationWatcher(
                 document.body,
                 (mutations) => {
+                    let hasNewMessage = false;
                     for (const mutation of mutations) {
                         for (const node of mutation.addedNodes) {
                             if (!(node instanceof HTMLElement)) continue;
@@ -4067,13 +4070,25 @@
                                 ? node
                                 : node.querySelector?.('[class^="ChatMessage_chatMessage"]');
 
-                            if (!msg) continue;
-
-                            // Re-run batch annotation on any new message (matches working DRT script)
-                            const annotateTimeout = setTimeout(() => this.annotateAllMessages(), 100);
-                            this.timerRegistry.registerTimeout(annotateTimeout);
+                            if (msg) {
+                                hasNewMessage = true;
+                                break;
+                            }
                         }
+                        if (hasNewMessage) break;
                     }
+
+                    if (!hasNewMessage) return;
+
+                    // Debounce: clear any pending call and schedule a single new one
+                    if (this._pendingAnnotateTimeout) {
+                        clearTimeout(this._pendingAnnotateTimeout);
+                    }
+                    this._pendingAnnotateTimeout = setTimeout(() => {
+                        this._pendingAnnotateTimeout = null;
+                        this.annotateAllMessages();
+                    }, 100);
+                    this.timerRegistry.registerTimeout(this._pendingAnnotateTimeout);
                 },
                 {
                     childList: true,
@@ -4669,9 +4684,9 @@
          * @param {boolean} isAverage - Whether this is an average annotation
          */
         insertAnnotation(label, color, msg, isAverage = false) {
-            // Check using dataset attribute (matches working DRT script pattern)
-            const datasetKey = isAverage ? 'avgAppended' : 'timerAppended';
-            if (msg.dataset[datasetKey] === '1') {
+            // Check for existing annotation spans in the DOM (authoritative deduplication)
+            const spanClass = isAverage ? 'dungeon-timer-average' : 'dungeon-timer-annotation';
+            if (msg.querySelector('.' + spanClass)) {
                 return;
             }
 
@@ -4688,9 +4703,6 @@
             timerSpan.style.marginLeft = '4px';
 
             messageSpan.appendChild(timerSpan);
-
-            // Mark as appended (matches working DRT script)
-            msg.dataset[datasetKey] = '1';
         }
 
         /**
@@ -4734,6 +4746,12 @@
                 button.removeEventListener('click', handler);
             }
             this.tabClickHandlers.clear();
+
+            // Clear pending annotation debounce
+            if (this._pendingAnnotateTimeout) {
+                clearTimeout(this._pendingAnnotateTimeout);
+                this._pendingAnnotateTimeout = null;
+            }
 
             this.timerRegistry.clearAll();
 

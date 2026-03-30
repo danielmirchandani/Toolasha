@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.60.5
+ * Version: 1.61.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -21863,7 +21863,7 @@ ${hideRules}
                 : 'background-color: var(--color-space-300);';
 
             barsHTML += `<div class="${CSS_PREFIX}__bar"
-            style="height: ${heightPct}%; width: ${widthPct}%; ${bgStyle}"
+            style="height: ${heightPct}%; width: ${widthPct}%; border-right: 1px solid var(--color-space-700); box-sizing: border-box; ${bgStyle}"
             data-xph="${d.xpH}"
             ${d.truncated ? 'data-truncated="true"' : ''}
             data-t="${d.t}"></div>`;
@@ -21905,7 +21905,7 @@ ${hideRules}
                 <div style="width: 8px; height: 1px; background-color: var(--color-space-300);"></div>
                 <div style="width: 8px; height: 1px; background-color: var(--color-space-300);"></div>
             </div>
-            <div style="flex: 1 1; display: flex; align-items: flex-end; height: 100%; gap: 1px;">
+            <div style="flex: 1 1; display: flex; align-items: flex-end; height: 100%;">
                 ${barsHTML}
             </div>
             <div></div>

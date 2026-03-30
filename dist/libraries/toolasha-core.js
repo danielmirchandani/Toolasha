@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.60.5
+ * Version: 1.61.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -3040,6 +3040,7 @@
             // Character tracking for switch detection
             this.currentCharacterId = null;
             this.currentCharacterName = null;
+            this.currentCharacterGameMode = null;
             this.isCharacterSwitching = false;
             this.lastCharacterSwitchTime = 0; // Prevent rapid-fire switch loops
 
@@ -3214,6 +3215,7 @@
                     // Update character tracking
                     this.currentCharacterId = newCharacterId;
                     this.currentCharacterName = newCharacterName;
+                    this.currentCharacterGameMode = data.character?.gameMode || null;
 
                     // Clear old character data
                     this.characterData = null;
@@ -3239,6 +3241,7 @@
                     // First load - set character tracking
                     this.currentCharacterId = newCharacterId;
                     this.currentCharacterName = newCharacterName;
+                    this.currentCharacterGameMode = data.character?.gameMode || null;
                 }
 
                 // Process new character data normally
@@ -3627,6 +3630,14 @@
          */
         getCurrentCharacterName() {
             return this.currentCharacterName;
+        }
+
+        /**
+         * Get current character game mode
+         * @returns {string|null} Game mode ('ironcow', 'standard', etc.) or null
+         */
+        getCurrentCharacterGameMode() {
+            return this.currentCharacterGameMode;
         }
 
         /**
