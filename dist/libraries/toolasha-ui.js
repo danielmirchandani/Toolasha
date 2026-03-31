@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.61.1
+ * Version: 1.62.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1679,7 +1679,8 @@
             { from: 800, to: 999, checked: true },
             { from: 1000, to: 7999, checked: false },
             { from: 8000, to: 9999, checked: false },
-            { label: '10k+', from: 10000, to: Infinity, checked: false },
+            { label: '10k-100k', from: 10000, to: 99999, checked: false },
+            { label: '100k+', from: 100000, to: Infinity, checked: false },
             { label: 'Not dungeon', className: 'nod', checked: true, fn: matchNoDungeon },
             { dungeon: 'd1', checked: false },
             { dungeon: 'd2', checked: false },

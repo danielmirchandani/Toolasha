@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.61.1
+ * Version: 1.62.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -11960,6 +11960,218 @@
     };
 
     /**
+     * Marketplace Custom Tabs Utility
+     * Provides shared functionality for creating and managing custom marketplace tabs
+     * Used by missing materials features (actions, houses, etc.)
+     */
+
+
+    /**
+     * Get game object via React fiber
+     * @returns {Object|null} Game component instance
+     */
+    function getGameObject() {
+        const rootEl = document.getElementById('root');
+        const rootFiber = rootEl?._reactRootContainer?.current || rootEl?._reactRootContainer?._internalRoot?.current;
+        if (!rootFiber) return null;
+
+        function find(fiber) {
+            if (!fiber) return null;
+            if (fiber.stateNode?.handleGoToMarketplace) return fiber.stateNode;
+            return find(fiber.child) || find(fiber.sibling);
+        }
+
+        return find(rootFiber);
+    }
+
+    /**
+     * Navigate to marketplace for a specific item
+     * @param {string} itemHrid - Item HRID to navigate to
+     * @param {number} enhancementLevel - Enhancement level (default 0)
+     */
+    function navigateToMarketplace(itemHrid, enhancementLevel = 0) {
+        const game = getGameObject();
+        if (game?.handleGoToMarketplace) {
+            game.handleGoToMarketplace(itemHrid, enhancementLevel);
+        }
+        // Silently fail if game API unavailable - feature still provides value without auto-navigation
+    }
+
+    /**
+     * Marketplace Buy Modal Autofill Utility
+     * Provides shared functionality for auto-filling quantity in marketplace buy modals
+     * Used by missing materials features (actions, houses, etc.)
+     */
+
+
+    /**
+     * Find the quantity input in the buy modal
+     * For equipment items, there are multiple number inputs (enhancement level + quantity)
+     * We need to find the correct one by checking parent containers for label text
+     * @param {HTMLElement} modal - Modal container element
+     * @returns {HTMLInputElement|null} Quantity input element or null
+     */
+    function findQuantityInput(modal) {
+        // Get all number inputs in the modal
+        const allInputs = Array.from(modal.querySelectorAll('input[type="number"]'));
+
+        if (allInputs.length === 0) {
+            return null;
+        }
+
+        if (allInputs.length === 1) {
+            // Only one input - must be quantity
+            return allInputs[0];
+        }
+
+        // Multiple inputs - identify by checking CLOSEST parent first
+        // Strategy 1: Check each parent level individually, prioritizing closer parents
+        // This prevents matching on the outermost container that has all text
+        for (let level = 0; level < 4; level++) {
+            for (let i = 0; i < allInputs.length; i++) {
+                const input = allInputs[i];
+                let parent = input.parentElement;
+
+                // Navigate to the specific level
+                for (let j = 0; j < level && parent; j++) {
+                    parent = parent.parentElement;
+                }
+
+                if (!parent) continue;
+
+                const text = parent.textContent;
+
+                // At this specific level, check if it contains "Quantity" but NOT "Enhancement Level"
+                if (text.includes('Quantity') && !text.includes('Enhancement Level')) {
+                    return input;
+                }
+            }
+        }
+
+        // Strategy 2: Exclude inputs that have "Enhancement Level" in close parents (level 0-2)
+        for (let i = 0; i < allInputs.length; i++) {
+            const input = allInputs[i];
+            let parent = input.parentElement;
+            let isEnhancementInput = false;
+
+            // Check only the first 3 levels (not the outermost container)
+            for (let j = 0; j < 3 && parent; j++) {
+                const text = parent.textContent;
+
+                if (text.includes('Enhancement Level') && !text.includes('Quantity')) {
+                    isEnhancementInput = true;
+                    break;
+                }
+
+                parent = parent.parentElement;
+            }
+
+            if (!isEnhancementInput) {
+                return input;
+            }
+        }
+
+        // Fallback: Return first input and log warning
+        console.warn('[MarketplaceAutofill] Could not definitively identify quantity input, using first input');
+        return allInputs[0];
+    }
+
+    /**
+     * Handle buy modal appearance and auto-fill quantity if available
+     * @param {HTMLElement} modal - Modal container element
+     * @param {number|null} activeQuantity - Quantity to auto-fill (null if none)
+     */
+    function handleBuyModal(modal, activeQuantity) {
+        // Check if we have an active quantity to fill
+        if (!activeQuantity || activeQuantity <= 0) {
+            return;
+        }
+
+        // Check if this is a "Buy Now" modal
+        const header = modal.querySelector('div[class*="MarketplacePanel_header"]');
+        if (!header) {
+            return;
+        }
+
+        const headerText = header.textContent.trim();
+        if (!headerText.includes('Buy Now') && !headerText.includes('Buy Listing')) {
+            return;
+        }
+
+        // Find the quantity input - need to be specific to avoid enhancement level input
+        const quantityInput = findQuantityInput(modal);
+        if (!quantityInput) {
+            return;
+        }
+
+        // Set the quantity value
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        nativeInputValueSetter.call(quantityInput, activeQuantity.toString());
+
+        // Trigger input event to notify React
+        const inputEvent = new Event('input', { bubbles: true });
+        quantityInput.dispatchEvent(inputEvent);
+    }
+
+    /**
+     * Create an autofill manager instance
+     * Manages storing quantity to autofill and observing buy modals
+     * @param {string} observerId - Unique ID for this observer (e.g., 'MissingMats-Actions')
+     * @returns {Object} Autofill manager with methods: setQuantity, clearQuantity, initialize, cleanup
+     */
+    function createAutofillManager(observerId) {
+        let activeQuantity = null;
+        let observerUnregister = null;
+
+        return {
+            /**
+             * Set the quantity to auto-fill in the next buy modal
+             * @param {number} quantity - Quantity to auto-fill
+             */
+            setQuantity(quantity) {
+                activeQuantity = quantity;
+            },
+
+            /**
+             * Clear the stored quantity (cancel autofill)
+             */
+            clearQuantity() {
+                activeQuantity = null;
+            },
+
+            /**
+             * Get the current active quantity
+             * @returns {number|null} Current quantity or null
+             */
+            getQuantity() {
+                return activeQuantity;
+            },
+
+            /**
+             * Initialize buy modal observer
+             * Sets up watching for buy modals to appear and auto-fills them
+             */
+            initialize() {
+                observerUnregister = domObserver.onClass(observerId, 'Modal_modalContainer', (modal) => {
+                    handleBuyModal(modal, activeQuantity);
+                });
+            },
+
+            /**
+             * Cleanup observer
+             * Stops watching for buy modals and clears quantity
+             */
+            cleanup() {
+                if (observerUnregister) {
+                    observerUnregister();
+                    observerUnregister = null;
+                }
+                activeQuantity = null;
+            },
+        };
+    }
+
+    /**
      * Ability Book Calculator
      * Shows number of books needed to reach target ability level
      * Appears in Item Dictionary when viewing ability books
@@ -11974,6 +12186,7 @@
             this.unregisterObserver = null; // Unregister function from centralized observer
             this.isActive = false;
             this.isInitialized = false;
+            this.autofillManager = createAutofillManager('AbilityBookCalculator');
         }
 
         /**
@@ -12009,6 +12222,8 @@
             }
 
             this.isInitialized = true;
+
+            this.autofillManager.initialize();
 
             // Register with centralized observer to watch for Item Dictionary modal
             this.unregisterObserver = domObserver.onClass(
@@ -12202,23 +12417,48 @@
             const input = calculatorDiv.querySelector('#tillLevelInput');
             const display = calculatorDiv.querySelector('#tillLevelNumber');
 
+            let currentBooks = booksNeeded;
+
             const updateDisplay = () => {
                 const target = parseInt(input.value);
 
                 if (target > currentLevel && target <= 200) {
                     const books = this.calculateBooksNeeded(currentLevel, currentXp, target, xpPerBook);
+                    currentBooks = books;
                     display.innerHTML = `
                     Books needed: <strong>${formatters_js.numberFormatter(books)}</strong>
                     <br>
                     Cost: ${formatters_js.formatKMB(Math.ceil(books * ask))} / ${formatters_js.formatKMB(Math.ceil(books * bid))} (ask / bid)
                 `;
                 } else {
+                    currentBooks = 0;
                     display.innerHTML = '<span style="color: ${config.COLOR_LOSS};">Invalid target level</span>';
                 }
             };
 
             input.addEventListener('change', updateDisplay);
             input.addEventListener('keyup', updateDisplay);
+
+            // Buy on Marketplace button
+            const buyButton = document.createElement('button');
+            buyButton.textContent = 'Buy on Marketplace';
+            buyButton.style.cssText = `
+            margin-top: 8px;
+            padding: 4px 10px;
+            font-size: 0.85em;
+            background: #2a2a2a;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 3px;
+            cursor: pointer;
+        `;
+            buyButton.addEventListener('click', () => {
+                if (currentBooks > 0) {
+                    this.autofillManager.setQuantity(Math.ceil(currentBooks));
+                    navigateToMarketplace(itemHrid);
+                }
+            });
+            calculatorDiv.appendChild(buyButton);
 
             // Try to find the left column by looking for the modal's main content structure
             // The Item Dictionary modal typically has its content in direct children of the panel
@@ -12262,6 +12502,7 @@
                 this.unregisterObserver();
                 this.unregisterObserver = null;
             }
+            this.autofillManager.cleanup();
             this.isActive = false;
             this.isInitialized = false;
         }
