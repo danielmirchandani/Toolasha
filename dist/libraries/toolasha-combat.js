@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.62.0
+ * Version: 1.63.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -11338,19 +11338,13 @@
                             if (row.incomeBreakdown) {
                                 // Pricing mode label
                                 const pricingMode = config.getSettingValue('profitCalc_pricingMode') || 'hybrid';
-                                const pricingLabels = {
-                                    conservative: 'Buy: Ask / Sell: Bid',
-                                    hybrid: 'Buy: Ask / Sell: Ask',
-                                    optimistic: 'Buy: Bid / Sell: Ask',
-                                    patientBuy: 'Buy: Bid / Sell: Bid',
-                                };
                                 const pricingNote = document.createElement('div');
                                 pricingNote.style.cssText = `
                                 margin-bottom: 8px;
                                 font-size: 12px;
                                 color: #aaa;
                             `;
-                                pricingNote.textContent = `Pricing: ${pricingLabels[pricingMode] || pricingMode}`;
+                                pricingNote.textContent = `Pricing: ${config.getPricingModeLabel(pricingMode)}`;
                                 breakdownDiv.appendChild(pricingNote);
 
                                 // Column header

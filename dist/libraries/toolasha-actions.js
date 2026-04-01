@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.62.0
+ * Version: 1.63.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2462,13 +2462,7 @@
 
         // Add pricing mode label
         const pricingMode = profitData.pricingMode || 'hybrid';
-        const modeLabel =
-            {
-                conservative: 'Buy: Ask / Sell: Bid',
-                hybrid: 'Buy: Ask / Sell: Ask',
-                optimistic: 'Buy: Bid / Sell: Ask',
-                patientBuy: 'Buy: Bid / Sell: Bid',
-            }[pricingMode] || 'Buy: Ask / Sell: Ask';
+        const modeLabel = config.getPricingModeLabel(pricingMode);
 
         const modeDiv = document.createElement('div');
         modeDiv.style.cssText = `
@@ -3073,13 +3067,7 @@
 
         // Add pricing mode label
         const pricingMode = profitData.pricingMode || 'hybrid';
-        const modeLabel =
-            {
-                conservative: 'Buy: Ask / Sell: Bid',
-                hybrid: 'Buy: Ask / Sell: Ask',
-                optimistic: 'Buy: Bid / Sell: Ask',
-                patientBuy: 'Buy: Bid / Sell: Bid',
-            }[pricingMode] || 'Buy: Ask / Sell: Ask';
+        const modeLabel = config.getPricingModeLabel(pricingMode);
 
         const modeDiv = document.createElement('div');
         modeDiv.style.cssText = `
@@ -4914,17 +4902,11 @@
 
             // Create profit mode toggle button
             const PROFIT_MODES = ['hybrid', 'conservative', 'optimistic', 'patientBuy'];
-            const PROFIT_MODE_LABELS = {
-                hybrid: 'Mode: Buy: Ask / Sell: Ask',
-                conservative: 'Mode: Buy: Ask / Sell: Bid',
-                optimistic: 'Mode: Buy: Bid / Sell: Ask',
-                patientBuy: 'Mode: Buy: Bid / Sell: Bid',
-            };
             const modeBtn = document.createElement('button');
             modeBtn.id = 'mwi-action-profit-mode';
             const updateModeBtn = () => {
                 const mode = config.getSettingValue('profitCalc_pricingMode', 'hybrid');
-                modeBtn.textContent = PROFIT_MODE_LABELS[mode] || 'Mode: Hybrid';
+                modeBtn.textContent = `Mode: ${config.getPricingModeLabel(mode)}`;
             };
             modeBtn.style.cssText = `
             padding: 8px 12px;
@@ -17718,13 +17700,7 @@
 
             // Add pricing mode label
             const pricingMode = profitData.pricingMode || 'hybrid';
-            const modeLabel =
-                {
-                    conservative: 'Buy: Ask / Sell: Bid',
-                    hybrid: 'Buy: Ask / Sell: Ask',
-                    optimistic: 'Buy: Bid / Sell: Ask',
-                    patientBuy: 'Buy: Bid / Sell: Bid',
-                }[pricingMode] || 'Buy: Ask / Sell: Ask';
+            const modeLabel = config.getPricingModeLabel(pricingMode);
 
             const modeDiv = document.createElement('div');
             modeDiv.style.cssText = `

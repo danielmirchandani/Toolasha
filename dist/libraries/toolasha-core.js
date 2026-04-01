@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.62.0
+ * Version: 1.63.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -962,6 +962,13 @@
                         { value: 'optimistic', label: 'Buy: Bid / Sell: Ask (Patient Buy / Patient Sell)' },
                         { value: 'patientBuy', label: 'Buy: Bid / Sell: Bid (Patient Buy / Instant Sell)' },
                     ],
+                },
+                profitCalc_pricingNaming: {
+                    id: 'profitCalc_pricingNaming',
+                    label: 'Pricing mode naming convention',
+                    type: 'checkbox',
+                    default: false,
+                    help: 'Show pricing modes as "Instant Buy / Instant Sell" instead of "Buy: Ask / Sell: Bid"',
                 },
                 actions_artisanMaterialMode: {
                     id: 'actions_artisanMaterialMode',
@@ -4441,6 +4448,29 @@
 
             // Ultimate fallback
             return false;
+        }
+
+        /**
+         * Get the display label for a pricing mode key, respecting the naming convention setting.
+         * @param {string} mode - Pricing mode key ('conservative', 'hybrid', 'optimistic', 'patientBuy')
+         * @returns {string} Display label
+         */
+        getPricingModeLabel(mode) {
+            const useInstant = this.getSetting('profitCalc_pricingNaming');
+            const labels = useInstant
+                ? {
+                      conservative: 'Instant Buy / Instant Sell',
+                      hybrid: 'Instant Buy / Patient Sell',
+                      optimistic: 'Patient Buy / Patient Sell',
+                      patientBuy: 'Patient Buy / Instant Sell',
+                  }
+                : {
+                      conservative: 'Buy: Ask / Sell: Bid',
+                      hybrid: 'Buy: Ask / Sell: Ask',
+                      optimistic: 'Buy: Bid / Sell: Ask',
+                      patientBuy: 'Buy: Bid / Sell: Bid',
+                  };
+            return labels[mode] || labels.hybrid;
         }
 
         /**
