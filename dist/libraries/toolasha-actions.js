@@ -1,11 +1,11 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 1.63.1
+ * Version: 1.64.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (dataManager, domObserver, config, enhancementConfig_js, enhancementCalculator_js, profitConstants_js, formatters_js, marketAPI, domObserverHelpers_js, webSocketHook, storage, equipmentParser_js, teaParser_js, bonusRevenueCalculator_js, marketData_js, efficiency_js, profitHelpers_js, profitCalculator, uiComponents_js, actionPanelHelper_js, dom_js, timerRegistry_js, actionCalculator_js, cleanupRegistry_js, houseEfficiency_js, experienceParser_js, reactInput_js, experienceCalculator_js, materialCalculator_js, expectedValueCalculator, alchemyProfitCalculator) {
+(function (dataManager, domObserver, config, enhancementConfig_js, enhancementCalculator_js, profitConstants_js, formatters_js, marketAPI, domObserverHelpers_js, bonusRevenueCalculator_js, marketData_js, efficiency_js, profitHelpers_js, profitCalculator, uiComponents_js, actionPanelHelper_js, webSocketHook, storage, dom_js, timerRegistry_js, actionCalculator_js, cleanupRegistry_js, teaParser_js, equipmentParser_js, houseEfficiency_js, experienceParser_js, reactInput_js, experienceCalculator_js, materialCalculator_js, expectedValueCalculator, alchemyProfitCalculator) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -1300,231 +1300,6 @@
     }
 
     /**
-     * Loadout Snapshot
-     *
-     * Listens for `loadouts_updated` WebSocket messages to capture all loadout configurations
-     * (equipment, abilities, consumables, enhancement levels) in real time.
-     *
-     * Stored snapshots are used by profit calculators to apply the correct tool/equipment
-     * bonuses for a skill even when that loadout is not currently equipped.
-     *
-     * Skill matching: the loadout's actionTypeHrid (e.g. "/action_types/brewing") is compared
-     * to the action type of the profit calculation. An "All Skills" loadout (empty actionTypeHrid)
-     * is used as a fallback when no skill-specific snapshot is found.
-     *
-     * Priority: skill default > all skills default > skill non-default > all skills non-default
-     */
-
-
-    const STORAGE_KEY_PREFIX = 'loadout_snapshots';
-
-    /**
-     * Get character-scoped storage key.
-     * @returns {string}
-     */
-    function getStorageKey() {
-        const charId = dataManager.getCurrentCharacterId() || 'default';
-        return `${STORAGE_KEY_PREFIX}_${charId}`;
-    }
-
-    /**
-     * Parse a wearable hash string into itemLocationHrid, itemHrid, and enhancementLevel.
-     * Format: "characterId::/item_locations/location::/items/item_hrid::enhancementLevel"
-     * Empty string means no item in that slot.
-     * @param {string} itemLocationHrid - The equipment slot key (e.g. "/item_locations/body")
-     * @param {string} wearableHash - The wearable hash value
-     * @returns {{ itemLocationHrid: string, itemHrid: string, enhancementLevel: number }|null}
-     */
-    function parseWearable(itemLocationHrid, wearableHash) {
-        if (!wearableHash) return null;
-
-        const parts = wearableHash.split('::');
-        const itemHrid = parts.find((p) => p.startsWith('/items/'));
-        if (!itemHrid) return null;
-
-        const lastPart = parts[parts.length - 1];
-        const enhancementLevel = !lastPart.startsWith('/') ? parseInt(lastPart, 10) || 0 : 0;
-
-        return { itemLocationHrid, itemHrid, enhancementLevel };
-    }
-
-    /**
-     * Convert a server loadout object into our snapshot format.
-     * @param {Object} loadout - A loadout entry from characterLoadoutMap
-     * @returns {Object} snapshot
-     */
-    function buildSnapshot(loadout) {
-        // Parse equipment from wearableMap
-        const equipment = [];
-        for (const [locationHrid, hash] of Object.entries(loadout.wearableMap || {})) {
-            const parsed = parseWearable(locationHrid, hash);
-            if (parsed) equipment.push(parsed);
-        }
-
-        // Parse drinks
-        const drinks = (loadout.drinkItemHrids || []).map((hrid) => ({
-            itemHrid: hrid || '',
-        }));
-
-        // Parse food
-        const food = (loadout.foodItemHrids || []).map((hrid) => ({
-            itemHrid: hrid || '',
-        }));
-
-        // Parse abilities
-        const abilities = [];
-        for (const [slot, hrid] of Object.entries(loadout.abilityMap || {})) {
-            if (hrid) abilities.push({ abilityHrid: hrid, slot: parseInt(slot, 10) });
-        }
-
-        return {
-            name: loadout.name,
-            actionTypeHrid: loadout.actionTypeHrid || '',
-            isDefault: !!loadout.isDefault,
-            equipment,
-            abilities,
-            food,
-            drinks,
-            savedAt: Date.now(),
-        };
-    }
-
-    class LoadoutSnapshot {
-        constructor() {
-            this.snapshots = {}; // In-memory cache: { [loadoutName]: snapshot }
-            this.loadoutsUpdatedHandler = null;
-            this.isInitialized = false;
-        }
-
-        async initialize() {
-            if (this.isInitialized) return;
-            this.isInitialized = true;
-
-            // Load existing snapshots into memory
-            this.snapshots = (await storage.getJSON(getStorageKey(), 'settings', null)) || {};
-            console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
-
-            // Listen for loadouts_updated WebSocket messages
-            this.loadoutsUpdatedHandler = (data) => this._onLoadoutsUpdated(data);
-            webSocketHook.on('loadouts_updated', this.loadoutsUpdatedHandler);
-        }
-
-        /**
-         * Handle a loadouts_updated WebSocket message.
-         * Replaces all snapshots with the server's current state.
-         * @param {Object} data - The WebSocket message payload
-         */
-        _onLoadoutsUpdated(data) {
-            console.log('[LoadoutSnapshot] loadouts_updated WebSocket message received');
-            const loadoutMap = data.characterLoadoutMap;
-            if (!loadoutMap) {
-                console.log('[LoadoutSnapshot] no characterLoadoutMap in message');
-                return;
-            }
-
-            const newSnapshots = {};
-            for (const [id, loadout] of Object.entries(loadoutMap)) {
-                if (!loadout.name) continue;
-                newSnapshots[id] = buildSnapshot(loadout);
-                console.log(
-                    `[LoadoutSnapshot]   → ${loadout.name} (id=${id}): type=${loadout.actionTypeHrid || 'All Skills'}, default=${loadout.isDefault}`
-                );
-            }
-
-            this.snapshots = newSnapshots;
-            storage.setJSON(getStorageKey(), this.snapshots, 'settings');
-            console.log(
-                `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
-                Object.values(newSnapshots).map((s) => s.name)
-            );
-        }
-
-        /**
-         * Find the best snapshot for a given action type.
-         * Priority: skill default > all skills default > skill non-default > all skills non-default
-         * @param {string} actionTypeHrid - e.g. "/action_types/brewing"
-         * @returns {Object|null} snapshot entry or null
-         */
-        _findSnapshot(actionTypeHrid) {
-            if (!config.getSetting('loadoutSnapshot')) return null;
-
-            let skillDefault = null;
-            let allSkillsDefault = null;
-            let skillNonDefault = null;
-            let allSkillsNonDefault = null;
-
-            for (const snapshot of Object.values(this.snapshots)) {
-                if (snapshot.actionTypeHrid === actionTypeHrid) {
-                    if (snapshot.isDefault) {
-                        skillDefault = snapshot;
-                    } else {
-                        skillNonDefault = snapshot;
-                    }
-                } else if (snapshot.actionTypeHrid === '') {
-                    if (snapshot.isDefault) {
-                        allSkillsDefault = snapshot;
-                    } else {
-                        allSkillsNonDefault = snapshot;
-                    }
-                }
-            }
-
-            return skillDefault || allSkillsDefault || skillNonDefault || allSkillsNonDefault || null;
-        }
-
-        /**
-         * Get a Map<itemLocationHrid, item> for the best loadout snapshot matching the given
-         * action type. Returns null if no snapshot exists or the feature is disabled.
-         * The returned Map has the same format as dataManager.getEquipment().
-         * @param {string} actionTypeHrid
-         * @returns {Map<string, Object>|null}
-         */
-        getSnapshotForSkill(actionTypeHrid) {
-            const snapshot = this._findSnapshot(actionTypeHrid);
-            if (!snapshot || !snapshot.equipment?.length) return null;
-            return new Map(snapshot.equipment.map((e) => [e.itemLocationHrid, e]));
-        }
-
-        /**
-         * Get the drink slots array for the best loadout snapshot matching the given
-         * action type. Returns null if no snapshot exists or the feature is disabled.
-         * The returned array has the same format as dataManager.getActionDrinkSlots().
-         * @param {string} actionTypeHrid
-         * @returns {Array<{itemHrid: string}>|null}
-         */
-        getSnapshotDrinksForSkill(actionTypeHrid) {
-            const snapshot = this._findSnapshot(actionTypeHrid);
-            if (!snapshot) return null;
-            // Filter out empty slots so callers get only actual items
-            const filled = (snapshot.drinks || []).filter((d) => d.itemHrid);
-            return filled.length > 0 ? filled : null;
-        }
-
-        /**
-         * Get the name and default status of the saved loadout being used for a given action type.
-         * Returns an object with name and isDefault, or null if no snapshot exists or feature is disabled.
-         * @param {string} actionTypeHrid
-         * @returns {{ name: string, isDefault: boolean }|null}
-         */
-        getSnapshotInfoForSkill(actionTypeHrid) {
-            const snapshot = this._findSnapshot(actionTypeHrid);
-            if (!snapshot) return null;
-            return { name: snapshot.name, isDefault: !!snapshot.isDefault };
-        }
-
-        disable() {
-            if (this.loadoutsUpdatedHandler) {
-                webSocketHook.off('loadouts_updated', this.loadoutsUpdatedHandler);
-                this.loadoutsUpdatedHandler = null;
-            }
-
-            this.isInitialized = false;
-        }
-    }
-
-    const loadoutSnapshot = new LoadoutSnapshot();
-
-    /**
      * Gathering Profit Calculator
      *
      * Calculates comprehensive profit/hour for gathering actions (Foraging, Woodcutting, Milking) including:
@@ -1603,89 +1378,40 @@
             processingConversionCache = buildProcessingConversionCache(gameData);
         }
 
-        const priceCache = new Map();
-        const getCachedPrice = (itemHrid, options) => {
-            const side = options?.side || '';
-            const enhancementLevel = options?.enhancementLevel ?? '';
-            const cacheKey = `${itemHrid}|${side}|${enhancementLevel}`;
-
-            if (priceCache.has(cacheKey)) {
-                return priceCache.get(cacheKey);
-            }
-
-            const price = marketData_js.getItemPrice(itemHrid, options);
-            priceCache.set(cacheKey, price);
-            return price;
-        };
+        const getCachedPrice = profitHelpers_js.createPriceCache(marketData_js.getItemPrice);
 
         // Note: Market API is pre-loaded by caller (max-produceable.js)
         // No need to check or fetch here
 
-        // Get character data
-        const equipment = loadoutSnapshot.getSnapshotForSkill(actionDetail.type) ?? dataManager.getEquipment();
-        const skills = dataManager.getSkills();
-        const houseRooms = Array.from(dataManager.getHouseRooms().values());
+        const effCtx = efficiency_js.getActionEfficiencyContext(actionDetail, { isProduction: false, gameData });
 
-        // Calculate action time per action (with speed bonuses)
-        const baseTimePerActionSec = actionDetail.baseTimeCost / 1000000000;
-        const speedBonus = equipmentParser_js.parseEquipmentSpeedBonuses(equipment, actionDetail.type, gameData.itemDetailMap);
-        const personalSpeedBonus = dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/action_speed');
-        // speedBonus is already a decimal (e.g., 0.15 for 15%), don't divide by 100
-        const actualTimePerActionSec = baseTimePerActionSec / (1 + speedBonus + personalSpeedBonus);
+        const {
+            equipment,
+            drinkSlots,
+            drinkConcentration,
+            actionTime: actualTimePerActionSec,
+            speedBonus,
+            gourmetBonus,
+            processingBonus,
+            equipmentEfficiency,
+            equipmentEfficiencyItems,
+            houseEfficiency,
+            teaEfficiency,
+            achievementEfficiency,
+            personalEfficiency,
+            totalGathering,
+            gatheringDetails,
+            efficiencyBreakdown,
+            efficiencyMultiplier,
+        } = effCtx;
 
-        // Calculate actions per hour
-        const actionsPerHour = profitHelpers_js.calculateActionsPerHour(actualTimePerActionSec);
-
-        // Get character's actual equipped drink slots for this action type (from WebSocket data)
-        const drinkSlots =
-            loadoutSnapshot.getSnapshotDrinksForSkill(actionDetail.type) ??
-            dataManager.getActionDrinkSlots(actionDetail.type);
-
-        // Get drink concentration from equipment
-        const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
-
-        // Parse tea buffs
-        const teaEfficiency = teaParser_js.parseTeaEfficiency(actionDetail.type, drinkSlots, gameData.itemDetailMap, drinkConcentration);
-
-        // Gourmet Tea only applies to production skills (Brewing, Cooking, Cheesesmithing, Crafting, Tailoring)
-        // NOT gathering skills (Foraging, Woodcutting, Milking)
-        const gourmetBonus = profitConstants_js.PRODUCTION_TYPES.includes(actionDetail.type)
-            ? teaParser_js.parseGourmetBonus(drinkSlots, gameData.itemDetailMap, drinkConcentration) +
-              dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/gourmet')
-            : 0;
-
-        // Processing Tea: 15% base chance to convert raw → processed (Cotton → Cotton Fabric, etc.)
-        // Only applies to gathering skills (Foraging, Woodcutting, Milking)
-        const processingBonus = profitConstants_js.GATHERING_TYPES.includes(actionDetail.type)
-            ? teaParser_js.parseProcessingBonus(drinkSlots, gameData.itemDetailMap, drinkConcentration) +
-              dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/processing')
-            : 0;
-
-        // Gathering Quantity: Increases item drop amounts (min/max)
-        // Sources: Gathering Tea (15% base), Community Buff (20% base + 0.5%/level), Achievement Tiers
-        // Only applies to gathering skills (Foraging, Woodcutting, Milking)
-        let totalGathering = 0;
-        let gatheringTea = 0;
-        let communityGathering = 0;
-        let achievementGathering = 0;
-        let personalGathering = 0;
-        if (profitConstants_js.GATHERING_TYPES.includes(actionDetail.type)) {
-            // Parse Gathering Tea bonus
-            gatheringTea = teaParser_js.parseGatheringBonus(drinkSlots, gameData.itemDetailMap, drinkConcentration);
-
-            // Get Community Buff level for gathering quantity
-            const communityBuffLevel = dataManager.getCommunityBuffLevel('/community_buff_types/gathering_quantity');
-            communityGathering = communityBuffLevel ? 0.2 + (communityBuffLevel - 1) * 0.005 : 0;
-
-            // Get Achievement buffs for this action type (Beginner tier: +2% Gathering Quantity)
-            achievementGathering = dataManager.getAchievementBuffFlatBoost(actionDetail.type, '/buff_types/gathering');
-
-            // Get personal buff (Seal of Gathering)
-            personalGathering = dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/gathering');
-
-            // Stack all bonuses additively
-            totalGathering = gatheringTea + communityGathering + achievementGathering + personalGathering;
-        }
+        const { totalEfficiency, levelEfficiency } = efficiencyBreakdown;
+        const {
+            gatheringTea = 0,
+            communityGathering = 0,
+            achievementGathering = 0,
+            personalGathering = 0,
+        } = gatheringDetails ?? {};
 
         const teaCostData = profitHelpers_js.calculateTeaCostsPerHour({
             drinkSlots,
@@ -1702,64 +1428,7 @@
             missingPrice: tea.missingPrice,
         }));
 
-        // Calculate level efficiency bonus
-        if (!actionDetail.levelRequirement) {
-            console.error(`[GatheringProfit] Action has no levelRequirement: ${actionDetail.hrid}`);
-        }
-        const requiredLevel = actionDetail.levelRequirement?.level || 1;
-        const skillHrid = actionDetail.levelRequirement?.skillHrid;
-        let currentLevel = requiredLevel;
-        for (const skill of skills) {
-            if (skill.skillHrid === skillHrid) {
-                currentLevel = skill.level;
-                break;
-            }
-        }
-
-        // Calculate tea skill level bonus (e.g., +5 Foraging from Ultra Foraging Tea)
-        const teaSkillLevelBonus = teaParser_js.parseTeaSkillLevelBonus(
-            actionDetail.type,
-            drinkSlots,
-            gameData.itemDetailMap,
-            drinkConcentration
-        );
-
-        // Calculate house efficiency bonus
-        let houseEfficiency = 0;
-        for (const room of houseRooms) {
-            const roomDetail = gameData.houseRoomDetailMap?.[room.houseRoomHrid];
-            if (roomDetail?.usableInActionTypeMap?.[actionDetail.type]) {
-                houseEfficiency += (room.level || 0) * 1.5;
-            }
-        }
-
-        // Calculate equipment efficiency bonus (uses equipment-parser utility)
-        const equipmentEfficiency = equipmentParser_js.parseEquipmentEfficiencyBonuses(equipment, actionDetail.type, gameData.itemDetailMap);
-        const equipmentEfficiencyItems = equipmentParser_js.parseEquipmentEfficiencyBreakdown(
-            equipment,
-            actionDetail.type,
-            gameData.itemDetailMap
-        );
-        const achievementEfficiency =
-            dataManager.getAchievementBuffFlatBoost(actionDetail.type, '/buff_types/efficiency') * 100;
-        const personalEfficiency = dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/efficiency') * 100;
-
-        const efficiencyBreakdown = efficiency_js.calculateEfficiencyBreakdown({
-            requiredLevel,
-            skillLevel: currentLevel,
-            teaSkillLevelBonus,
-            houseEfficiency,
-            teaEfficiency,
-            equipmentEfficiency,
-            achievementEfficiency,
-            personalEfficiency,
-        });
-        const totalEfficiency = efficiencyBreakdown.totalEfficiency;
-        const levelEfficiency = efficiencyBreakdown.levelEfficiency;
-
-        // Calculate efficiency multiplier (matches production profit calculator pattern)
-        // Efficiency "repeats the action" - we apply it to item outputs, not action rate
-        const efficiencyMultiplier = efficiency_js.calculateEfficiencyMultiplier(totalEfficiency);
+        const actionsPerHour = profitHelpers_js.calculateActionsPerHour(actualTimePerActionSec);
 
         // Calculate revenue from drop table
         // Processing happens PER ACTION (before efficiency multiplies the count)
@@ -2035,6 +1704,231 @@
 
         return profitData;
     }
+
+    /**
+     * Loadout Snapshot
+     *
+     * Listens for `loadouts_updated` WebSocket messages to capture all loadout configurations
+     * (equipment, abilities, consumables, enhancement levels) in real time.
+     *
+     * Stored snapshots are used by profit calculators to apply the correct tool/equipment
+     * bonuses for a skill even when that loadout is not currently equipped.
+     *
+     * Skill matching: the loadout's actionTypeHrid (e.g. "/action_types/brewing") is compared
+     * to the action type of the profit calculation. An "All Skills" loadout (empty actionTypeHrid)
+     * is used as a fallback when no skill-specific snapshot is found.
+     *
+     * Priority: skill default > all skills default > skill non-default > all skills non-default
+     */
+
+
+    const STORAGE_KEY_PREFIX = 'loadout_snapshots';
+
+    /**
+     * Get character-scoped storage key.
+     * @returns {string}
+     */
+    function getStorageKey() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX}_${charId}`;
+    }
+
+    /**
+     * Parse a wearable hash string into itemLocationHrid, itemHrid, and enhancementLevel.
+     * Format: "characterId::/item_locations/location::/items/item_hrid::enhancementLevel"
+     * Empty string means no item in that slot.
+     * @param {string} itemLocationHrid - The equipment slot key (e.g. "/item_locations/body")
+     * @param {string} wearableHash - The wearable hash value
+     * @returns {{ itemLocationHrid: string, itemHrid: string, enhancementLevel: number }|null}
+     */
+    function parseWearable(itemLocationHrid, wearableHash) {
+        if (!wearableHash) return null;
+
+        const parts = wearableHash.split('::');
+        const itemHrid = parts.find((p) => p.startsWith('/items/'));
+        if (!itemHrid) return null;
+
+        const lastPart = parts[parts.length - 1];
+        const enhancementLevel = !lastPart.startsWith('/') ? parseInt(lastPart, 10) || 0 : 0;
+
+        return { itemLocationHrid, itemHrid, enhancementLevel };
+    }
+
+    /**
+     * Convert a server loadout object into our snapshot format.
+     * @param {Object} loadout - A loadout entry from characterLoadoutMap
+     * @returns {Object} snapshot
+     */
+    function buildSnapshot(loadout) {
+        // Parse equipment from wearableMap
+        const equipment = [];
+        for (const [locationHrid, hash] of Object.entries(loadout.wearableMap || {})) {
+            const parsed = parseWearable(locationHrid, hash);
+            if (parsed) equipment.push(parsed);
+        }
+
+        // Parse drinks
+        const drinks = (loadout.drinkItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse food
+        const food = (loadout.foodItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse abilities
+        const abilities = [];
+        for (const [slot, hrid] of Object.entries(loadout.abilityMap || {})) {
+            if (hrid) abilities.push({ abilityHrid: hrid, slot: parseInt(slot, 10) });
+        }
+
+        return {
+            name: loadout.name,
+            actionTypeHrid: loadout.actionTypeHrid || '',
+            isDefault: !!loadout.isDefault,
+            equipment,
+            abilities,
+            food,
+            drinks,
+            savedAt: Date.now(),
+        };
+    }
+
+    class LoadoutSnapshot {
+        constructor() {
+            this.snapshots = {}; // In-memory cache: { [loadoutName]: snapshot }
+            this.loadoutsUpdatedHandler = null;
+            this.isInitialized = false;
+        }
+
+        async initialize() {
+            if (this.isInitialized) return;
+            this.isInitialized = true;
+
+            // Load existing snapshots into memory
+            this.snapshots = (await storage.getJSON(getStorageKey(), 'settings', null)) || {};
+            console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
+
+            // Listen for loadouts_updated WebSocket messages
+            this.loadoutsUpdatedHandler = (data) => this._onLoadoutsUpdated(data);
+            webSocketHook.on('loadouts_updated', this.loadoutsUpdatedHandler);
+        }
+
+        /**
+         * Handle a loadouts_updated WebSocket message.
+         * Replaces all snapshots with the server's current state.
+         * @param {Object} data - The WebSocket message payload
+         */
+        _onLoadoutsUpdated(data) {
+            console.log('[LoadoutSnapshot] loadouts_updated WebSocket message received');
+            const loadoutMap = data.characterLoadoutMap;
+            if (!loadoutMap) {
+                console.log('[LoadoutSnapshot] no characterLoadoutMap in message');
+                return;
+            }
+
+            const newSnapshots = {};
+            for (const [id, loadout] of Object.entries(loadoutMap)) {
+                if (!loadout.name) continue;
+                newSnapshots[id] = buildSnapshot(loadout);
+                console.log(
+                    `[LoadoutSnapshot]   → ${loadout.name} (id=${id}): type=${loadout.actionTypeHrid || 'All Skills'}, default=${loadout.isDefault}`
+                );
+            }
+
+            this.snapshots = newSnapshots;
+            storage.setJSON(getStorageKey(), this.snapshots, 'settings');
+            console.log(
+                `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
+                Object.values(newSnapshots).map((s) => s.name)
+            );
+        }
+
+        /**
+         * Find the best snapshot for a given action type.
+         * Priority: skill default > all skills default > skill non-default > all skills non-default
+         * @param {string} actionTypeHrid - e.g. "/action_types/brewing"
+         * @returns {Object|null} snapshot entry or null
+         */
+        _findSnapshot(actionTypeHrid) {
+            if (!config.getSetting('loadoutSnapshot')) return null;
+
+            let skillDefault = null;
+            let allSkillsDefault = null;
+            let skillNonDefault = null;
+            let allSkillsNonDefault = null;
+
+            for (const snapshot of Object.values(this.snapshots)) {
+                if (snapshot.actionTypeHrid === actionTypeHrid) {
+                    if (snapshot.isDefault) {
+                        skillDefault = snapshot;
+                    } else {
+                        skillNonDefault = snapshot;
+                    }
+                } else if (snapshot.actionTypeHrid === '') {
+                    if (snapshot.isDefault) {
+                        allSkillsDefault = snapshot;
+                    } else {
+                        allSkillsNonDefault = snapshot;
+                    }
+                }
+            }
+
+            return skillDefault || allSkillsDefault || skillNonDefault || allSkillsNonDefault || null;
+        }
+
+        /**
+         * Get a Map<itemLocationHrid, item> for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned Map has the same format as dataManager.getEquipment().
+         * @param {string} actionTypeHrid
+         * @returns {Map<string, Object>|null}
+         */
+        getSnapshotForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot || !snapshot.equipment?.length) return null;
+            return new Map(snapshot.equipment.map((e) => [e.itemLocationHrid, e]));
+        }
+
+        /**
+         * Get the drink slots array for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned array has the same format as dataManager.getActionDrinkSlots().
+         * @param {string} actionTypeHrid
+         * @returns {Array<{itemHrid: string}>|null}
+         */
+        getSnapshotDrinksForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            // Filter out empty slots so callers get only actual items
+            const filled = (snapshot.drinks || []).filter((d) => d.itemHrid);
+            return filled.length > 0 ? filled : null;
+        }
+
+        /**
+         * Get the name and default status of the saved loadout being used for a given action type.
+         * Returns an object with name and isDefault, or null if no snapshot exists or feature is disabled.
+         * @param {string} actionTypeHrid
+         * @returns {{ name: string, isDefault: boolean }|null}
+         */
+        getSnapshotInfoForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            return { name: snapshot.name, isDefault: !!snapshot.isDefault };
+        }
+
+        disable() {
+            if (this.loadoutsUpdatedHandler) {
+                webSocketHook.off('loadouts_updated', this.loadoutsUpdatedHandler);
+                this.loadoutsUpdatedHandler = null;
+            }
+
+            this.isInitialized = false;
+        }
+    }
+
+    const loadoutSnapshot = new LoadoutSnapshot();
 
     /**
      * Profit Display Functions
@@ -18308,4 +18202,4 @@
 
     console.log('[Toolasha] Actions library loaded');
 
-})(Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.config, Toolasha.Utils.enhancementConfig, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.profitConstants, Toolasha.Utils.formatters, Toolasha.Core.marketAPI, Toolasha.Utils.domObserverHelpers, Toolasha.Core.webSocketHook, Toolasha.Core.storage, Toolasha.Utils.equipmentParser, Toolasha.Utils.teaParser, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.efficiency, Toolasha.Utils.profitHelpers, Toolasha.Market.profitCalculator, Toolasha.Utils.uiComponents, Toolasha.Utils.actionPanelHelper, Toolasha.Utils.dom, Toolasha.Utils.timerRegistry, Toolasha.Utils.actionCalculator, Toolasha.Utils.cleanupRegistry, Toolasha.Utils.houseEfficiency, Toolasha.Utils.experienceParser, Toolasha.Utils.reactInput, Toolasha.Utils.experienceCalculator, Toolasha.Utils.materialCalculator, Toolasha.Market.expectedValueCalculator, Toolasha.Market.alchemyProfitCalculator);
+})(Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.config, Toolasha.Utils.enhancementConfig, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.profitConstants, Toolasha.Utils.formatters, Toolasha.Core.marketAPI, Toolasha.Utils.domObserverHelpers, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.efficiency, Toolasha.Utils.profitHelpers, Toolasha.Market.profitCalculator, Toolasha.Utils.uiComponents, Toolasha.Utils.actionPanelHelper, Toolasha.Core.webSocketHook, Toolasha.Core.storage, Toolasha.Utils.dom, Toolasha.Utils.timerRegistry, Toolasha.Utils.actionCalculator, Toolasha.Utils.cleanupRegistry, Toolasha.Utils.teaParser, Toolasha.Utils.equipmentParser, Toolasha.Utils.houseEfficiency, Toolasha.Utils.experienceParser, Toolasha.Utils.reactInput, Toolasha.Utils.experienceCalculator, Toolasha.Utils.materialCalculator, Toolasha.Market.expectedValueCalculator, Toolasha.Market.alchemyProfitCalculator);

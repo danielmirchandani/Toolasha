@@ -1,11 +1,11 @@
 /**
  * Toolasha Utils Library
  * All utility modules
- * Version: 1.63.1
+ * Version: 1.64.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (config, domObserver, marketAPI, dataManager) {
+(function (config, dataManager, webSocketHook, storage, domObserver, marketAPI) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -455,111 +455,1374 @@
     });
 
     /**
-     * Efficiency Utilities Module
-     * Calculations for efficiency stacking and breakdowns
+     * Loadout Snapshot
+     *
+     * Listens for `loadouts_updated` WebSocket messages to capture all loadout configurations
+     * (equipment, abilities, consumables, enhancement levels) in real time.
+     *
+     * Stored snapshots are used by profit calculators to apply the correct tool/equipment
+     * bonuses for a skill even when that loadout is not currently equipped.
+     *
+     * Skill matching: the loadout's actionTypeHrid (e.g. "/action_types/brewing") is compared
+     * to the action type of the profit calculation. An "All Skills" loadout (empty actionTypeHrid)
+     * is used as a fallback when no skill-specific snapshot is found.
+     *
+     * Priority: skill default > all skills default > skill non-default > all skills non-default
      */
 
+
+    const STORAGE_KEY_PREFIX = 'loadout_snapshots';
+
     /**
-     * Stack additive bonuses (most game bonuses)
-     * @param {number[]} bonuses - Array of bonus percentages
-     * @returns {number} Total stacked bonus percentage
-     *
-     * @example
-     * stackAdditive([10, 20, 5])
-     * // Returns: 35
-     * // Because: 10% + 20% + 5% = 35%
+     * Get character-scoped storage key.
+     * @returns {string}
      */
-    function stackAdditive(...bonuses) {
-        return bonuses.reduce((total, bonus) => total + bonus, 0);
+    function getStorageKey() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX}_${charId}`;
     }
 
     /**
-     * Calculate efficiency multiplier from efficiency percentage
-     * Efficiency gives bonus action completions per time-consuming action
-     *
-     * @param {number} efficiencyPercent - Efficiency as percentage (e.g., 150 for 150%)
-     * @returns {number} Multiplier (e.g., 2.5 for 150% efficiency)
-     *
-     * @example
-     * calculateEfficiencyMultiplier(0)   // Returns 1.0 (no bonus)
-     * calculateEfficiencyMultiplier(50)  // Returns 1.5
-     * calculateEfficiencyMultiplier(150) // Returns 2.5
+     * Parse a wearable hash string into itemLocationHrid, itemHrid, and enhancementLevel.
+     * Format: "characterId::/item_locations/location::/items/item_hrid::enhancementLevel"
+     * Empty string means no item in that slot.
+     * @param {string} itemLocationHrid - The equipment slot key (e.g. "/item_locations/body")
+     * @param {string} wearableHash - The wearable hash value
+     * @returns {{ itemLocationHrid: string, itemHrid: string, enhancementLevel: number }|null}
      */
-    function calculateEfficiencyMultiplier(efficiencyPercent) {
-        return 1 + (efficiencyPercent || 0) / 100;
+    function parseWearable(itemLocationHrid, wearableHash) {
+        if (!wearableHash) return null;
+
+        const parts = wearableHash.split('::');
+        const itemHrid = parts.find((p) => p.startsWith('/items/'));
+        if (!itemHrid) return null;
+
+        const lastPart = parts[parts.length - 1];
+        const enhancementLevel = !lastPart.startsWith('/') ? parseInt(lastPart, 10) || 0 : 0;
+
+        return { itemLocationHrid, itemHrid, enhancementLevel };
     }
 
     /**
-     * Calculate efficiency breakdown from supplied sources
-     * @param {Object} params - Efficiency inputs
-     * @param {number} params.requiredLevel - Action required level
-     * @param {number} params.skillLevel - Player skill level
-     * @param {number} [params.teaSkillLevelBonus=0] - Bonus skill levels from tea
-     * @param {number} [params.actionLevelBonus=0] - Action level bonus from tea (affects requirement)
-     * @param {number} [params.houseEfficiency=0] - House room efficiency bonus
-     * @param {number} [params.equipmentEfficiency=0] - Equipment efficiency bonus
-     * @param {number} [params.teaEfficiency=0] - Tea efficiency bonus
-     * @param {number} [params.communityEfficiency=0] - Community buff efficiency bonus
-     * @param {number} [params.achievementEfficiency=0] - Achievement efficiency bonus
-     * @param {number} [params.personalEfficiency=0] - Personal buff (seal) efficiency bonus
-     * @returns {Object} Efficiency breakdown
+     * Convert a server loadout object into our snapshot format.
+     * @param {Object} loadout - A loadout entry from characterLoadoutMap
+     * @returns {Object} snapshot
      */
-    function calculateEfficiencyBreakdown({
-        requiredLevel,
-        skillLevel,
-        teaSkillLevelBonus = 0,
-        actionLevelBonus = 0,
-        houseEfficiency = 0,
-        equipmentEfficiency = 0,
-        teaEfficiency = 0,
-        communityEfficiency = 0,
-        achievementEfficiency = 0,
-        personalEfficiency = 0,
-    }) {
-        const effectiveRequirement = (requiredLevel || 0) + actionLevelBonus;
-        const baseSkillLevel = Math.max(skillLevel || 0, requiredLevel || 0);
-        const effectiveLevel = baseSkillLevel + teaSkillLevelBonus;
-        const levelEfficiency = Math.max(0, effectiveLevel - effectiveRequirement);
-        const totalEfficiency = stackAdditive(
-            levelEfficiency,
-            houseEfficiency,
-            equipmentEfficiency,
-            teaEfficiency,
-            communityEfficiency,
-            achievementEfficiency,
-            personalEfficiency
-        );
+    function buildSnapshot(loadout) {
+        // Parse equipment from wearableMap
+        const equipment = [];
+        for (const [locationHrid, hash] of Object.entries(loadout.wearableMap || {})) {
+            const parsed = parseWearable(locationHrid, hash);
+            if (parsed) equipment.push(parsed);
+        }
+
+        // Parse drinks
+        const drinks = (loadout.drinkItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse food
+        const food = (loadout.foodItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse abilities
+        const abilities = [];
+        for (const [slot, hrid] of Object.entries(loadout.abilityMap || {})) {
+            if (hrid) abilities.push({ abilityHrid: hrid, slot: parseInt(slot, 10) });
+        }
 
         return {
-            totalEfficiency,
-            levelEfficiency,
-            effectiveRequirement,
-            effectiveLevel,
-            breakdown: {
-                houseEfficiency,
-                equipmentEfficiency,
-                teaEfficiency,
-                communityEfficiency,
-                achievementEfficiency,
-                personalEfficiency,
-                actionLevelBonus,
-                teaSkillLevelBonus,
-            },
+            name: loadout.name,
+            actionTypeHrid: loadout.actionTypeHrid || '',
+            isDefault: !!loadout.isDefault,
+            equipment,
+            abilities,
+            food,
+            drinks,
+            savedAt: Date.now(),
         };
     }
 
-    var efficiency = {
-        stackAdditive,
-        calculateEfficiencyMultiplier,
-        calculateEfficiencyBreakdown,
+    class LoadoutSnapshot {
+        constructor() {
+            this.snapshots = {}; // In-memory cache: { [loadoutName]: snapshot }
+            this.loadoutsUpdatedHandler = null;
+            this.isInitialized = false;
+        }
+
+        async initialize() {
+            if (this.isInitialized) return;
+            this.isInitialized = true;
+
+            // Load existing snapshots into memory
+            this.snapshots = (await storage.getJSON(getStorageKey(), 'settings', null)) || {};
+            console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
+
+            // Listen for loadouts_updated WebSocket messages
+            this.loadoutsUpdatedHandler = (data) => this._onLoadoutsUpdated(data);
+            webSocketHook.on('loadouts_updated', this.loadoutsUpdatedHandler);
+        }
+
+        /**
+         * Handle a loadouts_updated WebSocket message.
+         * Replaces all snapshots with the server's current state.
+         * @param {Object} data - The WebSocket message payload
+         */
+        _onLoadoutsUpdated(data) {
+            console.log('[LoadoutSnapshot] loadouts_updated WebSocket message received');
+            const loadoutMap = data.characterLoadoutMap;
+            if (!loadoutMap) {
+                console.log('[LoadoutSnapshot] no characterLoadoutMap in message');
+                return;
+            }
+
+            const newSnapshots = {};
+            for (const [id, loadout] of Object.entries(loadoutMap)) {
+                if (!loadout.name) continue;
+                newSnapshots[id] = buildSnapshot(loadout);
+                console.log(
+                    `[LoadoutSnapshot]   → ${loadout.name} (id=${id}): type=${loadout.actionTypeHrid || 'All Skills'}, default=${loadout.isDefault}`
+                );
+            }
+
+            this.snapshots = newSnapshots;
+            storage.setJSON(getStorageKey(), this.snapshots, 'settings');
+            console.log(
+                `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
+                Object.values(newSnapshots).map((s) => s.name)
+            );
+        }
+
+        /**
+         * Find the best snapshot for a given action type.
+         * Priority: skill default > all skills default > skill non-default > all skills non-default
+         * @param {string} actionTypeHrid - e.g. "/action_types/brewing"
+         * @returns {Object|null} snapshot entry or null
+         */
+        _findSnapshot(actionTypeHrid) {
+            if (!config.getSetting('loadoutSnapshot')) return null;
+
+            let skillDefault = null;
+            let allSkillsDefault = null;
+            let skillNonDefault = null;
+            let allSkillsNonDefault = null;
+
+            for (const snapshot of Object.values(this.snapshots)) {
+                if (snapshot.actionTypeHrid === actionTypeHrid) {
+                    if (snapshot.isDefault) {
+                        skillDefault = snapshot;
+                    } else {
+                        skillNonDefault = snapshot;
+                    }
+                } else if (snapshot.actionTypeHrid === '') {
+                    if (snapshot.isDefault) {
+                        allSkillsDefault = snapshot;
+                    } else {
+                        allSkillsNonDefault = snapshot;
+                    }
+                }
+            }
+
+            return skillDefault || allSkillsDefault || skillNonDefault || allSkillsNonDefault || null;
+        }
+
+        /**
+         * Get a Map<itemLocationHrid, item> for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned Map has the same format as dataManager.getEquipment().
+         * @param {string} actionTypeHrid
+         * @returns {Map<string, Object>|null}
+         */
+        getSnapshotForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot || !snapshot.equipment?.length) return null;
+            return new Map(snapshot.equipment.map((e) => [e.itemLocationHrid, e]));
+        }
+
+        /**
+         * Get the drink slots array for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned array has the same format as dataManager.getActionDrinkSlots().
+         * @param {string} actionTypeHrid
+         * @returns {Array<{itemHrid: string}>|null}
+         */
+        getSnapshotDrinksForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            // Filter out empty slots so callers get only actual items
+            const filled = (snapshot.drinks || []).filter((d) => d.itemHrid);
+            return filled.length > 0 ? filled : null;
+        }
+
+        /**
+         * Get the name and default status of the saved loadout being used for a given action type.
+         * Returns an object with name and isDefault, or null if no snapshot exists or feature is disabled.
+         * @param {string} actionTypeHrid
+         * @returns {{ name: string, isDefault: boolean }|null}
+         */
+        getSnapshotInfoForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            return { name: snapshot.name, isDefault: !!snapshot.isDefault };
+        }
+
+        disable() {
+            if (this.loadoutsUpdatedHandler) {
+                webSocketHook.off('loadouts_updated', this.loadoutsUpdatedHandler);
+                this.loadoutsUpdatedHandler = null;
+            }
+
+            this.isInitialized = false;
+        }
+    }
+
+    const loadoutSnapshot = new LoadoutSnapshot();
+
+    /**
+     * Equipment Parser Utility
+     * Parses equipment bonuses for action calculations
+     *
+     * PART OF EFFICIENCY SYSTEM (Phase 1 of 3):
+     * - Phase 1 ✅: Equipment speed bonuses (this module) + level advantage
+     * - Phase 2 ✅: Community buffs + house rooms (WebSocket integration)
+     * - Phase 3 ✅: Consumable buffs (tea parser integration)
+     *
+     * Speed bonuses are MULTIPLICATIVE with time (reduce duration).
+     * Efficiency bonuses are ADDITIVE with each other, then MULTIPLICATIVE with time.
+     *
+     * Formula: actionTime = baseTime / (1 + totalEfficiency + totalSpeed)
+     */
+
+    /**
+     * Map action type HRID to equipment field name
+     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/cheesesmithing")
+     * @param {string} suffix - Field suffix (e.g., "Speed", "Efficiency", "RareFind")
+     * @param {Array<string>} validFields - Array of valid field names
+     * @returns {string|null} Field name (e.g., "cheesesmithingSpeed") or null
+     */
+    function getFieldForActionType(actionTypeHrid, suffix, validFields) {
+        if (!actionTypeHrid) {
+            return null;
+        }
+
+        // Extract skill name from action type HRID
+        // e.g., "/action_types/cheesesmithing" -> "cheesesmithing"
+        const skillName = actionTypeHrid.replace('/action_types/', '');
+
+        // Map to field name with suffix
+        // e.g., "cheesesmithing" + "Speed" -> "cheesesmithingSpeed"
+        const fieldName = skillName + suffix;
+
+        return validFields.includes(fieldName) ? fieldName : null;
+    }
+
+    /**
+     * Enhancement percentage table (based on game mechanics)
+     * Each enhancement level provides a percentage boost to base stats
+     */
+    const ENHANCEMENT_PERCENTAGES = {
+        0: 0.0,
+        1: 0.02, // 2.0%
+        2: 0.042, // 4.2%
+        3: 0.066, // 6.6%
+        4: 0.092, // 9.2%
+        5: 0.12, // 12.0%
+        6: 0.15, // 15.0%
+        7: 0.182, // 18.2%
+        8: 0.216, // 21.6%
+        9: 0.252, // 25.2%
+        10: 0.29, // 29.0%
+        11: 0.334, // 33.4%
+        12: 0.384, // 38.4%
+        13: 0.44, // 44.0%
+        14: 0.502, // 50.2%
+        15: 0.57, // 57.0%
+        16: 0.644, // 64.4%
+        17: 0.724, // 72.4%
+        18: 0.81, // 81.0%
+        19: 0.902, // 90.2%
+        20: 1.0, // 100.0%
     };
 
-    var efficiency$1 = /*#__PURE__*/Object.freeze({
+    /**
+     * Slot multipliers for enhancement bonuses
+     * Accessories get 5× bonus, weapons/armor get 1× bonus
+     * Keys use item_locations (not equipment_types) to match characterEquipment map keys
+     */
+    const SLOT_MULTIPLIERS = {
+        '/item_locations/neck': 5, // Necklace
+        '/item_locations/ring': 5, // Ring
+        '/item_locations/earrings': 5, // Earrings
+        '/item_locations/back': 5, // Back/Cape
+        '/item_locations/trinket': 5, // Trinket
+        '/item_locations/charm': 5, // Charm
+        '/item_locations/main_hand': 1, // Main hand weapon
+        '/item_locations/two_hand': 1, // Two-handed weapon
+        '/item_locations/off_hand': 1, // Off-hand/shield
+        '/item_locations/head': 1, // Head armor
+        '/item_locations/body': 1, // Body armor
+        '/item_locations/legs': 1, // Leg armor
+        '/item_locations/hands': 1, // Hand armor
+        '/item_locations/feet': 1, // Feet armor
+        '/item_locations/pouch': 1, // Pouch
+    };
+
+    /**
+     * Calculate enhancement scaling for equipment stats
+     * Uses percentage-based enhancement system with slot multipliers
+     *
+     * Formula: base × (1 + enhancementPercentage × slotMultiplier)
+     *
+     * @param {number} baseValue - Base stat value from item data
+     * @param {number} enhancementLevel - Enhancement level (0-20)
+     * @param {string} slotHrid - Equipment slot HRID (e.g., "/equipment_types/neck")
+     * @returns {number} Scaled stat value
+     *
+     * @example
+     * // Philosopher's Necklace +4 (4% base speed, neck slot 5×)
+     * calculateEnhancementScaling(0.04, 4, '/equipment_types/neck')
+     * // = 0.04 × (1 + 0.092 × 5) = 0.04 × 1.46 = 0.0584 (5.84%)
+     *
+     * // Lumberjack's Top +10 (10% base efficiency, body slot 1×)
+     * calculateEnhancementScaling(0.10, 10, '/equipment_types/body')
+     * // = 0.10 × (1 + 0.290 × 1) = 0.10 × 1.29 = 0.129 (12.9%)
+     */
+    function calculateEnhancementScaling(baseValue, enhancementLevel, slotHrid) {
+        if (enhancementLevel === 0) {
+            return baseValue;
+        }
+
+        // Get enhancement percentage from table
+        const enhancementPercentage = ENHANCEMENT_PERCENTAGES[enhancementLevel] || 0;
+
+        // Get slot multiplier (default to 1× if slot not found)
+        const slotMultiplier = SLOT_MULTIPLIERS[slotHrid] || 1;
+
+        // Apply formula: base × (1 + percentage × multiplier)
+        return baseValue * (1 + enhancementPercentage * slotMultiplier);
+    }
+
+    /**
+     * Generic equipment stat parser - handles all noncombat stats with consistent logic
+     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {Object} config - Parser configuration
+     * @param {string|null} config.skillSpecificField - Skill-specific field (e.g., "brewingSpeed")
+     * @param {string|null} config.genericField - Generic skilling field (e.g., "skillingSpeed")
+     * @param {boolean} config.returnAsPercentage - Whether to convert to percentage (multiply by 100)
+     * @returns {number} Total stat bonus
+     *
+     * @example
+     * // Parse speed bonuses for brewing
+     * parseEquipmentStat(equipment, items, {
+     *   skillSpecificField: "brewingSpeed",
+     *   genericField: "skillingSpeed",
+     *   returnAsPercentage: false
+     * })
+     */
+    function parseEquipmentStat(characterEquipment, itemDetailMap, config) {
+        if (!characterEquipment || characterEquipment.size === 0) {
+            return 0; // No equipment
+        }
+
+        if (!itemDetailMap) {
+            return 0; // Missing item data
+        }
+
+        const { skillSpecificField, genericField, returnAsPercentage } = config;
+
+        let totalBonus = 0;
+
+        // Iterate through all equipped items
+        for (const [slotHrid, equippedItem] of characterEquipment) {
+            // Get item details from game data
+            const itemDetails = itemDetailMap[equippedItem.itemHrid];
+
+            if (!itemDetails || !itemDetails.equipmentDetail) {
+                continue; // Not an equipment item
+            }
+
+            // Check if item has noncombat stats
+            const noncombatStats = itemDetails.equipmentDetail.noncombatStats;
+
+            if (!noncombatStats) {
+                continue; // No noncombat stats
+            }
+
+            // Get enhancement level from equipped item
+            const enhancementLevel = equippedItem.enhancementLevel || 0;
+
+            // Check for skill-specific stat (e.g., brewingSpeed, brewingEfficiency, brewingRareFind)
+            if (skillSpecificField) {
+                const baseValue = noncombatStats[skillSpecificField];
+
+                if (baseValue && baseValue > 0) {
+                    const scaledValue = calculateEnhancementScaling(baseValue, enhancementLevel, slotHrid);
+                    totalBonus += scaledValue;
+                }
+            }
+
+            // Check for generic skilling stat (e.g., skillingSpeed, skillingEfficiency, skillingRareFind, skillingEssenceFind)
+            if (genericField) {
+                const baseValue = noncombatStats[genericField];
+
+                if (baseValue && baseValue > 0) {
+                    const scaledValue = calculateEnhancementScaling(baseValue, enhancementLevel, slotHrid);
+                    totalBonus += scaledValue;
+                }
+            }
+        }
+
+        // Convert to percentage if requested (0.15 -> 15%)
+        return returnAsPercentage ? totalBonus * 100 : totalBonus;
+    }
+
+    /**
+     * Valid speed fields from game data
+     */
+    const VALID_SPEED_FIELDS = [
+        'milkingSpeed',
+        'foragingSpeed',
+        'woodcuttingSpeed',
+        'cheesesmithingSpeed',
+        'craftingSpeed',
+        'tailoringSpeed',
+        'brewingSpeed',
+        'cookingSpeed',
+        'alchemySpeed',
+        'enhancingSpeed',
+        'taskSpeed',
+    ];
+
+    /**
+     * Parse equipment speed bonuses for a specific action type
+     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
+     * @param {string} actionTypeHrid - Action type HRID
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @returns {number} Total speed bonus as decimal (e.g., 0.15 for 15%)
+     *
+     * @example
+     * parseEquipmentSpeedBonuses(equipment, "/action_types/brewing", items)
+     * // Cheese Pot (base 0.15, bonus 0.003) +0: 0.15 (15%)
+     * // Cheese Pot (base 0.15, bonus 0.003) +10: 0.18 (18%)
+     * // Azure Pot (base 0.3, bonus 0.006) +10: 0.36 (36%)
+     */
+    function parseEquipmentSpeedBonuses(characterEquipment, actionTypeHrid, itemDetailMap) {
+        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'Speed', VALID_SPEED_FIELDS);
+
+        return parseEquipmentStat(characterEquipment, itemDetailMap, {
+            skillSpecificField,
+            genericField: 'skillingSpeed',
+            returnAsPercentage: false,
+        });
+    }
+
+    /**
+     * Valid efficiency fields from game data
+     */
+    const VALID_EFFICIENCY_FIELDS = [
+        'milkingEfficiency',
+        'foragingEfficiency',
+        'woodcuttingEfficiency',
+        'cheesesmithingEfficiency',
+        'craftingEfficiency',
+        'tailoringEfficiency',
+        'brewingEfficiency',
+        'cookingEfficiency',
+        'alchemyEfficiency',
+    ];
+
+    /**
+     * Parse equipment efficiency bonuses for a specific action type
+     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
+     * @param {string} actionTypeHrid - Action type HRID
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @returns {number} Total efficiency bonus as percentage (e.g., 12 for 12%)
+     *
+     * @example
+     * parseEquipmentEfficiencyBonuses(equipment, "/action_types/brewing", items)
+     * // Brewer's Top (base 0.1, bonus 0.002) +0: 10%
+     * // Brewer's Top (base 0.1, bonus 0.002) +10: 12%
+     * // Philosopher's Necklace (skillingEfficiency 0.02, bonus 0.002) +10: 4%
+     * // Total: 16%
+     */
+    function parseEquipmentEfficiencyBonuses(characterEquipment, actionTypeHrid, itemDetailMap) {
+        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'Efficiency', VALID_EFFICIENCY_FIELDS);
+
+        return parseEquipmentStat(characterEquipment, itemDetailMap, {
+            skillSpecificField,
+            genericField: 'skillingEfficiency',
+            returnAsPercentage: true,
+        });
+    }
+
+    /**
+     * Parse Essence Find bonus from equipment
+     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @returns {number} Total essence find bonus as percentage (e.g., 15 for 15%)
+     *
+     * @example
+     * parseEssenceFindBonus(equipment, items)
+     * // Ring of Essence Find (base 0.15, bonus 0.015) +0: 15%
+     * // Ring of Essence Find (base 0.15, bonus 0.015) +10: 30%
+     */
+    function parseEssenceFindBonus(characterEquipment, itemDetailMap) {
+        return parseEquipmentStat(characterEquipment, itemDetailMap, {
+            skillSpecificField: null, // No skill-specific essence find
+            genericField: 'skillingEssenceFind',
+            returnAsPercentage: true,
+        });
+    }
+
+    /**
+     * Valid rare find fields from game data
+     */
+    const VALID_RARE_FIND_FIELDS = [
+        'milkingRareFind',
+        'foragingRareFind',
+        'woodcuttingRareFind',
+        'cheesesmithingRareFind',
+        'craftingRareFind',
+        'tailoringRareFind',
+        'brewingRareFind',
+        'cookingRareFind',
+        'alchemyRareFind',
+        'enhancingRareFind',
+    ];
+
+    /**
+     * Parse Rare Find bonus from equipment
+     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
+     * @param {string} actionTypeHrid - Action type HRID (for skill-specific rare find)
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @returns {number} Total rare find bonus as percentage (e.g., 15 for 15%)
+     *
+     * @example
+     * parseRareFindBonus(equipment, "/action_types/brewing", items)
+     * // Brewer's Top (base 0.15, bonus 0.003) +0: 15%
+     * // Brewer's Top (base 0.15, bonus 0.003) +10: 18%
+     * // Earrings of Rare Find (base 0.08, bonus 0.002) +0: 8%
+     * // Total: 26%
+     */
+    function parseRareFindBonus(characterEquipment, actionTypeHrid, itemDetailMap) {
+        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'RareFind', VALID_RARE_FIND_FIELDS);
+
+        return parseEquipmentStat(characterEquipment, itemDetailMap, {
+            skillSpecificField,
+            genericField: 'skillingRareFind',
+            returnAsPercentage: true,
+        });
+    }
+
+    /**
+     * Generic per-item equipment stat breakdown
+     * @param {Map} characterEquipment - Equipment map
+     * @param {Object} itemDetailMap - Item details
+     * @param {string|null} skillSpecificField - e.g. "foragingEfficiency"
+     * @param {string|null} genericField - e.g. "skillingEfficiency"
+     * @param {boolean} returnAsPercentage - Multiply by 100
+     * @returns {Array<{name, enhancementLevel, value}>}
+     */
+    function parseEquipmentStatBreakdown(
+        characterEquipment,
+        itemDetailMap,
+        skillSpecificField,
+        genericField,
+        returnAsPercentage
+    ) {
+        if (!characterEquipment || characterEquipment.size === 0) return [];
+        if (!itemDetailMap) return [];
+
+        const items = [];
+
+        for (const [slotHrid, equippedItem] of characterEquipment) {
+            const itemDetails = itemDetailMap[equippedItem.itemHrid];
+            if (!itemDetails?.equipmentDetail?.noncombatStats) continue;
+
+            const noncombatStats = itemDetails.equipmentDetail.noncombatStats;
+            const enhancementLevel = equippedItem.enhancementLevel || 0;
+            let value = 0;
+
+            if (skillSpecificField) {
+                const base = noncombatStats[skillSpecificField];
+                if (base > 0) value += calculateEnhancementScaling(base, enhancementLevel, slotHrid);
+            }
+            if (genericField) {
+                const base = noncombatStats[genericField];
+                if (base > 0) value += calculateEnhancementScaling(base, enhancementLevel, slotHrid);
+            }
+
+            if (value > 0) {
+                items.push({
+                    name: itemDetails.name,
+                    enhancementLevel,
+                    value: value * 100 ,
+                });
+            }
+        }
+
+        return items;
+    }
+
+    /**
+     * Get per-item efficiency bonus breakdown for an action type
+     * @param {Map} characterEquipment - Equipment map
+     * @param {string} actionTypeHrid - Action type HRID
+     * @param {Object} itemDetailMap - Item details
+     * @returns {Array<{name, enhancementLevel, value}>}
+     */
+    function parseEquipmentEfficiencyBreakdown(characterEquipment, actionTypeHrid, itemDetailMap) {
+        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'Efficiency', VALID_EFFICIENCY_FIELDS);
+        return parseEquipmentStatBreakdown(
+            characterEquipment,
+            itemDetailMap,
+            skillSpecificField,
+            'skillingEfficiency');
+    }
+
+    /**
+     * Get per-item rare find bonus breakdown for an action type
+     * @param {Map} characterEquipment - Equipment map
+     * @param {string} actionTypeHrid - Action type HRID
+     * @param {Object} itemDetailMap - Item details
+     * @returns {Array<{name, enhancementLevel, value}>}
+     */
+    function parseRareFindBreakdown(characterEquipment, actionTypeHrid, itemDetailMap) {
+        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'RareFind', VALID_RARE_FIND_FIELDS);
+        return parseEquipmentStatBreakdown(characterEquipment, itemDetailMap, skillSpecificField, 'skillingRareFind');
+    }
+
+    /**
+     * Get all speed bonuses for debugging
+     * @param {Map} characterEquipment - Equipment map
+     * @param {Object} itemDetailMap - Item details
+     * @returns {Array} Array of speed bonus objects
+     */
+    function debugEquipmentSpeedBonuses(characterEquipment, itemDetailMap) {
+        if (!characterEquipment || characterEquipment.size === 0) {
+            return [];
+        }
+
+        const bonuses = [];
+
+        for (const [slotHrid, equippedItem] of characterEquipment) {
+            const itemDetails = itemDetailMap[equippedItem.itemHrid];
+
+            if (!itemDetails || !itemDetails.equipmentDetail) {
+                continue;
+            }
+
+            const noncombatStats = itemDetails.equipmentDetail.noncombatStats;
+
+            if (!noncombatStats) {
+                continue;
+            }
+
+            // Find all speed bonuses on this item
+            for (const [statName, value] of Object.entries(noncombatStats)) {
+                if (statName.endsWith('Speed') && value > 0) {
+                    const enhancementLevel = equippedItem.enhancementLevel || 0;
+                    const scaledValue = calculateEnhancementScaling(value, enhancementLevel, slotHrid);
+
+                    bonuses.push({
+                        itemName: itemDetails.name,
+                        itemHrid: equippedItem.itemHrid,
+                        slot: slotHrid,
+                        speedType: statName,
+                        baseBonus: value,
+                        enhancementLevel,
+                        scaledBonus: scaledValue,
+                    });
+                }
+            }
+        }
+
+        return bonuses;
+    }
+
+    var equipmentParser = /*#__PURE__*/Object.freeze({
         __proto__: null,
-        calculateEfficiencyBreakdown: calculateEfficiencyBreakdown,
-        calculateEfficiencyMultiplier: calculateEfficiencyMultiplier,
-        default: efficiency,
-        stackAdditive: stackAdditive
+        debugEquipmentSpeedBonuses: debugEquipmentSpeedBonuses,
+        parseEquipmentEfficiencyBonuses: parseEquipmentEfficiencyBonuses,
+        parseEquipmentEfficiencyBreakdown: parseEquipmentEfficiencyBreakdown,
+        parseEquipmentSpeedBonuses: parseEquipmentSpeedBonuses,
+        parseEssenceFindBonus: parseEssenceFindBonus,
+        parseRareFindBonus: parseRareFindBonus,
+        parseRareFindBreakdown: parseRareFindBreakdown
+    });
+
+    /**
+     * Enhancement Multiplier System
+     *
+     * Handles enhancement bonus calculations for equipment.
+     * Different equipment slots have different multipliers:
+     * - Accessories (neck/ring/earring), Back, Trinket, Charm: 5× multiplier
+     * - All other slots (weapons, armor, pouch): 1× multiplier
+     */
+
+    /**
+     * Enhancement multiplier by equipment slot type
+     */
+    const ENHANCEMENT_MULTIPLIERS = {
+        '/equipment_types/neck': 5,
+        '/equipment_types/ring': 5,
+        '/equipment_types/earring': 5,
+        '/equipment_types/back': 5,
+        '/equipment_types/trinket': 5,
+        '/equipment_types/charm': 5,
+        // All other slots: 1× (default)
+    };
+
+    /**
+     * Enhancement bonus table
+     * Maps enhancement level to percentage bonus
+     */
+    const ENHANCEMENT_BONUSES = {
+        1: 0.02,
+        2: 0.042,
+        3: 0.066,
+        4: 0.092,
+        5: 0.12,
+        6: 0.15,
+        7: 0.182,
+        8: 0.216,
+        9: 0.252,
+        10: 0.29,
+        11: 0.334,
+        12: 0.384,
+        13: 0.44,
+        14: 0.502,
+        15: 0.57,
+        16: 0.644,
+        17: 0.724,
+        18: 0.81,
+        19: 0.902,
+        20: 1.0,
+    };
+
+    /**
+     * Get enhancement multiplier for an item
+     * @param {Object} itemDetails - Item details from itemDetailMap
+     * @param {number} enhancementLevel - Current enhancement level of item
+     * @returns {number} Multiplier to apply to bonuses
+     */
+    function getEnhancementMultiplier(itemDetails, enhancementLevel) {
+        if (enhancementLevel === 0) {
+            return 1;
+        }
+
+        const equipmentType = itemDetails?.equipmentDetail?.type;
+        const slotMultiplier = ENHANCEMENT_MULTIPLIERS[equipmentType] || 1;
+        const enhancementBonus = ENHANCEMENT_BONUSES[enhancementLevel] || 0;
+
+        return 1 + enhancementBonus * slotMultiplier;
+    }
+
+    var enhancementMultipliers = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        ENHANCEMENT_BONUSES: ENHANCEMENT_BONUSES,
+        ENHANCEMENT_MULTIPLIERS: ENHANCEMENT_MULTIPLIERS,
+        getEnhancementMultiplier: getEnhancementMultiplier
+    });
+
+    /**
+     * Tea Buff Parser Utility
+     * Calculates efficiency bonuses from active tea buffs
+     *
+     * Tea efficiency comes from two buff types:
+     * 1. /buff_types/efficiency - Generic efficiency (e.g., Efficiency Tea: 10%)
+     * 2. /buff_types/{skill}_level - Skill level bonuses (e.g., Brewing Tea: +3 levels)
+     *
+     * All tea effects scale with Drink Concentration equipment stat.
+     */
+
+
+    /**
+     * Generic tea buff parser - handles all tea buff types with consistent logic
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
+     * @param {Object} config - Parser configuration
+     * @param {Array<string>} config.buffTypeHrids - Buff type HRIDs to check (e.g., ['/buff_types/artisan'])
+     * @returns {number} Total buff bonus
+     *
+     * @example
+     * // Parse artisan bonus
+     * parseTeaBuff(drinks, items, 0.12, { buffTypeHrids: ['/buff_types/artisan'] })
+     */
+    function parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, config) {
+        if (!activeDrinks || activeDrinks.length === 0) {
+            return 0; // No active teas
+        }
+
+        if (!itemDetailMap) {
+            return 0; // Missing required data
+        }
+
+        const { buffTypeHrids } = config;
+        let totalBonus = 0;
+
+        // Process each active tea/drink
+        for (const drink of activeDrinks) {
+            if (!drink || !drink.itemHrid) {
+                continue; // Empty slot
+            }
+
+            const itemDetails = itemDetailMap[drink.itemHrid];
+            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
+                continue; // Not a consumable or has no buffs
+            }
+
+            // Check each buff on this tea
+            for (const buff of itemDetails.consumableDetail.buffs) {
+                // Check if this buff matches any of the target types
+                if (buffTypeHrids.includes(buff.typeHrid)) {
+                    const baseValue = buff.flatBoost;
+                    const scaledValue = baseValue * (1 + drinkConcentration);
+                    totalBonus += scaledValue;
+                }
+            }
+        }
+
+        return totalBonus;
+    }
+
+    /**
+     * Parse tea efficiency bonuses for a specific action type
+     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/brewing")
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
+     * @returns {number} Total tea efficiency bonus as percentage (e.g., 12 for 12%)
+     *
+     * @example
+     * // With Efficiency Tea (10% base) and 12% Drink Concentration:
+     * parseTeaEfficiency("/action_types/brewing", activeDrinks, items, 0.12)
+     * // Returns: 11.2 (10% × 1.12 = 11.2%)
+     */
+    function parseTeaEfficiency(actionTypeHrid, activeDrinks, itemDetailMap, drinkConcentration = 0) {
+        if (!activeDrinks || activeDrinks.length === 0) {
+            return 0; // No active teas
+        }
+
+        if (!actionTypeHrid || !itemDetailMap) {
+            return 0; // Missing required data
+        }
+
+        let totalEfficiency = 0;
+
+        // Process each active tea/drink
+        for (const drink of activeDrinks) {
+            if (!drink || !drink.itemHrid) {
+                continue; // Empty slot
+            }
+
+            const itemDetails = itemDetailMap[drink.itemHrid];
+            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
+                continue; // Not a consumable or has no buffs
+            }
+
+            // Check each buff on this tea
+            for (const buff of itemDetails.consumableDetail.buffs) {
+                // Generic efficiency buff (e.g., Efficiency Tea)
+                if (buff.typeHrid === '/buff_types/efficiency') {
+                    const baseEfficiency = buff.flatBoost * 100; // Convert to percentage
+                    const scaledEfficiency = baseEfficiency * (1 + drinkConcentration);
+                    totalEfficiency += scaledEfficiency;
+                }
+                // Note: Skill-specific level buffs are NOT counted here
+                // They affect Level Bonus calculation, not Tea Bonus
+            }
+        }
+
+        return totalEfficiency;
+    }
+
+    /**
+     * Parse tea efficiency bonuses with breakdown by individual tea
+     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/brewing")
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
+     * @returns {Array<{name: string, efficiency: number, baseEfficiency: number, dcContribution: number}>} Array of tea contributions
+     *
+     * @example
+     * // With Efficiency Tea (10% base) and Ultra Cheesesmithing Tea (6% base) with 12% DC:
+     * parseTeaEfficiencyBreakdown("/action_types/cheesesmithing", activeDrinks, items, 0.12)
+     * // Returns: [
+     * //   { name: "Efficiency Tea", efficiency: 11.2, baseEfficiency: 10.0, dcContribution: 1.2 },
+     * //   { name: "Ultra Cheesesmithing Tea", efficiency: 6.72, baseEfficiency: 6.0, dcContribution: 0.72 }
+     * // ]
+     */
+    function parseTeaEfficiencyBreakdown(actionTypeHrid, activeDrinks, itemDetailMap, drinkConcentration = 0) {
+        if (!activeDrinks || activeDrinks.length === 0) {
+            return []; // No active teas
+        }
+
+        if (!actionTypeHrid || !itemDetailMap) {
+            return []; // Missing required data
+        }
+
+        const teaBreakdown = [];
+
+        // Process each active tea/drink
+        for (const drink of activeDrinks) {
+            if (!drink || !drink.itemHrid) {
+                continue; // Empty slot
+            }
+
+            const itemDetails = itemDetailMap[drink.itemHrid];
+            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
+                continue; // Not a consumable or has no buffs
+            }
+
+            let baseEfficiency = 0;
+            let totalEfficiency = 0;
+
+            // Check each buff on this tea
+            for (const buff of itemDetails.consumableDetail.buffs) {
+                // Generic efficiency buff (e.g., Efficiency Tea)
+                if (buff.typeHrid === '/buff_types/efficiency') {
+                    const baseValue = buff.flatBoost * 100; // Convert to percentage
+                    const scaledValue = baseValue * (1 + drinkConcentration);
+                    baseEfficiency += baseValue;
+                    totalEfficiency += scaledValue;
+                }
+                // Note: Skill-specific level buffs are NOT counted here
+                // They affect Level Bonus calculation, not Tea Bonus
+            }
+
+            // Only add to breakdown if this tea contributes efficiency
+            if (totalEfficiency > 0) {
+                teaBreakdown.push({
+                    name: itemDetails.name,
+                    efficiency: totalEfficiency,
+                    baseEfficiency: baseEfficiency,
+                    dcContribution: totalEfficiency - baseEfficiency,
+                });
+            }
+        }
+
+        return teaBreakdown;
+    }
+
+    /**
+     * Get Drink Concentration stat from equipped items
+     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @returns {number} Total drink concentration as decimal (e.g., 0.12 for 12%)
+     *
+     * @example
+     * getDrinkConcentration(equipment, items)
+     * // Returns: 0.12 (if wearing items with 12% total drink concentration)
+     */
+    function getDrinkConcentration(characterEquipment, itemDetailMap) {
+        if (!characterEquipment || characterEquipment.size === 0) {
+            return 0; // No equipment
+        }
+
+        if (!itemDetailMap) {
+            return 0; // Missing item data
+        }
+
+        let totalDrinkConcentration = 0;
+
+        // Iterate through all equipped items
+        for (const [_slotHrid, equippedItem] of characterEquipment) {
+            const itemDetails = itemDetailMap[equippedItem.itemHrid];
+
+            if (!itemDetails || !itemDetails.equipmentDetail) {
+                continue; // Not an equipment item
+            }
+
+            const noncombatStats = itemDetails.equipmentDetail.noncombatStats;
+            if (!noncombatStats) {
+                continue; // No noncombat stats
+            }
+
+            // Check for drink concentration stat
+            const baseDrinkConcentration = noncombatStats.drinkConcentration;
+            if (!baseDrinkConcentration || baseDrinkConcentration <= 0) {
+                continue; // No drink concentration on this item
+            }
+
+            // Get enhancement level from equipped item
+            const enhancementLevel = equippedItem.enhancementLevel || 0;
+
+            // Calculate scaled drink concentration with enhancement
+            // Uses enhancement multiplier table (e.g., +10 = 1.29× for 1× slots like pouch)
+            const enhancementMultiplier = getEnhancementMultiplier(itemDetails, enhancementLevel);
+            const scaledDrinkConcentration = baseDrinkConcentration * enhancementMultiplier;
+
+            totalDrinkConcentration += scaledDrinkConcentration;
+        }
+
+        return totalDrinkConcentration;
+    }
+
+    /**
+     * Parse Artisan bonus from active tea buffs
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
+     * @returns {number} Artisan material reduction as decimal (e.g., 0.112 for 11.2% reduction)
+     *
+     * @example
+     * // With Artisan Tea (10% base) and 12% Drink Concentration:
+     * parseArtisanBonus(activeDrinks, items, 0.12)
+     * // Returns: 0.112 (10% × 1.12 = 11.2% reduction)
+     */
+    function parseArtisanBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
+        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
+            buffTypeHrids: ['/buff_types/artisan'],
+        });
+    }
+
+    /**
+     * Parse Gourmet bonus from active tea buffs
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
+     * @returns {number} Gourmet bonus chance as decimal (e.g., 0.1344 for 13.44% bonus items)
+     *
+     * @example
+     * // With Gourmet Tea (12% base) and 12% Drink Concentration:
+     * parseGourmetBonus(activeDrinks, items, 0.12)
+     * // Returns: 0.1344 (12% × 1.12 = 13.44% bonus items)
+     */
+    function parseGourmetBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
+        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
+            buffTypeHrids: ['/buff_types/gourmet'],
+        });
+    }
+
+    /**
+     * Parse Processing bonus from active tea buffs
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
+     * @returns {number} Processing conversion chance as decimal (e.g., 0.168 for 16.8% conversion chance)
+     *
+     * @example
+     * // With Processing Tea (15% base) and 12% Drink Concentration:
+     * parseProcessingBonus(activeDrinks, items, 0.12)
+     * // Returns: 0.168 (15% × 1.12 = 16.8% conversion chance)
+     */
+    function parseProcessingBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
+        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
+            buffTypeHrids: ['/buff_types/processing'],
+        });
+    }
+
+    /**
+     * Parse Action Level bonus from active tea buffs
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
+     * @returns {number} Action Level bonus as flat number (e.g., 5.645 for +5.645 levels, floored to 5 when used)
+     *
+     * @example
+     * // With Artisan Tea (+5 Action Level base) and 12% Drink Concentration:
+     * parseActionLevelBonus(activeDrinks, items, 0.129)
+     * // Returns: 5.645 (scales with DC, but game floors this to 5 when calculating requirement)
+     */
+    function parseActionLevelBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
+        // Action Level DOES scale with DC (like all other buffs)
+        // However, the game floors the result when calculating effective requirement
+        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
+            buffTypeHrids: ['/buff_types/action_level'],
+        });
+    }
+
+    /**
+     * Parse Action Level bonus with breakdown by individual tea
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
+     * @returns {Array<{name: string, actionLevel: number, baseActionLevel: number, dcContribution: number}>} Array of tea contributions
+     *
+     * @example
+     * // With Artisan Tea (+5 Action Level base) and 12.9% Drink Concentration:
+     * parseActionLevelBonusBreakdown(activeDrinks, items, 0.129)
+     * // Returns: [{ name: "Artisan Tea", actionLevel: 5.645, baseActionLevel: 5.0, dcContribution: 0.645 }]
+     * // Note: Game floors actionLevel to 5 when calculating requirement, but we show full precision
+     */
+    function parseActionLevelBonusBreakdown(activeDrinks, itemDetailMap, drinkConcentration = 0) {
+        if (!activeDrinks || activeDrinks.length === 0) {
+            return []; // No active teas
+        }
+
+        if (!itemDetailMap) {
+            return []; // Missing required data
+        }
+
+        const teaBreakdown = [];
+
+        // Process each active tea/drink
+        for (const drink of activeDrinks) {
+            if (!drink || !drink.itemHrid) {
+                continue; // Empty slot
+            }
+
+            const itemDetails = itemDetailMap[drink.itemHrid];
+            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
+                continue; // Not a consumable or has no buffs
+            }
+
+            let baseActionLevel = 0;
+            let totalActionLevel = 0;
+
+            // Check each buff on this tea
+            for (const buff of itemDetails.consumableDetail.buffs) {
+                // Action Level buff (e.g., Artisan Tea: +5 Action Level)
+                if (buff.typeHrid === '/buff_types/action_level') {
+                    const baseValue = buff.flatBoost;
+                    // Action Level DOES scale with DC (like all other buffs)
+                    const scaledValue = baseValue * (1 + drinkConcentration);
+                    baseActionLevel += baseValue;
+                    totalActionLevel += scaledValue;
+                }
+            }
+
+            // Only add to breakdown if this tea contributes action level
+            if (totalActionLevel > 0) {
+                teaBreakdown.push({
+                    name: itemDetails.name,
+                    actionLevel: totalActionLevel,
+                    baseActionLevel: baseActionLevel,
+                    dcContribution: totalActionLevel - baseActionLevel,
+                });
+            }
+        }
+
+        return teaBreakdown;
+    }
+
+    /**
+     * Parse Gathering bonus from active tea buffs
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
+     * @returns {number} Gathering quantity bonus as decimal (e.g., 0.168 for 16.8% more items)
+     *
+     * @example
+     * // With Gathering Tea (+15% base) and 12% Drink Concentration:
+     * parseGatheringBonus(activeDrinks, items, 0.12)
+     * // Returns: 0.168 (15% × 1.12 = 16.8% gathering quantity)
+     */
+    function parseGatheringBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
+        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
+            buffTypeHrids: ['/buff_types/gathering'],
+        });
+    }
+
+    /**
+     * Parse skill level bonus from active tea buffs for a specific action type
+     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/cheesesmithing")
+     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
+     * @param {Object} itemDetailMap - Item details from init_client_data
+     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.129 for 12.9%)
+     * @returns {number} Total skill level bonus (e.g., 9.032 for +8 base × 1.129 DC)
+     *
+     * @example
+     * // With Ultra Cheesesmithing Tea (+8 Cheesesmithing base) and 12.9% DC:
+     * parseTeaSkillLevelBonus("/action_types/cheesesmithing", activeDrinks, items, 0.129)
+     * // Returns: 9.032 (8 × 1.129 = 9.032 levels)
+     */
+    function parseTeaSkillLevelBonus(actionTypeHrid, activeDrinks, itemDetailMap, drinkConcentration = 0) {
+        if (!activeDrinks || activeDrinks.length === 0) {
+            return 0; // No active teas
+        }
+
+        if (!actionTypeHrid || !itemDetailMap) {
+            return 0; // Missing required data
+        }
+
+        // Extract skill name from action type HRID
+        // "/action_types/cheesesmithing" -> "cheesesmithing"
+        const skillName = actionTypeHrid.split('/').pop();
+        const skillLevelBuffType = `/buff_types/${skillName}_level`;
+
+        let totalLevelBonus = 0;
+
+        // Process each active tea/drink
+        for (const drink of activeDrinks) {
+            if (!drink || !drink.itemHrid) {
+                continue; // Empty slot
+            }
+
+            const itemDetails = itemDetailMap[drink.itemHrid];
+            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
+                continue; // Not a consumable or has no buffs
+            }
+
+            // Check each buff on this tea
+            for (const buff of itemDetails.consumableDetail.buffs) {
+                // Skill-specific level buff (e.g., "/buff_types/cheesesmithing_level")
+                if (buff.typeHrid === skillLevelBuffType) {
+                    const baseValue = buff.flatBoost;
+                    const scaledValue = baseValue * (1 + drinkConcentration);
+                    totalLevelBonus += scaledValue;
+                }
+            }
+        }
+
+        return totalLevelBonus;
+    }
+
+    var teaParser = {
+        parseTeaEfficiency,
+        getDrinkConcentration,
+        parseArtisanBonus,
+        parseGourmetBonus,
+        parseProcessingBonus,
+        parseActionLevelBonus,
+        parseGatheringBonus,
+        parseTeaSkillLevelBonus,
+    };
+
+    var teaParser$1 = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        default: teaParser,
+        getDrinkConcentration: getDrinkConcentration,
+        parseActionLevelBonus: parseActionLevelBonus,
+        parseActionLevelBonusBreakdown: parseActionLevelBonusBreakdown,
+        parseArtisanBonus: parseArtisanBonus,
+        parseGatheringBonus: parseGatheringBonus,
+        parseGourmetBonus: parseGourmetBonus,
+        parseProcessingBonus: parseProcessingBonus,
+        parseTeaEfficiency: parseTeaEfficiency,
+        parseTeaEfficiencyBreakdown: parseTeaEfficiencyBreakdown,
+        parseTeaSkillLevelBonus: parseTeaSkillLevelBonus
+    });
+
+    /**
+     * House Efficiency Utility
+     * Calculates efficiency bonuses from house rooms
+     *
+     * PART OF EFFICIENCY SYSTEM (Phase 2):
+     * - House rooms provide +1.5% efficiency per level to matching actions
+     * - Formula: houseLevel × 1.5%
+     * - Data source: WebSocket (characterHouseRoomMap)
+     */
+
+
+    /**
+     * Map action type HRID to house room HRID
+     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/brewing")
+     * @returns {string|null} House room HRID or null
+     */
+    function getHouseRoomForActionType(actionTypeHrid) {
+        // Mapping matches original MWI Tools
+        const actionTypeToHouseRoomMap = {
+            '/action_types/brewing': '/house_rooms/brewery',
+            '/action_types/cheesesmithing': '/house_rooms/forge',
+            '/action_types/cooking': '/house_rooms/kitchen',
+            '/action_types/crafting': '/house_rooms/workshop',
+            '/action_types/foraging': '/house_rooms/garden',
+            '/action_types/milking': '/house_rooms/dairy_barn',
+            '/action_types/tailoring': '/house_rooms/sewing_parlor',
+            '/action_types/woodcutting': '/house_rooms/log_shed',
+            '/action_types/alchemy': '/house_rooms/laboratory',
+        };
+
+        return actionTypeToHouseRoomMap[actionTypeHrid] || null;
+    }
+
+    /**
+     * Calculate house efficiency bonus for an action type
+     * @param {string} actionTypeHrid - Action type HRID
+     * @returns {number} Efficiency bonus percentage (e.g., 12 for 12%)
+     *
+     * @example
+     * calculateHouseEfficiency("/action_types/brewing")
+     * // Returns: 12 (if brewery is level 8: 8 × 1.5% = 12%)
+     */
+    function calculateHouseEfficiency(actionTypeHrid) {
+        // Get the house room for this action type
+        const houseRoomHrid = getHouseRoomForActionType(actionTypeHrid);
+
+        if (!houseRoomHrid) {
+            return 0; // No house room for this action type
+        }
+
+        // Get house room level from game data (via dataManager)
+        const roomLevel = dataManager.getHouseRoomLevel(houseRoomHrid);
+
+        // Formula: houseLevel × 1.5%
+        // Returns as percentage (e.g., 12 for 12%)
+        return roomLevel * 1.5;
+    }
+
+    /**
+     * Get friendly name for house room
+     * @param {string} houseRoomHrid - House room HRID
+     * @returns {string} Friendly name
+     */
+    function getHouseRoomName(houseRoomHrid) {
+        const names = {
+            '/house_rooms/brewery': 'Brewery',
+            '/house_rooms/forge': 'Forge',
+            '/house_rooms/kitchen': 'Kitchen',
+            '/house_rooms/workshop': 'Workshop',
+            '/house_rooms/garden': 'Garden',
+            '/house_rooms/dairy_barn': 'Dairy Barn',
+            '/house_rooms/sewing_parlor': 'Sewing Parlor',
+            '/house_rooms/log_shed': 'Log Shed',
+            '/house_rooms/laboratory': 'Laboratory',
+        };
+
+        return names[houseRoomHrid] || 'Unknown';
+    }
+
+    /**
+     * Calculate total Rare Find bonus from all house rooms
+     * @returns {number} Total rare find bonus as percentage (e.g., 1.6 for 1.6%)
+     *
+     * @example
+     * calculateHouseRareFind()
+     * // Returns: 1.6 (if total house room levels = 8: 8 × 0.2% per level = 1.6%)
+     *
+     * Formula from game data:
+     * - flatBoostLevelBonus: 0.2% per level
+     * - Total: totalLevels × 0.2%
+     * - Max: 8 rooms × 8 levels = 64 × 0.2% = 12.8%
+     */
+    function calculateHouseRareFind() {
+        // Get all house rooms
+        const houseRooms = dataManager.getHouseRooms();
+
+        if (!houseRooms || houseRooms.size === 0) {
+            return 0; // No house rooms
+        }
+
+        // Sum all house room levels
+        let totalLevels = 0;
+        for (const [_hrid, room] of houseRooms) {
+            totalLevels += room.level || 0;
+        }
+
+        // Formula: totalLevels × flatBoostLevelBonus
+        // flatBoostLevelBonus: 0.2% per level (no base bonus)
+        const flatBoostLevelBonus = 0.2;
+
+        return totalLevels * flatBoostLevelBonus;
+    }
+
+    var houseEfficiency = {
+        calculateHouseEfficiency,
+        getHouseRoomName,
+        calculateHouseRareFind,
+    };
+
+    var houseEfficiency$1 = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        calculateHouseEfficiency: calculateHouseEfficiency,
+        calculateHouseRareFind: calculateHouseRareFind,
+        default: houseEfficiency,
+        getHouseRoomName: getHouseRoomName
     });
 
     /**
@@ -651,6 +1914,282 @@
         PRODUCTION_TYPES: PRODUCTION_TYPES,
         SECONDS_PER_HOUR: SECONDS_PER_HOUR,
         default: profitConstants
+    });
+
+    /**
+     * Efficiency Utilities Module
+     * Calculations for efficiency stacking and breakdowns
+     */
+
+
+    /**
+     * Stack additive bonuses (most game bonuses)
+     * @param {number[]} bonuses - Array of bonus percentages
+     * @returns {number} Total stacked bonus percentage
+     *
+     * @example
+     * stackAdditive([10, 20, 5])
+     * // Returns: 35
+     * // Because: 10% + 20% + 5% = 35%
+     */
+    function stackAdditive(...bonuses) {
+        return bonuses.reduce((total, bonus) => total + bonus, 0);
+    }
+
+    /**
+     * Calculate efficiency multiplier from efficiency percentage
+     * Efficiency gives bonus action completions per time-consuming action
+     *
+     * @param {number} efficiencyPercent - Efficiency as percentage (e.g., 150 for 150%)
+     * @returns {number} Multiplier (e.g., 2.5 for 150% efficiency)
+     *
+     * @example
+     * calculateEfficiencyMultiplier(0)   // Returns 1.0 (no bonus)
+     * calculateEfficiencyMultiplier(50)  // Returns 1.5
+     * calculateEfficiencyMultiplier(150) // Returns 2.5
+     */
+    function calculateEfficiencyMultiplier(efficiencyPercent) {
+        return 1 + (efficiencyPercent || 0) / 100;
+    }
+
+    /**
+     * Calculate efficiency breakdown from supplied sources
+     * @param {Object} params - Efficiency inputs
+     * @param {number} params.requiredLevel - Action required level
+     * @param {number} params.skillLevel - Player skill level
+     * @param {number} [params.teaSkillLevelBonus=0] - Bonus skill levels from tea
+     * @param {number} [params.actionLevelBonus=0] - Action level bonus from tea (affects requirement)
+     * @param {number} [params.houseEfficiency=0] - House room efficiency bonus
+     * @param {number} [params.equipmentEfficiency=0] - Equipment efficiency bonus
+     * @param {number} [params.teaEfficiency=0] - Tea efficiency bonus
+     * @param {number} [params.communityEfficiency=0] - Community buff efficiency bonus
+     * @param {number} [params.achievementEfficiency=0] - Achievement efficiency bonus
+     * @param {number} [params.personalEfficiency=0] - Personal buff (seal) efficiency bonus
+     * @returns {Object} Efficiency breakdown
+     */
+    function calculateEfficiencyBreakdown({
+        requiredLevel,
+        skillLevel,
+        teaSkillLevelBonus = 0,
+        actionLevelBonus = 0,
+        houseEfficiency = 0,
+        equipmentEfficiency = 0,
+        teaEfficiency = 0,
+        communityEfficiency = 0,
+        achievementEfficiency = 0,
+        personalEfficiency = 0,
+    }) {
+        const effectiveRequirement = (requiredLevel || 0) + actionLevelBonus;
+        const baseSkillLevel = Math.max(skillLevel || 0, requiredLevel || 0);
+        const effectiveLevel = baseSkillLevel + teaSkillLevelBonus;
+        const levelEfficiency = Math.max(0, effectiveLevel - effectiveRequirement);
+        const totalEfficiency = stackAdditive(
+            levelEfficiency,
+            houseEfficiency,
+            equipmentEfficiency,
+            teaEfficiency,
+            communityEfficiency,
+            achievementEfficiency,
+            personalEfficiency
+        );
+
+        return {
+            totalEfficiency,
+            levelEfficiency,
+            effectiveRequirement,
+            effectiveLevel,
+            breakdown: {
+                houseEfficiency,
+                equipmentEfficiency,
+                teaEfficiency,
+                communityEfficiency,
+                achievementEfficiency,
+                personalEfficiency,
+                actionLevelBonus,
+                teaSkillLevelBonus,
+            },
+        };
+    }
+
+    /**
+     * Build the shared efficiency context for a production or gathering action.
+     * Consolidates equipment lookup, tea parsing, house bonus, skill level, and
+     * efficiency breakdown calculation that would otherwise be duplicated across
+     * profit-calculator.js (production) and gathering-profit.js (gathering).
+     *
+     * @param {Object} actionDetails - Action detail object from dataManager
+     * @param {Object} [options={}] - Configuration flags
+     * @param {boolean} [options.isProduction=false] - True for production actions.
+     *   When true: includes artisanBonus, actionLevelBonus, uses calculateHouseEfficiency.
+     *   When false (gathering): uses inline houseRooms loop, includes gatheringQuantity.
+     * @param {Object} [options.gameData=null] - Pre-fetched gameData (required for gathering path).
+     * @param {number} [options.communityEfficiency=0] - Community buff efficiency (production only).
+     *   Caller computes this via their own method (e.g. calculateCommunityBuffBonus) and passes it in.
+     * @returns {Object} Efficiency context with all computed values
+     */
+    function getActionEfficiencyContext(actionDetails, options = {}) {
+        const { isProduction = false, gameData = null, communityEfficiency = 0 } = options;
+
+        const skills = dataManager.getSkills();
+        const equipment = loadoutSnapshot.getSnapshotForSkill(actionDetails.type) ?? dataManager.getEquipment();
+        const itemDetailMap = gameData?.itemDetailMap ?? dataManager.getInitClientData()?.itemDetailMap ?? {};
+
+        // Drink slots and concentration
+        const drinkSlots =
+            loadoutSnapshot.getSnapshotDrinksForSkill(actionDetails.type) ??
+            dataManager.getActionDrinkSlots(actionDetails.type);
+        const drinkConcentration = getDrinkConcentration(equipment, itemDetailMap);
+
+        // Action time (nanoseconds → seconds)
+        const baseTimePerActionSec = actionDetails.baseTimeCost / 1e9;
+        const speedBonus = parseEquipmentSpeedBonuses(equipment, actionDetails.type, itemDetailMap);
+        const personalSpeedBonus = dataManager.getPersonalBuffFlatBoost(actionDetails.type, '/buff_types/action_speed');
+        const actionTime = baseTimePerActionSec / (1 + speedBonus + personalSpeedBonus);
+
+        // Skill level
+        const baseRequirement = actionDetails.levelRequirement?.level || 1;
+        const skillHrid = actionDetails.levelRequirement?.skillHrid;
+        let skillLevel = baseRequirement;
+        if (skills) {
+            for (const skill of skills) {
+                if (skill.skillHrid === skillHrid) {
+                    skillLevel = skill.level;
+                    break;
+                }
+            }
+        }
+
+        // Tea bonuses (shared by both paths)
+        const teaSkillLevelBonus = parseTeaSkillLevelBonus(
+            actionDetails.type,
+            drinkSlots,
+            itemDetailMap,
+            drinkConcentration
+        );
+        const teaEfficiency = parseTeaEfficiency(actionDetails.type, drinkSlots, itemDetailMap, drinkConcentration);
+        const processingBonus = GATHERING_TYPES.includes(actionDetails.type)
+            ? parseProcessingBonus(drinkSlots, itemDetailMap, drinkConcentration) +
+              dataManager.getPersonalBuffFlatBoost(actionDetails.type, '/buff_types/processing')
+            : 0;
+        const gourmetBonus = PRODUCTION_TYPES.includes(actionDetails.type)
+            ? parseGourmetBonus(drinkSlots, itemDetailMap, drinkConcentration) +
+              dataManager.getPersonalBuffFlatBoost(actionDetails.type, '/buff_types/gourmet')
+            : 0;
+
+        // Equipment efficiency
+        const equipmentEfficiency = parseEquipmentEfficiencyBonuses(equipment, actionDetails.type, itemDetailMap);
+        const equipmentEfficiencyItems = parseEquipmentEfficiencyBreakdown(equipment, actionDetails.type, itemDetailMap);
+        const achievementEfficiency =
+            dataManager.getAchievementBuffFlatBoost(actionDetails.type, '/buff_types/efficiency') * 100;
+        const personalEfficiency = dataManager.getPersonalBuffFlatBoost(actionDetails.type, '/buff_types/efficiency') * 100;
+
+        // Production-specific: artisan bonus, action level bonus, house via calculateHouseEfficiency
+        // Gathering-specific: house via inline houseRooms loop
+        let artisanBonus = 0;
+        let actionLevelBonus = 0;
+        let houseEfficiency = 0;
+
+        if (isProduction) {
+            artisanBonus = parseArtisanBonus(drinkSlots, itemDetailMap, drinkConcentration);
+            actionLevelBonus = parseActionLevelBonus(drinkSlots, itemDetailMap, drinkConcentration);
+            houseEfficiency = calculateHouseEfficiency(actionDetails.type);
+        } else {
+            // Gathering: compute house efficiency from houseRooms + houseRoomDetailMap
+            const houseRooms = Array.from(dataManager.getHouseRooms().values());
+            const initData = gameData ?? dataManager.getInitClientData();
+            for (const room of houseRooms) {
+                const roomDetail = initData?.houseRoomDetailMap?.[room.houseRoomHrid];
+                if (roomDetail?.usableInActionTypeMap?.[actionDetails.type]) {
+                    houseEfficiency += (room.level || 0) * 1.5;
+                }
+            }
+        }
+
+        // Gathering-only: gathering quantity bonuses
+        let totalGathering = 0;
+        let gatheringDetails = null;
+
+        if (!isProduction && GATHERING_TYPES.includes(actionDetails.type)) {
+            const gatheringTea = parseGatheringBonus(drinkSlots, itemDetailMap, drinkConcentration);
+            const communityBuffLevel = dataManager.getCommunityBuffLevel('/community_buff_types/gathering_quantity');
+            const communityGathering = communityBuffLevel ? 0.2 + (communityBuffLevel - 1) * 0.005 : 0;
+            const achievementGathering = dataManager.getAchievementBuffFlatBoost(
+                actionDetails.type,
+                '/buff_types/gathering'
+            );
+            const personalGathering = dataManager.getPersonalBuffFlatBoost(actionDetails.type, '/buff_types/gathering');
+            totalGathering = gatheringTea + communityGathering + achievementGathering + personalGathering;
+            gatheringDetails = { gatheringTea, communityGathering, achievementGathering, personalGathering };
+        }
+
+        // Build efficiency breakdown
+        const efficiencyBreakdown = calculateEfficiencyBreakdown({
+            requiredLevel: baseRequirement,
+            skillLevel,
+            teaSkillLevelBonus,
+            actionLevelBonus,
+            houseEfficiency,
+            equipmentEfficiency,
+            teaEfficiency,
+            communityEfficiency,
+            achievementEfficiency,
+            personalEfficiency,
+        });
+
+        const efficiencyMultiplier = calculateEfficiencyMultiplier(efficiencyBreakdown.totalEfficiency);
+
+        return {
+            // Equipment / drinks
+            equipment,
+            drinkSlots,
+            drinkConcentration,
+            itemDetailMap,
+            // Timing
+            actionTime,
+            speedBonus,
+            personalSpeedBonus,
+            baseTimePerActionSec,
+            // Skill
+            skillLevel,
+            baseRequirement,
+            // Tea bonuses
+            teaSkillLevelBonus,
+            teaEfficiency,
+            processingBonus,
+            gourmetBonus,
+            // Equipment efficiency
+            equipmentEfficiency,
+            equipmentEfficiencyItems,
+            achievementEfficiency,
+            personalEfficiency,
+            // Production-only (zero for gathering)
+            artisanBonus,
+            actionLevelBonus,
+            houseEfficiency,
+            communityEfficiency,
+            // Gathering-only (zero/null for production)
+            totalGathering,
+            gatheringDetails,
+            // Final efficiency results
+            efficiencyBreakdown,
+            efficiencyMultiplier,
+        };
+    }
+
+    var efficiency = {
+        stackAdditive,
+        calculateEfficiencyMultiplier,
+        calculateEfficiencyBreakdown,
+        getActionEfficiencyContext,
+    };
+
+    var efficiency$1 = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        calculateEfficiencyBreakdown: calculateEfficiencyBreakdown,
+        calculateEfficiencyMultiplier: calculateEfficiencyMultiplier,
+        default: efficiency,
+        getActionEfficiencyContext: getActionEfficiencyContext,
+        stackAdditive: stackAdditive
     });
 
     /**
@@ -876,6 +2415,36 @@
     }
 
     /**
+     * Create a memoized price lookup closure backed by a fresh Map per calculation.
+     * Caches results keyed on itemHrid + side + enhancementLevel to avoid redundant
+     * market API calls within a single profit calculation pass.
+     *
+     * @param {Function} getItemPriceFn - Price resolver function (itemHrid, options) => number|null
+     * @returns {Function} getCachedPrice(itemHrid, options) closure
+     *
+     * @example
+     * const getCachedPrice = createPriceCache(getItemPrice);
+     * const price = getCachedPrice('/items/cotton', { context: 'profit', side: 'sell' });
+     */
+    function createPriceCache(getItemPriceFn) {
+        const priceCache = new Map();
+
+        return function getCachedPrice(itemHrid, options) {
+            const side = options?.side || '';
+            const enhancementLevel = options?.enhancementLevel ?? '';
+            const cacheKey = `${itemHrid}|${side}|${enhancementLevel}`;
+
+            if (priceCache.has(cacheKey)) {
+                return priceCache.get(cacheKey);
+            }
+
+            const price = getItemPriceFn(itemHrid, options);
+            priceCache.set(cacheKey, price);
+            return price;
+        };
+    }
+
+    /**
      * Calculate action-based totals for production actions
      * Uses per-action base inputs (efficiency only affects time)
      *
@@ -1035,6 +2604,7 @@
         calculateDrinksPerHour,
         calculateTeaCostsPerHour,
         calculatePriceAfterTax,
+        createPriceCache,
 
         calculateProductionActionTotalsFromBase,
         calculateGatheringActionTotalsFromBase,
@@ -1054,6 +2624,7 @@
         calculateSecondsForActions: calculateSecondsForActions,
         calculateTeaCostsPerHour: calculateTeaCostsPerHour,
         calculateTotalProfitForActions: calculateTotalProfitForActions,
+        createPriceCache: createPriceCache,
         default: profitHelpers
     });
 
@@ -2907,607 +4478,6 @@ self.onmessage = function (e) {
     const expectedValueCalculator = new ExpectedValueCalculator();
 
     /**
-     * Equipment Parser Utility
-     * Parses equipment bonuses for action calculations
-     *
-     * PART OF EFFICIENCY SYSTEM (Phase 1 of 3):
-     * - Phase 1 ✅: Equipment speed bonuses (this module) + level advantage
-     * - Phase 2 ✅: Community buffs + house rooms (WebSocket integration)
-     * - Phase 3 ✅: Consumable buffs (tea parser integration)
-     *
-     * Speed bonuses are MULTIPLICATIVE with time (reduce duration).
-     * Efficiency bonuses are ADDITIVE with each other, then MULTIPLICATIVE with time.
-     *
-     * Formula: actionTime = baseTime / (1 + totalEfficiency + totalSpeed)
-     */
-
-    /**
-     * Map action type HRID to equipment field name
-     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/cheesesmithing")
-     * @param {string} suffix - Field suffix (e.g., "Speed", "Efficiency", "RareFind")
-     * @param {Array<string>} validFields - Array of valid field names
-     * @returns {string|null} Field name (e.g., "cheesesmithingSpeed") or null
-     */
-    function getFieldForActionType(actionTypeHrid, suffix, validFields) {
-        if (!actionTypeHrid) {
-            return null;
-        }
-
-        // Extract skill name from action type HRID
-        // e.g., "/action_types/cheesesmithing" -> "cheesesmithing"
-        const skillName = actionTypeHrid.replace('/action_types/', '');
-
-        // Map to field name with suffix
-        // e.g., "cheesesmithing" + "Speed" -> "cheesesmithingSpeed"
-        const fieldName = skillName + suffix;
-
-        return validFields.includes(fieldName) ? fieldName : null;
-    }
-
-    /**
-     * Enhancement percentage table (based on game mechanics)
-     * Each enhancement level provides a percentage boost to base stats
-     */
-    const ENHANCEMENT_PERCENTAGES = {
-        0: 0.0,
-        1: 0.02, // 2.0%
-        2: 0.042, // 4.2%
-        3: 0.066, // 6.6%
-        4: 0.092, // 9.2%
-        5: 0.12, // 12.0%
-        6: 0.15, // 15.0%
-        7: 0.182, // 18.2%
-        8: 0.216, // 21.6%
-        9: 0.252, // 25.2%
-        10: 0.29, // 29.0%
-        11: 0.334, // 33.4%
-        12: 0.384, // 38.4%
-        13: 0.44, // 44.0%
-        14: 0.502, // 50.2%
-        15: 0.57, // 57.0%
-        16: 0.644, // 64.4%
-        17: 0.724, // 72.4%
-        18: 0.81, // 81.0%
-        19: 0.902, // 90.2%
-        20: 1.0, // 100.0%
-    };
-
-    /**
-     * Slot multipliers for enhancement bonuses
-     * Accessories get 5× bonus, weapons/armor get 1× bonus
-     * Keys use item_locations (not equipment_types) to match characterEquipment map keys
-     */
-    const SLOT_MULTIPLIERS = {
-        '/item_locations/neck': 5, // Necklace
-        '/item_locations/ring': 5, // Ring
-        '/item_locations/earrings': 5, // Earrings
-        '/item_locations/back': 5, // Back/Cape
-        '/item_locations/trinket': 5, // Trinket
-        '/item_locations/charm': 5, // Charm
-        '/item_locations/main_hand': 1, // Main hand weapon
-        '/item_locations/two_hand': 1, // Two-handed weapon
-        '/item_locations/off_hand': 1, // Off-hand/shield
-        '/item_locations/head': 1, // Head armor
-        '/item_locations/body': 1, // Body armor
-        '/item_locations/legs': 1, // Leg armor
-        '/item_locations/hands': 1, // Hand armor
-        '/item_locations/feet': 1, // Feet armor
-        '/item_locations/pouch': 1, // Pouch
-    };
-
-    /**
-     * Calculate enhancement scaling for equipment stats
-     * Uses percentage-based enhancement system with slot multipliers
-     *
-     * Formula: base × (1 + enhancementPercentage × slotMultiplier)
-     *
-     * @param {number} baseValue - Base stat value from item data
-     * @param {number} enhancementLevel - Enhancement level (0-20)
-     * @param {string} slotHrid - Equipment slot HRID (e.g., "/equipment_types/neck")
-     * @returns {number} Scaled stat value
-     *
-     * @example
-     * // Philosopher's Necklace +4 (4% base speed, neck slot 5×)
-     * calculateEnhancementScaling(0.04, 4, '/equipment_types/neck')
-     * // = 0.04 × (1 + 0.092 × 5) = 0.04 × 1.46 = 0.0584 (5.84%)
-     *
-     * // Lumberjack's Top +10 (10% base efficiency, body slot 1×)
-     * calculateEnhancementScaling(0.10, 10, '/equipment_types/body')
-     * // = 0.10 × (1 + 0.290 × 1) = 0.10 × 1.29 = 0.129 (12.9%)
-     */
-    function calculateEnhancementScaling(baseValue, enhancementLevel, slotHrid) {
-        if (enhancementLevel === 0) {
-            return baseValue;
-        }
-
-        // Get enhancement percentage from table
-        const enhancementPercentage = ENHANCEMENT_PERCENTAGES[enhancementLevel] || 0;
-
-        // Get slot multiplier (default to 1× if slot not found)
-        const slotMultiplier = SLOT_MULTIPLIERS[slotHrid] || 1;
-
-        // Apply formula: base × (1 + percentage × multiplier)
-        return baseValue * (1 + enhancementPercentage * slotMultiplier);
-    }
-
-    /**
-     * Generic equipment stat parser - handles all noncombat stats with consistent logic
-     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {Object} config - Parser configuration
-     * @param {string|null} config.skillSpecificField - Skill-specific field (e.g., "brewingSpeed")
-     * @param {string|null} config.genericField - Generic skilling field (e.g., "skillingSpeed")
-     * @param {boolean} config.returnAsPercentage - Whether to convert to percentage (multiply by 100)
-     * @returns {number} Total stat bonus
-     *
-     * @example
-     * // Parse speed bonuses for brewing
-     * parseEquipmentStat(equipment, items, {
-     *   skillSpecificField: "brewingSpeed",
-     *   genericField: "skillingSpeed",
-     *   returnAsPercentage: false
-     * })
-     */
-    function parseEquipmentStat(characterEquipment, itemDetailMap, config) {
-        if (!characterEquipment || characterEquipment.size === 0) {
-            return 0; // No equipment
-        }
-
-        if (!itemDetailMap) {
-            return 0; // Missing item data
-        }
-
-        const { skillSpecificField, genericField, returnAsPercentage } = config;
-
-        let totalBonus = 0;
-
-        // Iterate through all equipped items
-        for (const [slotHrid, equippedItem] of characterEquipment) {
-            // Get item details from game data
-            const itemDetails = itemDetailMap[equippedItem.itemHrid];
-
-            if (!itemDetails || !itemDetails.equipmentDetail) {
-                continue; // Not an equipment item
-            }
-
-            // Check if item has noncombat stats
-            const noncombatStats = itemDetails.equipmentDetail.noncombatStats;
-
-            if (!noncombatStats) {
-                continue; // No noncombat stats
-            }
-
-            // Get enhancement level from equipped item
-            const enhancementLevel = equippedItem.enhancementLevel || 0;
-
-            // Check for skill-specific stat (e.g., brewingSpeed, brewingEfficiency, brewingRareFind)
-            if (skillSpecificField) {
-                const baseValue = noncombatStats[skillSpecificField];
-
-                if (baseValue && baseValue > 0) {
-                    const scaledValue = calculateEnhancementScaling(baseValue, enhancementLevel, slotHrid);
-                    totalBonus += scaledValue;
-                }
-            }
-
-            // Check for generic skilling stat (e.g., skillingSpeed, skillingEfficiency, skillingRareFind, skillingEssenceFind)
-            if (genericField) {
-                const baseValue = noncombatStats[genericField];
-
-                if (baseValue && baseValue > 0) {
-                    const scaledValue = calculateEnhancementScaling(baseValue, enhancementLevel, slotHrid);
-                    totalBonus += scaledValue;
-                }
-            }
-        }
-
-        // Convert to percentage if requested (0.15 -> 15%)
-        return returnAsPercentage ? totalBonus * 100 : totalBonus;
-    }
-
-    /**
-     * Valid speed fields from game data
-     */
-    const VALID_SPEED_FIELDS = [
-        'milkingSpeed',
-        'foragingSpeed',
-        'woodcuttingSpeed',
-        'cheesesmithingSpeed',
-        'craftingSpeed',
-        'tailoringSpeed',
-        'brewingSpeed',
-        'cookingSpeed',
-        'alchemySpeed',
-        'enhancingSpeed',
-        'taskSpeed',
-    ];
-
-    /**
-     * Parse equipment speed bonuses for a specific action type
-     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
-     * @param {string} actionTypeHrid - Action type HRID
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @returns {number} Total speed bonus as decimal (e.g., 0.15 for 15%)
-     *
-     * @example
-     * parseEquipmentSpeedBonuses(equipment, "/action_types/brewing", items)
-     * // Cheese Pot (base 0.15, bonus 0.003) +0: 0.15 (15%)
-     * // Cheese Pot (base 0.15, bonus 0.003) +10: 0.18 (18%)
-     * // Azure Pot (base 0.3, bonus 0.006) +10: 0.36 (36%)
-     */
-    function parseEquipmentSpeedBonuses(characterEquipment, actionTypeHrid, itemDetailMap) {
-        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'Speed', VALID_SPEED_FIELDS);
-
-        return parseEquipmentStat(characterEquipment, itemDetailMap, {
-            skillSpecificField,
-            genericField: 'skillingSpeed',
-            returnAsPercentage: false,
-        });
-    }
-
-    /**
-     * Valid efficiency fields from game data
-     */
-    const VALID_EFFICIENCY_FIELDS = [
-        'milkingEfficiency',
-        'foragingEfficiency',
-        'woodcuttingEfficiency',
-        'cheesesmithingEfficiency',
-        'craftingEfficiency',
-        'tailoringEfficiency',
-        'brewingEfficiency',
-        'cookingEfficiency',
-        'alchemyEfficiency',
-    ];
-
-    /**
-     * Parse equipment efficiency bonuses for a specific action type
-     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
-     * @param {string} actionTypeHrid - Action type HRID
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @returns {number} Total efficiency bonus as percentage (e.g., 12 for 12%)
-     *
-     * @example
-     * parseEquipmentEfficiencyBonuses(equipment, "/action_types/brewing", items)
-     * // Brewer's Top (base 0.1, bonus 0.002) +0: 10%
-     * // Brewer's Top (base 0.1, bonus 0.002) +10: 12%
-     * // Philosopher's Necklace (skillingEfficiency 0.02, bonus 0.002) +10: 4%
-     * // Total: 16%
-     */
-    function parseEquipmentEfficiencyBonuses(characterEquipment, actionTypeHrid, itemDetailMap) {
-        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'Efficiency', VALID_EFFICIENCY_FIELDS);
-
-        return parseEquipmentStat(characterEquipment, itemDetailMap, {
-            skillSpecificField,
-            genericField: 'skillingEfficiency',
-            returnAsPercentage: true,
-        });
-    }
-
-    /**
-     * Parse Essence Find bonus from equipment
-     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @returns {number} Total essence find bonus as percentage (e.g., 15 for 15%)
-     *
-     * @example
-     * parseEssenceFindBonus(equipment, items)
-     * // Ring of Essence Find (base 0.15, bonus 0.015) +0: 15%
-     * // Ring of Essence Find (base 0.15, bonus 0.015) +10: 30%
-     */
-    function parseEssenceFindBonus(characterEquipment, itemDetailMap) {
-        return parseEquipmentStat(characterEquipment, itemDetailMap, {
-            skillSpecificField: null, // No skill-specific essence find
-            genericField: 'skillingEssenceFind',
-            returnAsPercentage: true,
-        });
-    }
-
-    /**
-     * Valid rare find fields from game data
-     */
-    const VALID_RARE_FIND_FIELDS = [
-        'milkingRareFind',
-        'foragingRareFind',
-        'woodcuttingRareFind',
-        'cheesesmithingRareFind',
-        'craftingRareFind',
-        'tailoringRareFind',
-        'brewingRareFind',
-        'cookingRareFind',
-        'alchemyRareFind',
-        'enhancingRareFind',
-    ];
-
-    /**
-     * Parse Rare Find bonus from equipment
-     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
-     * @param {string} actionTypeHrid - Action type HRID (for skill-specific rare find)
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @returns {number} Total rare find bonus as percentage (e.g., 15 for 15%)
-     *
-     * @example
-     * parseRareFindBonus(equipment, "/action_types/brewing", items)
-     * // Brewer's Top (base 0.15, bonus 0.003) +0: 15%
-     * // Brewer's Top (base 0.15, bonus 0.003) +10: 18%
-     * // Earrings of Rare Find (base 0.08, bonus 0.002) +0: 8%
-     * // Total: 26%
-     */
-    function parseRareFindBonus(characterEquipment, actionTypeHrid, itemDetailMap) {
-        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'RareFind', VALID_RARE_FIND_FIELDS);
-
-        return parseEquipmentStat(characterEquipment, itemDetailMap, {
-            skillSpecificField,
-            genericField: 'skillingRareFind',
-            returnAsPercentage: true,
-        });
-    }
-
-    /**
-     * Generic per-item equipment stat breakdown
-     * @param {Map} characterEquipment - Equipment map
-     * @param {Object} itemDetailMap - Item details
-     * @param {string|null} skillSpecificField - e.g. "foragingEfficiency"
-     * @param {string|null} genericField - e.g. "skillingEfficiency"
-     * @param {boolean} returnAsPercentage - Multiply by 100
-     * @returns {Array<{name, enhancementLevel, value}>}
-     */
-    function parseEquipmentStatBreakdown(
-        characterEquipment,
-        itemDetailMap,
-        skillSpecificField,
-        genericField,
-        returnAsPercentage
-    ) {
-        if (!characterEquipment || characterEquipment.size === 0) return [];
-        if (!itemDetailMap) return [];
-
-        const items = [];
-
-        for (const [slotHrid, equippedItem] of characterEquipment) {
-            const itemDetails = itemDetailMap[equippedItem.itemHrid];
-            if (!itemDetails?.equipmentDetail?.noncombatStats) continue;
-
-            const noncombatStats = itemDetails.equipmentDetail.noncombatStats;
-            const enhancementLevel = equippedItem.enhancementLevel || 0;
-            let value = 0;
-
-            if (skillSpecificField) {
-                const base = noncombatStats[skillSpecificField];
-                if (base > 0) value += calculateEnhancementScaling(base, enhancementLevel, slotHrid);
-            }
-            if (genericField) {
-                const base = noncombatStats[genericField];
-                if (base > 0) value += calculateEnhancementScaling(base, enhancementLevel, slotHrid);
-            }
-
-            if (value > 0) {
-                items.push({
-                    name: itemDetails.name,
-                    enhancementLevel,
-                    value: value * 100 ,
-                });
-            }
-        }
-
-        return items;
-    }
-
-    /**
-     * Get per-item efficiency bonus breakdown for an action type
-     * @param {Map} characterEquipment - Equipment map
-     * @param {string} actionTypeHrid - Action type HRID
-     * @param {Object} itemDetailMap - Item details
-     * @returns {Array<{name, enhancementLevel, value}>}
-     */
-    function parseEquipmentEfficiencyBreakdown(characterEquipment, actionTypeHrid, itemDetailMap) {
-        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'Efficiency', VALID_EFFICIENCY_FIELDS);
-        return parseEquipmentStatBreakdown(
-            characterEquipment,
-            itemDetailMap,
-            skillSpecificField,
-            'skillingEfficiency');
-    }
-
-    /**
-     * Get per-item rare find bonus breakdown for an action type
-     * @param {Map} characterEquipment - Equipment map
-     * @param {string} actionTypeHrid - Action type HRID
-     * @param {Object} itemDetailMap - Item details
-     * @returns {Array<{name, enhancementLevel, value}>}
-     */
-    function parseRareFindBreakdown(characterEquipment, actionTypeHrid, itemDetailMap) {
-        const skillSpecificField = getFieldForActionType(actionTypeHrid, 'RareFind', VALID_RARE_FIND_FIELDS);
-        return parseEquipmentStatBreakdown(characterEquipment, itemDetailMap, skillSpecificField, 'skillingRareFind');
-    }
-
-    /**
-     * Get all speed bonuses for debugging
-     * @param {Map} characterEquipment - Equipment map
-     * @param {Object} itemDetailMap - Item details
-     * @returns {Array} Array of speed bonus objects
-     */
-    function debugEquipmentSpeedBonuses(characterEquipment, itemDetailMap) {
-        if (!characterEquipment || characterEquipment.size === 0) {
-            return [];
-        }
-
-        const bonuses = [];
-
-        for (const [slotHrid, equippedItem] of characterEquipment) {
-            const itemDetails = itemDetailMap[equippedItem.itemHrid];
-
-            if (!itemDetails || !itemDetails.equipmentDetail) {
-                continue;
-            }
-
-            const noncombatStats = itemDetails.equipmentDetail.noncombatStats;
-
-            if (!noncombatStats) {
-                continue;
-            }
-
-            // Find all speed bonuses on this item
-            for (const [statName, value] of Object.entries(noncombatStats)) {
-                if (statName.endsWith('Speed') && value > 0) {
-                    const enhancementLevel = equippedItem.enhancementLevel || 0;
-                    const scaledValue = calculateEnhancementScaling(value, enhancementLevel, slotHrid);
-
-                    bonuses.push({
-                        itemName: itemDetails.name,
-                        itemHrid: equippedItem.itemHrid,
-                        slot: slotHrid,
-                        speedType: statName,
-                        baseBonus: value,
-                        enhancementLevel,
-                        scaledBonus: scaledValue,
-                    });
-                }
-            }
-        }
-
-        return bonuses;
-    }
-
-    var equipmentParser = /*#__PURE__*/Object.freeze({
-        __proto__: null,
-        debugEquipmentSpeedBonuses: debugEquipmentSpeedBonuses,
-        parseEquipmentEfficiencyBonuses: parseEquipmentEfficiencyBonuses,
-        parseEquipmentEfficiencyBreakdown: parseEquipmentEfficiencyBreakdown,
-        parseEquipmentSpeedBonuses: parseEquipmentSpeedBonuses,
-        parseEssenceFindBonus: parseEssenceFindBonus,
-        parseRareFindBonus: parseRareFindBonus,
-        parseRareFindBreakdown: parseRareFindBreakdown
-    });
-
-    /**
-     * House Efficiency Utility
-     * Calculates efficiency bonuses from house rooms
-     *
-     * PART OF EFFICIENCY SYSTEM (Phase 2):
-     * - House rooms provide +1.5% efficiency per level to matching actions
-     * - Formula: houseLevel × 1.5%
-     * - Data source: WebSocket (characterHouseRoomMap)
-     */
-
-
-    /**
-     * Map action type HRID to house room HRID
-     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/brewing")
-     * @returns {string|null} House room HRID or null
-     */
-    function getHouseRoomForActionType(actionTypeHrid) {
-        // Mapping matches original MWI Tools
-        const actionTypeToHouseRoomMap = {
-            '/action_types/brewing': '/house_rooms/brewery',
-            '/action_types/cheesesmithing': '/house_rooms/forge',
-            '/action_types/cooking': '/house_rooms/kitchen',
-            '/action_types/crafting': '/house_rooms/workshop',
-            '/action_types/foraging': '/house_rooms/garden',
-            '/action_types/milking': '/house_rooms/dairy_barn',
-            '/action_types/tailoring': '/house_rooms/sewing_parlor',
-            '/action_types/woodcutting': '/house_rooms/log_shed',
-            '/action_types/alchemy': '/house_rooms/laboratory',
-        };
-
-        return actionTypeToHouseRoomMap[actionTypeHrid] || null;
-    }
-
-    /**
-     * Calculate house efficiency bonus for an action type
-     * @param {string} actionTypeHrid - Action type HRID
-     * @returns {number} Efficiency bonus percentage (e.g., 12 for 12%)
-     *
-     * @example
-     * calculateHouseEfficiency("/action_types/brewing")
-     * // Returns: 12 (if brewery is level 8: 8 × 1.5% = 12%)
-     */
-    function calculateHouseEfficiency(actionTypeHrid) {
-        // Get the house room for this action type
-        const houseRoomHrid = getHouseRoomForActionType(actionTypeHrid);
-
-        if (!houseRoomHrid) {
-            return 0; // No house room for this action type
-        }
-
-        // Get house room level from game data (via dataManager)
-        const roomLevel = dataManager.getHouseRoomLevel(houseRoomHrid);
-
-        // Formula: houseLevel × 1.5%
-        // Returns as percentage (e.g., 12 for 12%)
-        return roomLevel * 1.5;
-    }
-
-    /**
-     * Get friendly name for house room
-     * @param {string} houseRoomHrid - House room HRID
-     * @returns {string} Friendly name
-     */
-    function getHouseRoomName(houseRoomHrid) {
-        const names = {
-            '/house_rooms/brewery': 'Brewery',
-            '/house_rooms/forge': 'Forge',
-            '/house_rooms/kitchen': 'Kitchen',
-            '/house_rooms/workshop': 'Workshop',
-            '/house_rooms/garden': 'Garden',
-            '/house_rooms/dairy_barn': 'Dairy Barn',
-            '/house_rooms/sewing_parlor': 'Sewing Parlor',
-            '/house_rooms/log_shed': 'Log Shed',
-            '/house_rooms/laboratory': 'Laboratory',
-        };
-
-        return names[houseRoomHrid] || 'Unknown';
-    }
-
-    /**
-     * Calculate total Rare Find bonus from all house rooms
-     * @returns {number} Total rare find bonus as percentage (e.g., 1.6 for 1.6%)
-     *
-     * @example
-     * calculateHouseRareFind()
-     * // Returns: 1.6 (if total house room levels = 8: 8 × 0.2% per level = 1.6%)
-     *
-     * Formula from game data:
-     * - flatBoostLevelBonus: 0.2% per level
-     * - Total: totalLevels × 0.2%
-     * - Max: 8 rooms × 8 levels = 64 × 0.2% = 12.8%
-     */
-    function calculateHouseRareFind() {
-        // Get all house rooms
-        const houseRooms = dataManager.getHouseRooms();
-
-        if (!houseRooms || houseRooms.size === 0) {
-            return 0; // No house rooms
-        }
-
-        // Sum all house room levels
-        let totalLevels = 0;
-        for (const [_hrid, room] of houseRooms) {
-            totalLevels += room.level || 0;
-        }
-
-        // Formula: totalLevels × flatBoostLevelBonus
-        // flatBoostLevelBonus: 0.2% per level (no base bonus)
-        const flatBoostLevelBonus = 0.2;
-
-        return totalLevels * flatBoostLevelBonus;
-    }
-
-    var houseEfficiency = {
-        calculateHouseEfficiency,
-        getHouseRoomName,
-        calculateHouseRareFind,
-    };
-
-    var houseEfficiency$1 = /*#__PURE__*/Object.freeze({
-        __proto__: null,
-        calculateHouseEfficiency: calculateHouseEfficiency,
-        calculateHouseRareFind: calculateHouseRareFind,
-        default: houseEfficiency,
-        getHouseRoomName: getHouseRoomName
-    });
-
-    /**
      * Bonus Revenue Calculator Utility
      * Calculates revenue from essence and rare find drops
      * Shared by both gathering and production profit calculators
@@ -3681,80 +4651,6 @@ self.onmessage = function (e) {
     var bonusRevenueCalculator = /*#__PURE__*/Object.freeze({
         __proto__: null,
         calculateBonusRevenue: calculateBonusRevenue
-    });
-
-    /**
-     * Enhancement Multiplier System
-     *
-     * Handles enhancement bonus calculations for equipment.
-     * Different equipment slots have different multipliers:
-     * - Accessories (neck/ring/earring), Back, Trinket, Charm: 5× multiplier
-     * - All other slots (weapons, armor, pouch): 1× multiplier
-     */
-
-    /**
-     * Enhancement multiplier by equipment slot type
-     */
-    const ENHANCEMENT_MULTIPLIERS = {
-        '/equipment_types/neck': 5,
-        '/equipment_types/ring': 5,
-        '/equipment_types/earring': 5,
-        '/equipment_types/back': 5,
-        '/equipment_types/trinket': 5,
-        '/equipment_types/charm': 5,
-        // All other slots: 1× (default)
-    };
-
-    /**
-     * Enhancement bonus table
-     * Maps enhancement level to percentage bonus
-     */
-    const ENHANCEMENT_BONUSES = {
-        1: 0.02,
-        2: 0.042,
-        3: 0.066,
-        4: 0.092,
-        5: 0.12,
-        6: 0.15,
-        7: 0.182,
-        8: 0.216,
-        9: 0.252,
-        10: 0.29,
-        11: 0.334,
-        12: 0.384,
-        13: 0.44,
-        14: 0.502,
-        15: 0.57,
-        16: 0.644,
-        17: 0.724,
-        18: 0.81,
-        19: 0.902,
-        20: 1.0,
-    };
-
-    /**
-     * Get enhancement multiplier for an item
-     * @param {Object} itemDetails - Item details from itemDetailMap
-     * @param {number} enhancementLevel - Current enhancement level of item
-     * @returns {number} Multiplier to apply to bonuses
-     */
-    function getEnhancementMultiplier(itemDetails, enhancementLevel) {
-        if (enhancementLevel === 0) {
-            return 1;
-        }
-
-        const equipmentType = itemDetails?.equipmentDetail?.type;
-        const slotMultiplier = ENHANCEMENT_MULTIPLIERS[equipmentType] || 1;
-        const enhancementBonus = ENHANCEMENT_BONUSES[enhancementLevel] || 0;
-
-        return 1 + enhancementBonus * slotMultiplier;
-    }
-
-    var enhancementMultipliers = /*#__PURE__*/Object.freeze({
-        __proto__: null,
-        ENHANCEMENT_BONUSES: ENHANCEMENT_BONUSES,
-        ENHANCEMENT_MULTIPLIERS: ENHANCEMENT_MULTIPLIERS,
-        getEnhancementMultiplier: getEnhancementMultiplier
     });
 
     /**
@@ -4144,477 +5040,6 @@ self.onmessage = function (e) {
     var marketListings = /*#__PURE__*/Object.freeze({
         __proto__: null,
         mergeMarketListings: mergeMarketListings
-    });
-
-    /**
-     * Tea Buff Parser Utility
-     * Calculates efficiency bonuses from active tea buffs
-     *
-     * Tea efficiency comes from two buff types:
-     * 1. /buff_types/efficiency - Generic efficiency (e.g., Efficiency Tea: 10%)
-     * 2. /buff_types/{skill}_level - Skill level bonuses (e.g., Brewing Tea: +3 levels)
-     *
-     * All tea effects scale with Drink Concentration equipment stat.
-     */
-
-
-    /**
-     * Generic tea buff parser - handles all tea buff types with consistent logic
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
-     * @param {Object} config - Parser configuration
-     * @param {Array<string>} config.buffTypeHrids - Buff type HRIDs to check (e.g., ['/buff_types/artisan'])
-     * @returns {number} Total buff bonus
-     *
-     * @example
-     * // Parse artisan bonus
-     * parseTeaBuff(drinks, items, 0.12, { buffTypeHrids: ['/buff_types/artisan'] })
-     */
-    function parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, config) {
-        if (!activeDrinks || activeDrinks.length === 0) {
-            return 0; // No active teas
-        }
-
-        if (!itemDetailMap) {
-            return 0; // Missing required data
-        }
-
-        const { buffTypeHrids } = config;
-        let totalBonus = 0;
-
-        // Process each active tea/drink
-        for (const drink of activeDrinks) {
-            if (!drink || !drink.itemHrid) {
-                continue; // Empty slot
-            }
-
-            const itemDetails = itemDetailMap[drink.itemHrid];
-            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
-                continue; // Not a consumable or has no buffs
-            }
-
-            // Check each buff on this tea
-            for (const buff of itemDetails.consumableDetail.buffs) {
-                // Check if this buff matches any of the target types
-                if (buffTypeHrids.includes(buff.typeHrid)) {
-                    const baseValue = buff.flatBoost;
-                    const scaledValue = baseValue * (1 + drinkConcentration);
-                    totalBonus += scaledValue;
-                }
-            }
-        }
-
-        return totalBonus;
-    }
-
-    /**
-     * Parse tea efficiency bonuses for a specific action type
-     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/brewing")
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
-     * @returns {number} Total tea efficiency bonus as percentage (e.g., 12 for 12%)
-     *
-     * @example
-     * // With Efficiency Tea (10% base) and 12% Drink Concentration:
-     * parseTeaEfficiency("/action_types/brewing", activeDrinks, items, 0.12)
-     * // Returns: 11.2 (10% × 1.12 = 11.2%)
-     */
-    function parseTeaEfficiency(actionTypeHrid, activeDrinks, itemDetailMap, drinkConcentration = 0) {
-        if (!activeDrinks || activeDrinks.length === 0) {
-            return 0; // No active teas
-        }
-
-        if (!actionTypeHrid || !itemDetailMap) {
-            return 0; // Missing required data
-        }
-
-        let totalEfficiency = 0;
-
-        // Process each active tea/drink
-        for (const drink of activeDrinks) {
-            if (!drink || !drink.itemHrid) {
-                continue; // Empty slot
-            }
-
-            const itemDetails = itemDetailMap[drink.itemHrid];
-            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
-                continue; // Not a consumable or has no buffs
-            }
-
-            // Check each buff on this tea
-            for (const buff of itemDetails.consumableDetail.buffs) {
-                // Generic efficiency buff (e.g., Efficiency Tea)
-                if (buff.typeHrid === '/buff_types/efficiency') {
-                    const baseEfficiency = buff.flatBoost * 100; // Convert to percentage
-                    const scaledEfficiency = baseEfficiency * (1 + drinkConcentration);
-                    totalEfficiency += scaledEfficiency;
-                }
-                // Note: Skill-specific level buffs are NOT counted here
-                // They affect Level Bonus calculation, not Tea Bonus
-            }
-        }
-
-        return totalEfficiency;
-    }
-
-    /**
-     * Parse tea efficiency bonuses with breakdown by individual tea
-     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/brewing")
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
-     * @returns {Array<{name: string, efficiency: number, baseEfficiency: number, dcContribution: number}>} Array of tea contributions
-     *
-     * @example
-     * // With Efficiency Tea (10% base) and Ultra Cheesesmithing Tea (6% base) with 12% DC:
-     * parseTeaEfficiencyBreakdown("/action_types/cheesesmithing", activeDrinks, items, 0.12)
-     * // Returns: [
-     * //   { name: "Efficiency Tea", efficiency: 11.2, baseEfficiency: 10.0, dcContribution: 1.2 },
-     * //   { name: "Ultra Cheesesmithing Tea", efficiency: 6.72, baseEfficiency: 6.0, dcContribution: 0.72 }
-     * // ]
-     */
-    function parseTeaEfficiencyBreakdown(actionTypeHrid, activeDrinks, itemDetailMap, drinkConcentration = 0) {
-        if (!activeDrinks || activeDrinks.length === 0) {
-            return []; // No active teas
-        }
-
-        if (!actionTypeHrid || !itemDetailMap) {
-            return []; // Missing required data
-        }
-
-        const teaBreakdown = [];
-
-        // Process each active tea/drink
-        for (const drink of activeDrinks) {
-            if (!drink || !drink.itemHrid) {
-                continue; // Empty slot
-            }
-
-            const itemDetails = itemDetailMap[drink.itemHrid];
-            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
-                continue; // Not a consumable or has no buffs
-            }
-
-            let baseEfficiency = 0;
-            let totalEfficiency = 0;
-
-            // Check each buff on this tea
-            for (const buff of itemDetails.consumableDetail.buffs) {
-                // Generic efficiency buff (e.g., Efficiency Tea)
-                if (buff.typeHrid === '/buff_types/efficiency') {
-                    const baseValue = buff.flatBoost * 100; // Convert to percentage
-                    const scaledValue = baseValue * (1 + drinkConcentration);
-                    baseEfficiency += baseValue;
-                    totalEfficiency += scaledValue;
-                }
-                // Note: Skill-specific level buffs are NOT counted here
-                // They affect Level Bonus calculation, not Tea Bonus
-            }
-
-            // Only add to breakdown if this tea contributes efficiency
-            if (totalEfficiency > 0) {
-                teaBreakdown.push({
-                    name: itemDetails.name,
-                    efficiency: totalEfficiency,
-                    baseEfficiency: baseEfficiency,
-                    dcContribution: totalEfficiency - baseEfficiency,
-                });
-            }
-        }
-
-        return teaBreakdown;
-    }
-
-    /**
-     * Get Drink Concentration stat from equipped items
-     * @param {Map} characterEquipment - Equipment map from dataManager.getEquipment()
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @returns {number} Total drink concentration as decimal (e.g., 0.12 for 12%)
-     *
-     * @example
-     * getDrinkConcentration(equipment, items)
-     * // Returns: 0.12 (if wearing items with 12% total drink concentration)
-     */
-    function getDrinkConcentration(characterEquipment, itemDetailMap) {
-        if (!characterEquipment || characterEquipment.size === 0) {
-            return 0; // No equipment
-        }
-
-        if (!itemDetailMap) {
-            return 0; // Missing item data
-        }
-
-        let totalDrinkConcentration = 0;
-
-        // Iterate through all equipped items
-        for (const [_slotHrid, equippedItem] of characterEquipment) {
-            const itemDetails = itemDetailMap[equippedItem.itemHrid];
-
-            if (!itemDetails || !itemDetails.equipmentDetail) {
-                continue; // Not an equipment item
-            }
-
-            const noncombatStats = itemDetails.equipmentDetail.noncombatStats;
-            if (!noncombatStats) {
-                continue; // No noncombat stats
-            }
-
-            // Check for drink concentration stat
-            const baseDrinkConcentration = noncombatStats.drinkConcentration;
-            if (!baseDrinkConcentration || baseDrinkConcentration <= 0) {
-                continue; // No drink concentration on this item
-            }
-
-            // Get enhancement level from equipped item
-            const enhancementLevel = equippedItem.enhancementLevel || 0;
-
-            // Calculate scaled drink concentration with enhancement
-            // Uses enhancement multiplier table (e.g., +10 = 1.29× for 1× slots like pouch)
-            const enhancementMultiplier = getEnhancementMultiplier(itemDetails, enhancementLevel);
-            const scaledDrinkConcentration = baseDrinkConcentration * enhancementMultiplier;
-
-            totalDrinkConcentration += scaledDrinkConcentration;
-        }
-
-        return totalDrinkConcentration;
-    }
-
-    /**
-     * Parse Artisan bonus from active tea buffs
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
-     * @returns {number} Artisan material reduction as decimal (e.g., 0.112 for 11.2% reduction)
-     *
-     * @example
-     * // With Artisan Tea (10% base) and 12% Drink Concentration:
-     * parseArtisanBonus(activeDrinks, items, 0.12)
-     * // Returns: 0.112 (10% × 1.12 = 11.2% reduction)
-     */
-    function parseArtisanBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
-        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
-            buffTypeHrids: ['/buff_types/artisan'],
-        });
-    }
-
-    /**
-     * Parse Gourmet bonus from active tea buffs
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
-     * @returns {number} Gourmet bonus chance as decimal (e.g., 0.1344 for 13.44% bonus items)
-     *
-     * @example
-     * // With Gourmet Tea (12% base) and 12% Drink Concentration:
-     * parseGourmetBonus(activeDrinks, items, 0.12)
-     * // Returns: 0.1344 (12% × 1.12 = 13.44% bonus items)
-     */
-    function parseGourmetBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
-        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
-            buffTypeHrids: ['/buff_types/gourmet'],
-        });
-    }
-
-    /**
-     * Parse Processing bonus from active tea buffs
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
-     * @returns {number} Processing conversion chance as decimal (e.g., 0.168 for 16.8% conversion chance)
-     *
-     * @example
-     * // With Processing Tea (15% base) and 12% Drink Concentration:
-     * parseProcessingBonus(activeDrinks, items, 0.12)
-     * // Returns: 0.168 (15% × 1.12 = 16.8% conversion chance)
-     */
-    function parseProcessingBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
-        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
-            buffTypeHrids: ['/buff_types/processing'],
-        });
-    }
-
-    /**
-     * Parse Action Level bonus from active tea buffs
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
-     * @returns {number} Action Level bonus as flat number (e.g., 5.645 for +5.645 levels, floored to 5 when used)
-     *
-     * @example
-     * // With Artisan Tea (+5 Action Level base) and 12% Drink Concentration:
-     * parseActionLevelBonus(activeDrinks, items, 0.129)
-     * // Returns: 5.645 (scales with DC, but game floors this to 5 when calculating requirement)
-     */
-    function parseActionLevelBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
-        // Action Level DOES scale with DC (like all other buffs)
-        // However, the game floors the result when calculating effective requirement
-        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
-            buffTypeHrids: ['/buff_types/action_level'],
-        });
-    }
-
-    /**
-     * Parse Action Level bonus with breakdown by individual tea
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
-     * @returns {Array<{name: string, actionLevel: number, baseActionLevel: number, dcContribution: number}>} Array of tea contributions
-     *
-     * @example
-     * // With Artisan Tea (+5 Action Level base) and 12.9% Drink Concentration:
-     * parseActionLevelBonusBreakdown(activeDrinks, items, 0.129)
-     * // Returns: [{ name: "Artisan Tea", actionLevel: 5.645, baseActionLevel: 5.0, dcContribution: 0.645 }]
-     * // Note: Game floors actionLevel to 5 when calculating requirement, but we show full precision
-     */
-    function parseActionLevelBonusBreakdown(activeDrinks, itemDetailMap, drinkConcentration = 0) {
-        if (!activeDrinks || activeDrinks.length === 0) {
-            return []; // No active teas
-        }
-
-        if (!itemDetailMap) {
-            return []; // Missing required data
-        }
-
-        const teaBreakdown = [];
-
-        // Process each active tea/drink
-        for (const drink of activeDrinks) {
-            if (!drink || !drink.itemHrid) {
-                continue; // Empty slot
-            }
-
-            const itemDetails = itemDetailMap[drink.itemHrid];
-            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
-                continue; // Not a consumable or has no buffs
-            }
-
-            let baseActionLevel = 0;
-            let totalActionLevel = 0;
-
-            // Check each buff on this tea
-            for (const buff of itemDetails.consumableDetail.buffs) {
-                // Action Level buff (e.g., Artisan Tea: +5 Action Level)
-                if (buff.typeHrid === '/buff_types/action_level') {
-                    const baseValue = buff.flatBoost;
-                    // Action Level DOES scale with DC (like all other buffs)
-                    const scaledValue = baseValue * (1 + drinkConcentration);
-                    baseActionLevel += baseValue;
-                    totalActionLevel += scaledValue;
-                }
-            }
-
-            // Only add to breakdown if this tea contributes action level
-            if (totalActionLevel > 0) {
-                teaBreakdown.push({
-                    name: itemDetails.name,
-                    actionLevel: totalActionLevel,
-                    baseActionLevel: baseActionLevel,
-                    dcContribution: totalActionLevel - baseActionLevel,
-                });
-            }
-        }
-
-        return teaBreakdown;
-    }
-
-    /**
-     * Parse Gathering bonus from active tea buffs
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.12 for 12%)
-     * @returns {number} Gathering quantity bonus as decimal (e.g., 0.168 for 16.8% more items)
-     *
-     * @example
-     * // With Gathering Tea (+15% base) and 12% Drink Concentration:
-     * parseGatheringBonus(activeDrinks, items, 0.12)
-     * // Returns: 0.168 (15% × 1.12 = 16.8% gathering quantity)
-     */
-    function parseGatheringBonus(activeDrinks, itemDetailMap, drinkConcentration = 0) {
-        return parseTeaBuff(activeDrinks, itemDetailMap, drinkConcentration, {
-            buffTypeHrids: ['/buff_types/gathering'],
-        });
-    }
-
-    /**
-     * Parse skill level bonus from active tea buffs for a specific action type
-     * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/cheesesmithing")
-     * @param {Array} activeDrinks - Array of active drink items from actionTypeDrinkSlotsMap
-     * @param {Object} itemDetailMap - Item details from init_client_data
-     * @param {number} drinkConcentration - Drink Concentration stat (as decimal, e.g., 0.129 for 12.9%)
-     * @returns {number} Total skill level bonus (e.g., 9.032 for +8 base × 1.129 DC)
-     *
-     * @example
-     * // With Ultra Cheesesmithing Tea (+8 Cheesesmithing base) and 12.9% DC:
-     * parseTeaSkillLevelBonus("/action_types/cheesesmithing", activeDrinks, items, 0.129)
-     * // Returns: 9.032 (8 × 1.129 = 9.032 levels)
-     */
-    function parseTeaSkillLevelBonus(actionTypeHrid, activeDrinks, itemDetailMap, drinkConcentration = 0) {
-        if (!activeDrinks || activeDrinks.length === 0) {
-            return 0; // No active teas
-        }
-
-        if (!actionTypeHrid || !itemDetailMap) {
-            return 0; // Missing required data
-        }
-
-        // Extract skill name from action type HRID
-        // "/action_types/cheesesmithing" -> "cheesesmithing"
-        const skillName = actionTypeHrid.split('/').pop();
-        const skillLevelBuffType = `/buff_types/${skillName}_level`;
-
-        let totalLevelBonus = 0;
-
-        // Process each active tea/drink
-        for (const drink of activeDrinks) {
-            if (!drink || !drink.itemHrid) {
-                continue; // Empty slot
-            }
-
-            const itemDetails = itemDetailMap[drink.itemHrid];
-            if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
-                continue; // Not a consumable or has no buffs
-            }
-
-            // Check each buff on this tea
-            for (const buff of itemDetails.consumableDetail.buffs) {
-                // Skill-specific level buff (e.g., "/buff_types/cheesesmithing_level")
-                if (buff.typeHrid === skillLevelBuffType) {
-                    const baseValue = buff.flatBoost;
-                    const scaledValue = baseValue * (1 + drinkConcentration);
-                    totalLevelBonus += scaledValue;
-                }
-            }
-        }
-
-        return totalLevelBonus;
-    }
-
-    var teaParser = {
-        parseTeaEfficiency,
-        getDrinkConcentration,
-        parseArtisanBonus,
-        parseGourmetBonus,
-        parseProcessingBonus,
-        parseActionLevelBonus,
-        parseGatheringBonus,
-        parseTeaSkillLevelBonus,
-    };
-
-    var teaParser$1 = /*#__PURE__*/Object.freeze({
-        __proto__: null,
-        default: teaParser,
-        getDrinkConcentration: getDrinkConcentration,
-        parseActionLevelBonus: parseActionLevelBonus,
-        parseActionLevelBonusBreakdown: parseActionLevelBonusBreakdown,
-        parseArtisanBonus: parseArtisanBonus,
-        parseGatheringBonus: parseGatheringBonus,
-        parseGourmetBonus: parseGourmetBonus,
-        parseProcessingBonus: parseProcessingBonus,
-        parseTeaEfficiency: parseTeaEfficiency,
-        parseTeaEfficiencyBreakdown: parseTeaEfficiencyBreakdown,
-        parseTeaSkillLevelBonus: parseTeaSkillLevelBonus
     });
 
     /**
@@ -7134,4 +7559,4 @@ self.onmessage = function (e) {
 
     console.log('[Toolasha] Utils library loaded');
 
-})(Toolasha.Core.config, Toolasha.Core.domObserver, Toolasha.Core.marketAPI, Toolasha.Core.dataManager);
+})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.webSocketHook, Toolasha.Core.storage, Toolasha.Core.domObserver, Toolasha.Core.marketAPI);

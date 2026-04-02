@@ -1,11 +1,11 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.63.1
+ * Version: 1.64.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (config, dataManager, domObserver, marketAPI, webSocketHook, storage, equipmentParser_js, houseEfficiency_js, efficiency_js, teaParser_js, bonusRevenueCalculator_js, marketData_js, profitConstants_js, profitHelpers_js, buffParser_js, actionCalculator_js, tokenValuation_js, enhancementCalculator_js, formatters_js, enhancementConfig_js, dom, timerRegistry_js, cleanupRegistry_js, domObserverHelpers_js, enhancementMultipliers_js, reactInput_js, abilityCostCalculator_js, houseCostCalculator_js) {
+(function (config, dataManager, domObserver, marketAPI, houseEfficiency_js, efficiency_js, bonusRevenueCalculator_js, marketData_js, profitConstants_js, profitHelpers_js, teaParser_js, buffParser_js, equipmentParser_js, actionCalculator_js, tokenValuation_js, enhancementCalculator_js, formatters_js, enhancementConfig_js, dom, timerRegistry_js, storage, cleanupRegistry_js, domObserverHelpers_js, enhancementMultipliers_js, reactInput_js, webSocketHook, abilityCostCalculator_js, houseCostCalculator_js) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -28,231 +28,6 @@
     }
 
     var dom__namespace = /*#__PURE__*/_interopNamespaceDefault(dom);
-
-    /**
-     * Loadout Snapshot
-     *
-     * Listens for `loadouts_updated` WebSocket messages to capture all loadout configurations
-     * (equipment, abilities, consumables, enhancement levels) in real time.
-     *
-     * Stored snapshots are used by profit calculators to apply the correct tool/equipment
-     * bonuses for a skill even when that loadout is not currently equipped.
-     *
-     * Skill matching: the loadout's actionTypeHrid (e.g. "/action_types/brewing") is compared
-     * to the action type of the profit calculation. An "All Skills" loadout (empty actionTypeHrid)
-     * is used as a fallback when no skill-specific snapshot is found.
-     *
-     * Priority: skill default > all skills default > skill non-default > all skills non-default
-     */
-
-
-    const STORAGE_KEY_PREFIX = 'loadout_snapshots';
-
-    /**
-     * Get character-scoped storage key.
-     * @returns {string}
-     */
-    function getStorageKey() {
-        const charId = dataManager.getCurrentCharacterId() || 'default';
-        return `${STORAGE_KEY_PREFIX}_${charId}`;
-    }
-
-    /**
-     * Parse a wearable hash string into itemLocationHrid, itemHrid, and enhancementLevel.
-     * Format: "characterId::/item_locations/location::/items/item_hrid::enhancementLevel"
-     * Empty string means no item in that slot.
-     * @param {string} itemLocationHrid - The equipment slot key (e.g. "/item_locations/body")
-     * @param {string} wearableHash - The wearable hash value
-     * @returns {{ itemLocationHrid: string, itemHrid: string, enhancementLevel: number }|null}
-     */
-    function parseWearable(itemLocationHrid, wearableHash) {
-        if (!wearableHash) return null;
-
-        const parts = wearableHash.split('::');
-        const itemHrid = parts.find((p) => p.startsWith('/items/'));
-        if (!itemHrid) return null;
-
-        const lastPart = parts[parts.length - 1];
-        const enhancementLevel = !lastPart.startsWith('/') ? parseInt(lastPart, 10) || 0 : 0;
-
-        return { itemLocationHrid, itemHrid, enhancementLevel };
-    }
-
-    /**
-     * Convert a server loadout object into our snapshot format.
-     * @param {Object} loadout - A loadout entry from characterLoadoutMap
-     * @returns {Object} snapshot
-     */
-    function buildSnapshot(loadout) {
-        // Parse equipment from wearableMap
-        const equipment = [];
-        for (const [locationHrid, hash] of Object.entries(loadout.wearableMap || {})) {
-            const parsed = parseWearable(locationHrid, hash);
-            if (parsed) equipment.push(parsed);
-        }
-
-        // Parse drinks
-        const drinks = (loadout.drinkItemHrids || []).map((hrid) => ({
-            itemHrid: hrid || '',
-        }));
-
-        // Parse food
-        const food = (loadout.foodItemHrids || []).map((hrid) => ({
-            itemHrid: hrid || '',
-        }));
-
-        // Parse abilities
-        const abilities = [];
-        for (const [slot, hrid] of Object.entries(loadout.abilityMap || {})) {
-            if (hrid) abilities.push({ abilityHrid: hrid, slot: parseInt(slot, 10) });
-        }
-
-        return {
-            name: loadout.name,
-            actionTypeHrid: loadout.actionTypeHrid || '',
-            isDefault: !!loadout.isDefault,
-            equipment,
-            abilities,
-            food,
-            drinks,
-            savedAt: Date.now(),
-        };
-    }
-
-    class LoadoutSnapshot {
-        constructor() {
-            this.snapshots = {}; // In-memory cache: { [loadoutName]: snapshot }
-            this.loadoutsUpdatedHandler = null;
-            this.isInitialized = false;
-        }
-
-        async initialize() {
-            if (this.isInitialized) return;
-            this.isInitialized = true;
-
-            // Load existing snapshots into memory
-            this.snapshots = (await storage.getJSON(getStorageKey(), 'settings', null)) || {};
-            console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
-
-            // Listen for loadouts_updated WebSocket messages
-            this.loadoutsUpdatedHandler = (data) => this._onLoadoutsUpdated(data);
-            webSocketHook.on('loadouts_updated', this.loadoutsUpdatedHandler);
-        }
-
-        /**
-         * Handle a loadouts_updated WebSocket message.
-         * Replaces all snapshots with the server's current state.
-         * @param {Object} data - The WebSocket message payload
-         */
-        _onLoadoutsUpdated(data) {
-            console.log('[LoadoutSnapshot] loadouts_updated WebSocket message received');
-            const loadoutMap = data.characterLoadoutMap;
-            if (!loadoutMap) {
-                console.log('[LoadoutSnapshot] no characterLoadoutMap in message');
-                return;
-            }
-
-            const newSnapshots = {};
-            for (const [id, loadout] of Object.entries(loadoutMap)) {
-                if (!loadout.name) continue;
-                newSnapshots[id] = buildSnapshot(loadout);
-                console.log(
-                    `[LoadoutSnapshot]   → ${loadout.name} (id=${id}): type=${loadout.actionTypeHrid || 'All Skills'}, default=${loadout.isDefault}`
-                );
-            }
-
-            this.snapshots = newSnapshots;
-            storage.setJSON(getStorageKey(), this.snapshots, 'settings');
-            console.log(
-                `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
-                Object.values(newSnapshots).map((s) => s.name)
-            );
-        }
-
-        /**
-         * Find the best snapshot for a given action type.
-         * Priority: skill default > all skills default > skill non-default > all skills non-default
-         * @param {string} actionTypeHrid - e.g. "/action_types/brewing"
-         * @returns {Object|null} snapshot entry or null
-         */
-        _findSnapshot(actionTypeHrid) {
-            if (!config.getSetting('loadoutSnapshot')) return null;
-
-            let skillDefault = null;
-            let allSkillsDefault = null;
-            let skillNonDefault = null;
-            let allSkillsNonDefault = null;
-
-            for (const snapshot of Object.values(this.snapshots)) {
-                if (snapshot.actionTypeHrid === actionTypeHrid) {
-                    if (snapshot.isDefault) {
-                        skillDefault = snapshot;
-                    } else {
-                        skillNonDefault = snapshot;
-                    }
-                } else if (snapshot.actionTypeHrid === '') {
-                    if (snapshot.isDefault) {
-                        allSkillsDefault = snapshot;
-                    } else {
-                        allSkillsNonDefault = snapshot;
-                    }
-                }
-            }
-
-            return skillDefault || allSkillsDefault || skillNonDefault || allSkillsNonDefault || null;
-        }
-
-        /**
-         * Get a Map<itemLocationHrid, item> for the best loadout snapshot matching the given
-         * action type. Returns null if no snapshot exists or the feature is disabled.
-         * The returned Map has the same format as dataManager.getEquipment().
-         * @param {string} actionTypeHrid
-         * @returns {Map<string, Object>|null}
-         */
-        getSnapshotForSkill(actionTypeHrid) {
-            const snapshot = this._findSnapshot(actionTypeHrid);
-            if (!snapshot || !snapshot.equipment?.length) return null;
-            return new Map(snapshot.equipment.map((e) => [e.itemLocationHrid, e]));
-        }
-
-        /**
-         * Get the drink slots array for the best loadout snapshot matching the given
-         * action type. Returns null if no snapshot exists or the feature is disabled.
-         * The returned array has the same format as dataManager.getActionDrinkSlots().
-         * @param {string} actionTypeHrid
-         * @returns {Array<{itemHrid: string}>|null}
-         */
-        getSnapshotDrinksForSkill(actionTypeHrid) {
-            const snapshot = this._findSnapshot(actionTypeHrid);
-            if (!snapshot) return null;
-            // Filter out empty slots so callers get only actual items
-            const filled = (snapshot.drinks || []).filter((d) => d.itemHrid);
-            return filled.length > 0 ? filled : null;
-        }
-
-        /**
-         * Get the name and default status of the saved loadout being used for a given action type.
-         * Returns an object with name and isDefault, or null if no snapshot exists or feature is disabled.
-         * @param {string} actionTypeHrid
-         * @returns {{ name: string, isDefault: boolean }|null}
-         */
-        getSnapshotInfoForSkill(actionTypeHrid) {
-            const snapshot = this._findSnapshot(actionTypeHrid);
-            if (!snapshot) return null;
-            return { name: snapshot.name, isDefault: !!snapshot.isDefault };
-        }
-
-        disable() {
-            if (this.loadoutsUpdatedHandler) {
-                webSocketHook.off('loadouts_updated', this.loadoutsUpdatedHandler);
-                this.loadoutsUpdatedHandler = null;
-            }
-
-            this.isInitialized = false;
-        }
-    }
-
-    const loadoutSnapshot = new LoadoutSnapshot();
 
     /**
      * Profit Calculator Module
@@ -337,20 +112,7 @@
             }
 
             // Initialize price cache for this calculation
-            const priceCache = new Map();
-            const getCachedPrice = (itemHridParam, options) => {
-                const side = options?.side || '';
-                const enhancementLevelParam = options?.enhancementLevel ?? '';
-                const cacheKey = `${itemHridParam}|${side}|${enhancementLevelParam}`;
-
-                if (priceCache.has(cacheKey)) {
-                    return priceCache.get(cacheKey);
-                }
-
-                const price = marketData_js.getItemPrice(itemHridParam, options);
-                priceCache.set(cacheKey, price);
-                return price;
-            };
+            const getCachedPrice = profitHelpers_js.createPriceCache(marketData_js.getItemPrice);
 
             // Calculate base action time
             // Game uses NANOSECONDS (1e9 = 1 second)
@@ -359,104 +121,40 @@
             // Get character level for the action's skill
             const skillLevel = this.getSkillLevel(skills, actionDetails.type);
 
-            // Get equipped items for efficiency bonus calculation
-            const characterEquipment =
-                loadoutSnapshot.getSnapshotForSkill(actionDetails.type) ?? dataManager.getEquipment();
-            const itemDetailMap = this.getItemDetailMap();
-
-            // Get Drink Concentration from equipment
-            const drinkConcentration = teaParser_js.getDrinkConcentration(characterEquipment, itemDetailMap);
-
-            // Get active drinks for this action type
-            const activeDrinks =
-                loadoutSnapshot.getSnapshotDrinksForSkill(actionDetails.type) ??
-                dataManager.getActionDrinkSlots(actionDetails.type);
-
-            // Calculate Action Level bonus from teas (e.g., Artisan Tea: +5 Action Level)
-            // This lowers the effective requirement, not increases skill level
-            const actionLevelBonus = teaParser_js.parseActionLevelBonus(activeDrinks, itemDetailMap, drinkConcentration);
-
-            // Calculate efficiency components
-            // Action Level bonus increases the effective requirement
-            if (!actionDetails.levelRequirement) {
-                console.error(`[ProfitCalculator] Action has no levelRequirement: ${actionDetails.hrid}`);
-            }
-            const baseRequirement = actionDetails.levelRequirement?.level || 1;
-            // Calculate tea skill level bonus (e.g., +8 Cheesesmithing from Ultra Cheesesmithing Tea)
-            const teaSkillLevelBonus = teaParser_js.parseTeaSkillLevelBonus(
-                actionDetails.type,
-                activeDrinks,
-                itemDetailMap,
-                drinkConcentration
-            );
-
-            // Calculate artisan material cost reduction
-            const artisanBonus = teaParser_js.parseArtisanBonus(activeDrinks, itemDetailMap, drinkConcentration);
-
-            // Calculate gourmet bonus (Brewing/Cooking extra items)
-            const gourmetBonus =
-                teaParser_js.parseGourmetBonus(activeDrinks, itemDetailMap, drinkConcentration) +
-                dataManager.getPersonalBuffFlatBoost(actionDetails.type, '/buff_types/gourmet');
-
-            // Calculate processing bonus (Milking/Foraging/Woodcutting conversions)
-            const processingBonus =
-                teaParser_js.parseProcessingBonus(activeDrinks, itemDetailMap, drinkConcentration) +
-                dataManager.getPersonalBuffFlatBoost(actionDetails.type, '/buff_types/processing');
-
-            // Get community buff bonus (Production Efficiency)
+            // Community efficiency must be computed here (uses class-internal cache)
             const communityBuffLevel = dataManager.getCommunityBuffLevel('/community_buff_types/production_efficiency');
             const communityEfficiency = this.calculateCommunityBuffBonus(communityBuffLevel, actionDetails.type);
 
-            // Total efficiency bonus (all sources additive)
-            const houseEfficiency = houseEfficiency_js.calculateHouseEfficiency(actionDetails.type);
-
-            // Calculate equipment efficiency bonus
-            const equipmentEfficiency = equipmentParser_js.parseEquipmentEfficiencyBonuses(
-                characterEquipment,
-                actionDetails.type,
-                itemDetailMap
-            );
-            const equipmentEfficiencyItems = equipmentParser_js.parseEquipmentEfficiencyBreakdown(
-                characterEquipment,
-                actionDetails.type,
-                itemDetailMap
-            );
-
-            // Calculate tea efficiency bonus
-            const teaEfficiency = teaParser_js.parseTeaEfficiency(actionDetails.type, activeDrinks, itemDetailMap, drinkConcentration);
-
-            const achievementEfficiency =
-                dataManager.getAchievementBuffFlatBoost(actionDetails.type, '/buff_types/efficiency') * 100;
-
-            const personalEfficiency =
-                dataManager.getPersonalBuffFlatBoost(actionDetails.type, '/buff_types/efficiency') * 100;
-
-            const efficiencyBreakdown = efficiency_js.calculateEfficiencyBreakdown({
-                requiredLevel: baseRequirement,
-                skillLevel,
-                teaSkillLevelBonus,
-                actionLevelBonus,
-                houseEfficiency,
-                equipmentEfficiency,
-                teaEfficiency,
+            const effCtx = efficiency_js.getActionEfficiencyContext(actionDetails, {
+                isProduction: true,
                 communityEfficiency,
-                achievementEfficiency,
-                personalEfficiency,
             });
 
-            const totalEfficiency = efficiencyBreakdown.totalEfficiency;
-            const levelEfficiency = efficiencyBreakdown.levelEfficiency;
-            const effectiveRequirement = efficiencyBreakdown.effectiveRequirement;
+            const {
+                equipment: characterEquipment,
+                drinkSlots: activeDrinks,
+                drinkConcentration,
+                itemDetailMap,
+                actionTime,
+                artisanBonus,
+                gourmetBonus,
+                processingBonus,
+                equipmentEfficiency,
+                equipmentEfficiencyItems,
+                houseEfficiency,
+                teaEfficiency,
+                achievementEfficiency,
+                personalEfficiency,
+                actionLevelBonus,
+                teaSkillLevelBonus,
+                baseRequirement,
+                speedBonus: equipmentSpeedBonus,
+                personalSpeedBonus,
+                efficiencyBreakdown,
+                efficiencyMultiplier,
+            } = effCtx;
 
-            // Calculate equipment speed bonus
-            const equipmentSpeedBonus = equipmentParser_js.parseEquipmentSpeedBonuses(characterEquipment, actionDetails.type, itemDetailMap);
-            const personalSpeedBonus = dataManager.getPersonalBuffFlatBoost(actionDetails.type, '/buff_types/action_speed');
-
-            // Calculate action time with ONLY speed bonuses
-            // Efficiency does NOT reduce time - it gives bonus actions
-            // Formula: baseTime / (1 + speedBonus)
-            // Example: 60s / (1 + 0.15) = 52.17s
-            const actionTime = baseTime / (1 + equipmentSpeedBonus + personalSpeedBonus);
+            const { totalEfficiency, levelEfficiency, effectiveRequirement } = efficiencyBreakdown;
 
             // Build time breakdown for display
             const timeBreakdown = this.calculateTimeBreakdown(baseTime, equipmentSpeedBonus + personalSpeedBonus);
@@ -468,10 +166,7 @@
             // Use 'count' field from action output
             const outputAmount = action.count || action.baseAmount || 1;
 
-            // Calculate efficiency multiplier
-            // Formula matches original MWI Tools: 1 + efficiency%
-            // Example: 150% efficiency → 1 + 1.5 = 2.5x multiplier
-            const efficiencyMultiplier = efficiency_js.calculateEfficiencyMultiplier(totalEfficiency);
+            // efficiencyMultiplier comes from effCtx destructuring above
 
             // Items produced per hour (with efficiency multiplier)
             const itemsPerHour = actionsPerHour * outputAmount * efficiencyMultiplier;
@@ -3966,89 +3661,40 @@ self.onmessage = function (e) {
             processingConversionCache = buildProcessingConversionCache(gameData);
         }
 
-        const priceCache = new Map();
-        const getCachedPrice = (itemHrid, options) => {
-            const side = options?.side || '';
-            const enhancementLevel = options?.enhancementLevel ?? '';
-            const cacheKey = `${itemHrid}|${side}|${enhancementLevel}`;
-
-            if (priceCache.has(cacheKey)) {
-                return priceCache.get(cacheKey);
-            }
-
-            const price = marketData_js.getItemPrice(itemHrid, options);
-            priceCache.set(cacheKey, price);
-            return price;
-        };
+        const getCachedPrice = profitHelpers_js.createPriceCache(marketData_js.getItemPrice);
 
         // Note: Market API is pre-loaded by caller (max-produceable.js)
         // No need to check or fetch here
 
-        // Get character data
-        const equipment = loadoutSnapshot.getSnapshotForSkill(actionDetail.type) ?? dataManager.getEquipment();
-        const skills = dataManager.getSkills();
-        const houseRooms = Array.from(dataManager.getHouseRooms().values());
+        const effCtx = efficiency_js.getActionEfficiencyContext(actionDetail, { isProduction: false, gameData });
 
-        // Calculate action time per action (with speed bonuses)
-        const baseTimePerActionSec = actionDetail.baseTimeCost / 1000000000;
-        const speedBonus = equipmentParser_js.parseEquipmentSpeedBonuses(equipment, actionDetail.type, gameData.itemDetailMap);
-        const personalSpeedBonus = dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/action_speed');
-        // speedBonus is already a decimal (e.g., 0.15 for 15%), don't divide by 100
-        const actualTimePerActionSec = baseTimePerActionSec / (1 + speedBonus + personalSpeedBonus);
+        const {
+            equipment,
+            drinkSlots,
+            drinkConcentration,
+            actionTime: actualTimePerActionSec,
+            speedBonus,
+            gourmetBonus,
+            processingBonus,
+            equipmentEfficiency,
+            equipmentEfficiencyItems,
+            houseEfficiency,
+            teaEfficiency,
+            achievementEfficiency,
+            personalEfficiency,
+            totalGathering,
+            gatheringDetails,
+            efficiencyBreakdown,
+            efficiencyMultiplier,
+        } = effCtx;
 
-        // Calculate actions per hour
-        const actionsPerHour = profitHelpers_js.calculateActionsPerHour(actualTimePerActionSec);
-
-        // Get character's actual equipped drink slots for this action type (from WebSocket data)
-        const drinkSlots =
-            loadoutSnapshot.getSnapshotDrinksForSkill(actionDetail.type) ??
-            dataManager.getActionDrinkSlots(actionDetail.type);
-
-        // Get drink concentration from equipment
-        const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
-
-        // Parse tea buffs
-        const teaEfficiency = teaParser_js.parseTeaEfficiency(actionDetail.type, drinkSlots, gameData.itemDetailMap, drinkConcentration);
-
-        // Gourmet Tea only applies to production skills (Brewing, Cooking, Cheesesmithing, Crafting, Tailoring)
-        // NOT gathering skills (Foraging, Woodcutting, Milking)
-        const gourmetBonus = profitConstants_js.PRODUCTION_TYPES.includes(actionDetail.type)
-            ? teaParser_js.parseGourmetBonus(drinkSlots, gameData.itemDetailMap, drinkConcentration) +
-              dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/gourmet')
-            : 0;
-
-        // Processing Tea: 15% base chance to convert raw → processed (Cotton → Cotton Fabric, etc.)
-        // Only applies to gathering skills (Foraging, Woodcutting, Milking)
-        const processingBonus = profitConstants_js.GATHERING_TYPES.includes(actionDetail.type)
-            ? teaParser_js.parseProcessingBonus(drinkSlots, gameData.itemDetailMap, drinkConcentration) +
-              dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/processing')
-            : 0;
-
-        // Gathering Quantity: Increases item drop amounts (min/max)
-        // Sources: Gathering Tea (15% base), Community Buff (20% base + 0.5%/level), Achievement Tiers
-        // Only applies to gathering skills (Foraging, Woodcutting, Milking)
-        let totalGathering = 0;
-        let gatheringTea = 0;
-        let communityGathering = 0;
-        let achievementGathering = 0;
-        let personalGathering = 0;
-        if (profitConstants_js.GATHERING_TYPES.includes(actionDetail.type)) {
-            // Parse Gathering Tea bonus
-            gatheringTea = teaParser_js.parseGatheringBonus(drinkSlots, gameData.itemDetailMap, drinkConcentration);
-
-            // Get Community Buff level for gathering quantity
-            const communityBuffLevel = dataManager.getCommunityBuffLevel('/community_buff_types/gathering_quantity');
-            communityGathering = communityBuffLevel ? 0.2 + (communityBuffLevel - 1) * 0.005 : 0;
-
-            // Get Achievement buffs for this action type (Beginner tier: +2% Gathering Quantity)
-            achievementGathering = dataManager.getAchievementBuffFlatBoost(actionDetail.type, '/buff_types/gathering');
-
-            // Get personal buff (Seal of Gathering)
-            personalGathering = dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/gathering');
-
-            // Stack all bonuses additively
-            totalGathering = gatheringTea + communityGathering + achievementGathering + personalGathering;
-        }
+        const { totalEfficiency, levelEfficiency } = efficiencyBreakdown;
+        const {
+            gatheringTea = 0,
+            communityGathering = 0,
+            achievementGathering = 0,
+            personalGathering = 0,
+        } = gatheringDetails ?? {};
 
         const teaCostData = profitHelpers_js.calculateTeaCostsPerHour({
             drinkSlots,
@@ -4065,64 +3711,7 @@ self.onmessage = function (e) {
             missingPrice: tea.missingPrice,
         }));
 
-        // Calculate level efficiency bonus
-        if (!actionDetail.levelRequirement) {
-            console.error(`[GatheringProfit] Action has no levelRequirement: ${actionDetail.hrid}`);
-        }
-        const requiredLevel = actionDetail.levelRequirement?.level || 1;
-        const skillHrid = actionDetail.levelRequirement?.skillHrid;
-        let currentLevel = requiredLevel;
-        for (const skill of skills) {
-            if (skill.skillHrid === skillHrid) {
-                currentLevel = skill.level;
-                break;
-            }
-        }
-
-        // Calculate tea skill level bonus (e.g., +5 Foraging from Ultra Foraging Tea)
-        const teaSkillLevelBonus = teaParser_js.parseTeaSkillLevelBonus(
-            actionDetail.type,
-            drinkSlots,
-            gameData.itemDetailMap,
-            drinkConcentration
-        );
-
-        // Calculate house efficiency bonus
-        let houseEfficiency = 0;
-        for (const room of houseRooms) {
-            const roomDetail = gameData.houseRoomDetailMap?.[room.houseRoomHrid];
-            if (roomDetail?.usableInActionTypeMap?.[actionDetail.type]) {
-                houseEfficiency += (room.level || 0) * 1.5;
-            }
-        }
-
-        // Calculate equipment efficiency bonus (uses equipment-parser utility)
-        const equipmentEfficiency = equipmentParser_js.parseEquipmentEfficiencyBonuses(equipment, actionDetail.type, gameData.itemDetailMap);
-        const equipmentEfficiencyItems = equipmentParser_js.parseEquipmentEfficiencyBreakdown(
-            equipment,
-            actionDetail.type,
-            gameData.itemDetailMap
-        );
-        const achievementEfficiency =
-            dataManager.getAchievementBuffFlatBoost(actionDetail.type, '/buff_types/efficiency') * 100;
-        const personalEfficiency = dataManager.getPersonalBuffFlatBoost(actionDetail.type, '/buff_types/efficiency') * 100;
-
-        const efficiencyBreakdown = efficiency_js.calculateEfficiencyBreakdown({
-            requiredLevel,
-            skillLevel: currentLevel,
-            teaSkillLevelBonus,
-            houseEfficiency,
-            teaEfficiency,
-            equipmentEfficiency,
-            achievementEfficiency,
-            personalEfficiency,
-        });
-        const totalEfficiency = efficiencyBreakdown.totalEfficiency;
-        const levelEfficiency = efficiencyBreakdown.levelEfficiency;
-
-        // Calculate efficiency multiplier (matches production profit calculator pattern)
-        // Efficiency "repeats the action" - we apply it to item outputs, not action rate
-        const efficiencyMultiplier = efficiency_js.calculateEfficiencyMultiplier(totalEfficiency);
+        const actionsPerHour = profitHelpers_js.calculateActionsPerHour(actualTimePerActionSec);
 
         // Calculate revenue from drop table
         // Processing happens PER ACTION (before efficiency multiplies the count)
@@ -4435,6 +4024,24 @@ self.onmessage = function (e) {
     }
 
     /**
+     * Combat Statistics Calculator
+     * Calculates income, profit, consumable costs, and other statistics
+     */
+
+
+    // Maps dungeon chest HRIDs (regular and refinement) to their required chest key HRIDs (1:1 relationship)
+    const DUNGEON_CHEST_CHEST_KEYS = {
+        '/items/chimerical_chest': '/items/chimerical_chest_key',
+        '/items/sinister_chest': '/items/sinister_chest_key',
+        '/items/enchanted_chest': '/items/enchanted_chest_key',
+        '/items/pirate_chest': '/items/pirate_chest_key',
+        '/items/chimerical_refinement_chest': '/items/chimerical_chest_key',
+        '/items/sinister_refinement_chest': '/items/sinister_chest_key',
+        '/items/enchanted_refinement_chest': '/items/enchanted_chest_key',
+        '/items/pirate_refinement_chest': '/items/pirate_chest_key',
+    };
+
+    /**
      * Market Tooltip Prices Feature
      * Adds market prices to item tooltips
      */
@@ -4639,7 +4246,24 @@ self.onmessage = function (e) {
             if (itemDetails.isOpenable && config.getSetting('itemTooltip_expectedValue')) {
                 const evData = expectedValueCalculator.calculateExpectedValue(itemHrid);
                 if (evData) {
-                    this.injectExpectedValueDisplay(tooltipElement, evData, isCollectionTooltip);
+                    // Compute chest key deduction for dungeon chests
+                    let keyPrice = 0;
+                    const chestKeyHrid = DUNGEON_CHEST_CHEST_KEYS[itemHrid];
+                    if (chestKeyHrid) {
+                        const keyPricingSetting = config.getSettingValue('combatStats_keyPricing') || 'ask';
+                        const keyPrices = marketAPI.getPrice(chestKeyHrid);
+                        const keyDetails = dataManager.getItemDetails(chestKeyHrid);
+                        keyPrice = keyPrices?.[keyPricingSetting] ?? keyPrices?.ask ?? 0;
+                        this.injectExpectedValueDisplay(
+                            tooltipElement,
+                            evData,
+                            isCollectionTooltip,
+                            keyPrice,
+                            keyDetails?.name
+                        );
+                    } else {
+                        this.injectExpectedValueDisplay(tooltipElement, evData, isCollectionTooltip);
+                    }
                 }
                 // Fix tooltip overflow before returning
                 dom.fixTooltipOverflow(tooltipElement);
@@ -5068,7 +4692,7 @@ self.onmessage = function (e) {
          * @param {Object} evData - Expected value calculation data
          * @param {boolean} isCollectionTooltip - True if this is a collection tooltip
          */
-        injectExpectedValueDisplay(tooltipElement, evData, isCollectionTooltip = false) {
+        injectExpectedValueDisplay(tooltipElement, evData, isCollectionTooltip = false, keyPrice = 0, keyName = null) {
             const tooltipText = isCollectionTooltip
                 ? tooltipElement.querySelector('.Collection_tooltipContent__2IcSJ')
                 : tooltipElement.querySelector('.ItemTooltipText_itemTooltipText__zFq3A');
@@ -5097,6 +4721,11 @@ self.onmessage = function (e) {
 
             // Expected value (simple display)
             html += `<div style="color: ${config.COLOR_TOOLTIP_PROFIT}; font-weight: bold;">Expected Return: ${formatTooltipPrice(evData.expectedValue)}</div>`;
+            if (keyPrice > 0) {
+                const keyLabel = keyName ? `Key Cost (${keyName})` : 'Key Cost';
+                html += `<div style="color: ${config.COLOR_TOOLTIP_LOSS};">- ${keyLabel}: ${formatTooltipPrice(keyPrice)}</div>`;
+                html += `<div style="color: ${config.COLOR_TOOLTIP_PROFIT}; font-weight: bold;">Net Value: ${formatTooltipPrice(evData.expectedValue - keyPrice)}</div>`;
+            }
 
             html += '</div>'; // Close summary section
 
@@ -5140,6 +4769,9 @@ self.onmessage = function (e) {
                 // Show total
                 html += '<div style="border-top: 1px solid rgba(255,255,255,0.2); margin: 4px 0;"></div>';
                 html += `<div style="font-size: 0.9em; margin-left: 8px; font-weight: bold;">Total from ${evData.drops.length} drops: ${formatTooltipPrice(evData.expectedValue)}</div>`;
+                if (keyPrice > 0) {
+                    html += `<div style="font-size: 0.9em; margin-left: 8px; font-weight: bold;">Net after key: ${formatTooltipPrice(evData.expectedValue - keyPrice)}</div>`;
+                }
             }
 
             html += '</div>'; // Close main container
@@ -8263,6 +7895,40 @@ self.onmessage = function (e) {
      */
 
 
+    /**
+     * Create a styled table cell for the listings table.
+     * @param {string|null} content - Text content for the span
+     * @param {string} color - CSS color string for the span
+     * @param {Object} [options={}] - Optional overrides
+     * @param {string} [options.fontSize] - e.g. '0.9em'
+     * @param {string} [options.title] - Tooltip title attribute
+     * @returns {HTMLElement} <td> element with a styled <span> inside
+     */
+    function createStyledCell(content, color, options = {}) {
+        const cell = document.createElement('td');
+        cell.classList.add('mwi-listing-price-cell');
+
+        const span = document.createElement('span');
+        span.classList.add('mwi-listing-price-value');
+
+        if (content !== null && content !== undefined) {
+            span.textContent = content;
+        }
+
+        span.style.color = color;
+
+        if (options.fontSize) {
+            span.style.fontSize = options.fontSize;
+        }
+
+        if (options.title) {
+            span.title = options.title;
+        }
+
+        cell.appendChild(span);
+        return cell;
+    }
+
     class ListingPriceDisplay {
         constructor() {
             this.allListings = {}; // Maintained listing state
@@ -8883,12 +8549,6 @@ self.onmessage = function (e) {
          * @returns {HTMLElement} Table cell element
          */
         createTopOrderPriceCell(itemHrid, enhancementLevel, isSell, price, priceCache) {
-            const cell = document.createElement('td');
-            cell.classList.add('mwi-listing-price-cell');
-
-            const span = document.createElement('span');
-            span.classList.add('mwi-listing-price-value');
-
             // PRIMARY: Get price from order book cache (same source as Top Order Age)
             let topOrderPrice = null;
             let lastUpdated = null;
@@ -8923,29 +8583,32 @@ self.onmessage = function (e) {
                 topOrderPrice = marketPrice ? (isSell ? marketPrice.ask : marketPrice.bid) : null;
             }
 
+            let content;
+            let color;
+            let title;
+
             if (topOrderPrice === null || topOrderPrice === -1) {
-                span.textContent = formatters_js.coinFormatter(null);
-                span.style.color = '#004FFF'; // Blue for no data
+                content = formatters_js.coinFormatter(null);
+                color = '#004FFF'; // Blue for no data
             } else {
-                span.textContent = formatters_js.coinFormatter(topOrderPrice);
+                content = formatters_js.coinFormatter(topOrderPrice);
 
                 // Color coding based on competitiveness
                 if (isSell) {
                     // Sell order: green if our price is lower (better), red if higher (undercut)
-                    span.style.color = topOrderPrice < price ? '#FF0000' : '#00FF00';
+                    color = topOrderPrice < price ? '#FF0000' : '#00FF00';
                 } else {
                     // Buy order: green if our price is higher (better), red if lower (undercut)
-                    span.style.color = topOrderPrice > price ? '#FF0000' : '#00FF00';
+                    color = topOrderPrice > price ? '#FF0000' : '#00FF00';
                 }
 
                 // Add staleness indicator via tooltip if using order book cache
                 if (lastUpdated) {
-                    span.title = estimatedListingAge.getStalenessTooltip(lastUpdated);
+                    title = estimatedListingAge.getStalenessTooltip(lastUpdated);
                 }
             }
 
-            cell.appendChild(span);
-            return cell;
+            return createStyledCell(content, color, { title });
         }
 
         /**
@@ -8956,22 +8619,12 @@ self.onmessage = function (e) {
          * @returns {HTMLElement} Table cell element
          */
         createTopOrderAgeCell(itemHrid, enhancementLevel, isSell) {
-            const cell = document.createElement('td');
-            cell.classList.add('mwi-listing-price-cell');
-
-            const span = document.createElement('span');
-            span.classList.add('mwi-listing-price-value');
-
             // Get order book data from estimatedListingAge module (shared cache)
             const cacheEntry = estimatedListingAge.orderBooksCache[itemHrid];
 
             if (!cacheEntry) {
                 // No order book data available
-                span.textContent = 'N/A';
-                span.style.color = '#666666';
-                span.style.fontSize = '0.9em';
-                cell.appendChild(span);
-                return cell;
+                return createStyledCell('N/A', config.COLOR_TEXT_SECONDARY, { fontSize: '0.9em' });
             }
 
             // Support both old format (direct data) and new format ({data, lastUpdated})
@@ -8980,11 +8633,7 @@ self.onmessage = function (e) {
 
             if (!orderBookData || !orderBookData.orderBooks || orderBookData.orderBooks.length === 0) {
                 // No order book data available
-                span.textContent = 'N/A';
-                span.style.color = '#666666';
-                span.style.fontSize = '0.9em';
-                cell.appendChild(span);
-                return cell;
+                return createStyledCell('N/A', config.COLOR_TEXT_SECONDARY, { fontSize: '0.9em' });
             }
 
             // Find matching order book for this enhancement level
@@ -8997,11 +8646,7 @@ self.onmessage = function (e) {
             }
 
             if (!orderBook) {
-                span.textContent = 'N/A';
-                span.style.color = '#666666';
-                span.style.fontSize = '0.9em';
-                cell.appendChild(span);
-                return cell;
+                return createStyledCell('N/A', config.COLOR_TEXT_SECONDARY, { fontSize: '0.9em' });
             }
 
             // Get top order (first in array)
@@ -9009,11 +8654,7 @@ self.onmessage = function (e) {
 
             if (!topOrders || topOrders.length === 0) {
                 // No competing orders
-                span.textContent = 'None';
-                span.style.color = '#00FF00'; // Green = you're the only one
-                span.style.fontSize = '0.9em';
-                cell.appendChild(span);
-                return cell;
+                return createStyledCell('None', '#00FF00', { fontSize: '0.9em' }); // Green = you're the only one
             }
 
             const topOrder = topOrders[0];
@@ -9026,19 +8667,10 @@ self.onmessage = function (e) {
             const ageMs = Date.now() - estimatedTimestamp;
             const formatted = formatters_js.formatRelativeTime(ageMs);
 
-            span.textContent = `~${formatted}`;
-
-            // Apply staleness color based on when order book data was fetched
-            span.style.color = estimatedListingAge.getStalenessColor(lastUpdated);
-            span.style.fontSize = '0.9em';
-
-            // Add tooltip with staleness info
-            if (lastUpdated) {
-                span.title = estimatedListingAge.getStalenessTooltip(lastUpdated);
-            }
-
-            cell.appendChild(span);
-            return cell;
+            return createStyledCell(`~${formatted}`, estimatedListingAge.getStalenessColor(lastUpdated), {
+                fontSize: '0.9em',
+                title: lastUpdated ? estimatedListingAge.getStalenessTooltip(lastUpdated) : undefined,
+            });
         }
 
         /**
@@ -9061,12 +8693,6 @@ self.onmessage = function (e) {
             unclaimedCoinCount,
             unclaimedItemCount
         ) {
-            const cell = document.createElement('td');
-            cell.classList.add('mwi-listing-price-cell');
-
-            const span = document.createElement('span');
-            span.classList.add('mwi-listing-price-value');
-
             let totalPrice;
 
             // For filled listings, show unclaimed amount
@@ -9085,14 +8711,7 @@ self.onmessage = function (e) {
                 totalPrice = (orderQuantity - filledQuantity) * Math.floor(profitHelpers_js.calculatePriceAfterTax(price, taxRate));
             }
 
-            // Format and color code
-            span.textContent = formatters_js.coinFormatter(totalPrice);
-
-            // Color based on amount
-            span.style.color = this.getAmountColor(totalPrice);
-
-            cell.appendChild(span);
-            return cell;
+            return createStyledCell(formatters_js.coinFormatter(totalPrice), this.getAmountColor(totalPrice));
         }
 
         /**
@@ -9101,22 +8720,10 @@ self.onmessage = function (e) {
          * @returns {HTMLElement} Table cell element
          */
         createListedAgeCell(createdTimestamp) {
-            const cell = document.createElement('td');
-            cell.classList.add('mwi-listing-price-cell');
-
-            const span = document.createElement('span');
-            span.classList.add('mwi-listing-price-value');
-
             // Calculate age in milliseconds
             const createdDate = new Date(createdTimestamp);
             const ageMs = Date.now() - createdDate.getTime();
-
-            // Format relative time
-            span.textContent = formatters_js.formatRelativeTime(ageMs);
-            span.style.color = '#AAAAAA'; // Gray for time display
-
-            cell.appendChild(span);
-            return cell;
+            return createStyledCell(formatters_js.formatRelativeTime(ageMs), config.COLOR_TEXT_SECONDARY); // Gray for time display
         }
 
         /**
@@ -9124,17 +8731,7 @@ self.onmessage = function (e) {
          * @returns {HTMLElement} Empty table cell element
          */
         createPlaceholderCell() {
-            const cell = document.createElement('td');
-            cell.classList.add('mwi-listing-price-cell');
-
-            const span = document.createElement('span');
-            span.classList.add('mwi-listing-price-value');
-            span.textContent = 'N/A';
-            span.style.color = '#666666'; // Gray for placeholder
-            span.style.fontSize = '0.9em';
-
-            cell.appendChild(span);
-            return cell;
+            return createStyledCell('N/A', config.COLOR_TEXT_SECONDARY, { fontSize: '0.9em' });
         }
 
         /**
@@ -9143,10 +8740,10 @@ self.onmessage = function (e) {
          * @returns {string} Color code
          */
         getAmountColor(amount) {
-            if (amount >= 1000000) return '#FFD700'; // Gold for 1M+
-            if (amount >= 100000) return '#00FF00'; // Green for 100K+
-            if (amount >= 10000) return '#FFFFFF'; // White for 10K+
-            return '#AAAAAA'; // Gray for small amounts
+            if (amount >= 1000000) return config.COLOR_MIRROR; // Gold for 1M+
+            if (amount >= 100000) return config.COLOR_ACCENT; // Green for 100K+
+            if (amount >= 10000) return config.COLOR_TEXT_PRIMARY; // White for 10K+
+            return config.COLOR_TEXT_SECONDARY; // Gray for small amounts
         }
 
         /**
@@ -15905,7 +15502,18 @@ self.onmessage = function (e) {
             if (itemDetails?.isOpenable && expectedValueCalculator.isInitialized) {
                 const evData = expectedValueCalculator.calculateExpectedValue(itemHrid);
                 if (evData && evData.expectedValue > 0) {
-                    return evData.expectedValue;
+                    let netValue = evData.expectedValue;
+
+                    // Deduct chest key cost for dungeon chests
+                    const chestKeyHrid = DUNGEON_CHEST_CHEST_KEYS[itemHrid];
+                    if (chestKeyHrid) {
+                        const keyPricingSetting = config.getSettingValue('combatStats_keyPricing') || 'ask';
+                        const keyPrices = marketAPI.getPrice(chestKeyHrid);
+                        const keyPrice = keyPrices?.[keyPricingSetting] ?? keyPrices?.ask ?? 0;
+                        netValue -= keyPrice;
+                    }
+
+                    return netValue;
                 }
             }
 
@@ -16426,6 +16034,7 @@ self.onmessage = function (e) {
                 count: item.count,
                 itemHrid: item.itemHrid,
                 enhancementLevel: item.enhancementLevel || 0,
+                isOpenable: itemDetails?.isOpenable === true,
             };
 
             // Check if this is an ability book
@@ -18205,6 +17814,17 @@ self.onmessage = function (e) {
                 sectionsToPreserve.push(categoryId);
             });
 
+            // Preserve chest item expand states
+            const byCatForState = networthData.currentAssets.inventory.byCategory || {};
+            for (const categoryData of Object.values(byCatForState)) {
+                for (const item of categoryData.items) {
+                    if (item.isOpenable && item.itemHrid) {
+                        const slug = item.itemHrid.split('/').pop();
+                        sectionsToPreserve.push(`mwi-chest-${slug}-detail`);
+                    }
+                }
+            }
+
             sectionsToPreserve.forEach((id) => {
                 const elem = this.container.querySelector(`#${id}`);
                 if (elem) {
@@ -18316,8 +17936,17 @@ self.onmessage = function (e) {
                 if (elem && expandedStates[id]) {
                     elem.style.display = 'block';
 
-                    // Update the corresponding toggle button text (+ to -)
-                    const toggleId = id.replace('-details', '-toggle').replace('-breakdown', '-toggle');
+                    // Derive the toggle button ID from the detail ID.
+                    // Fixed sections use suffixes like -details, -breakdown, -detail → strip and append -toggle.
+                    // Dynamic sections (e.g. inventory categories: mwi-inventory-loot) use id + '-toggle'.
+                    let toggleId = id
+                        .replace('-details', '-toggle')
+                        .replace('-breakdown', '-toggle')
+                        .replace('-detail', '-toggle');
+                    if (toggleId === id) {
+                        toggleId = id + '-toggle';
+                    }
+
                     const toggleBtn = this.container.querySelector(`#${toggleId}`);
                     if (toggleBtn) {
                         const currentText = toggleBtn.textContent;
@@ -18434,18 +18063,21 @@ self.onmessage = function (e) {
                     const categoryId = `mwi-inventory-${categoryName.toLowerCase().replace(/\s+/g, '-')}`;
                     const categoryToggleId = `${categoryId}-toggle`;
 
-                    // Build items HTML with newlines
+                    // Build items HTML
                     const itemsHTML = categoryData.items
                         .map((item) => {
-                            return `${item.name} x${formatters_js.formatKMB(item.count)}: ${formatters_js.networthFormatter(Math.round(item.value))}`;
+                            if (item.isOpenable && item.itemHrid) {
+                                return this.renderOpenableItemRow(item);
+                            }
+                            return `<div>${item.name} x${formatters_js.formatKMB(item.count)}: ${formatters_js.networthFormatter(Math.round(item.value))}</div>`;
                         })
-                        .join('\n');
+                        .join('');
 
                     return `
                 <div style="cursor: pointer; margin-top: 4px; font-size: 0.85rem;" id="${categoryToggleId}">
                     + ${categoryName}: ${formatters_js.networthFormatter(Math.round(categoryData.totalValue))}
                 </div>
-                <div id="${categoryId}" style="display: none; margin-left: 20px; font-size: 0.75rem; color: #999; white-space: pre-line;">
+                <div id="${categoryId}" style="display: none; margin-left: 20px; font-size: 0.75rem; color: #999;">
                     ${itemsHTML}
                 </div>
             `;
@@ -18513,6 +18145,20 @@ self.onmessage = function (e) {
                 );
             });
 
+            // Per-chest item toggles (openable items)
+            for (const categoryData of Object.values(byCategory)) {
+                for (const item of categoryData.items) {
+                    if (item.isOpenable && item.itemHrid) {
+                        const slug = item.itemHrid.split('/').pop();
+                        this.setupToggle(
+                            `mwi-chest-${slug}-toggle`,
+                            `mwi-chest-${slug}-detail`,
+                            `${item.name} x${formatters_js.formatKMB(item.count)}: ${formatters_js.networthFormatter(Math.round(item.value))}`
+                        );
+                    }
+                }
+            }
+
             // Market Listings toggle
             this.setupToggle(
                 'mwi-listings-toggle',
@@ -18565,6 +18211,69 @@ self.onmessage = function (e) {
                     `Ability Books: ${formatters_js.networthFormatter(Math.round(networthData.fixedAssets.abilityBooks.totalCost))}`
                 );
             }
+        }
+
+        /**
+         * Render an expandable row for an openable item (chest, cache, crate)
+         * @param {Object} item - Item data including itemHrid and isOpenable
+         * @returns {string} HTML string
+         */
+        renderOpenableItemRow(item) {
+            const slug = item.itemHrid.split('/').pop();
+            const toggleId = `mwi-chest-${slug}-toggle`;
+            const detailId = `mwi-chest-${slug}-detail`;
+
+            const evData = expectedValueCalculator.isInitialized
+                ? expectedValueCalculator.calculateExpectedValue(item.itemHrid)
+                : null;
+
+            let detailsHTML = '';
+            if (evData) {
+                const chestKeyHrid = DUNGEON_CHEST_CHEST_KEYS[item.itemHrid];
+                let keyPrice = 0;
+                let keyName = null;
+                if (chestKeyHrid) {
+                    const setting = config.getSettingValue('combatStats_keyPricing') || 'ask';
+                    const keyPrices = marketAPI.getPrice(chestKeyHrid);
+                    keyPrice = keyPrices?.[setting] ?? keyPrices?.ask ?? 0;
+                    keyName = dataManager.getItemDetails(chestKeyHrid)?.name;
+                }
+                detailsHTML = this.buildChestDropsHTML(evData, keyPrice, keyName);
+            }
+
+            return `
+            <div id="${toggleId}" style="cursor: pointer; padding: 1px 0;">
+                + ${item.name} x${formatters_js.formatKMB(item.count)}: ${formatters_js.networthFormatter(Math.round(item.value))}
+            </div>
+            <div id="${detailId}" style="display: none; margin-left: 16px; color: #bbb; margin-bottom: 2px;">
+                ${detailsHTML}
+            </div>`;
+        }
+
+        /**
+         * Build the drop breakdown HTML for an expanded chest row
+         * @param {Object} evData - Expected value data from expectedValueCalculator
+         * @param {number} keyPrice - Chest key market price (0 for non-dungeon chests)
+         * @param {string|null} keyName - Chest key item name
+         * @returns {string} HTML string
+         */
+        buildChestDropsHTML(evData, keyPrice, keyName) {
+            let html = `<div>EV: ${formatters_js.networthFormatter(Math.round(evData.expectedValue))}/chest</div>`;
+            if (keyPrice > 0) {
+                const label = keyName ? `Key (${keyName})` : 'Key Cost';
+                html += `<div>\u2212 ${label}: ${formatters_js.networthFormatter(Math.round(keyPrice))}</div>`;
+                html += `<div>Net: ${formatters_js.networthFormatter(Math.round(evData.expectedValue - keyPrice))}/chest</div>`;
+            }
+            const pricedDrops = evData.drops.filter((d) => d.hasPriceData);
+            if (pricedDrops.length > 0) {
+                html += '<div style="margin-top: 3px;">';
+                for (const drop of pricedDrops) {
+                    const pct = (drop.dropRate * 100).toFixed(1);
+                    html += `<div>\u2022 ${drop.itemName} (${pct}%): ${formatters_js.networthFormatter(Math.round(drop.expectedValue))}</div>`;
+                }
+                html += '</div>';
+            }
+            return html;
         }
 
         /**
@@ -19008,26 +18717,29 @@ self.onmessage = function (e) {
             // Watch for MuiTooltip-popperInteractive closing (item click popup) and re-render badges.
             // When an inventory item is clicked, the game shows an interactive popper.
             // When that popper closes, React may have re-rendered the item container, wiping badges.
-            const interactivePopperObserver = new MutationObserver((mutations) => {
-                for (const mutation of mutations) {
-                    for (const node of mutation.addedNodes) {
-                        if (node.nodeType !== Node.ELEMENT_NODE) continue;
-                        if (node.classList?.contains('MuiTooltip-popperInteractive')) {
-                            setTimeout(() => this.renderAllBadges(), 50);
-                            return;
+            const unwatchPopper = domObserverHelpers_js.createMutationWatcher(
+                document.body,
+                (mutations) => {
+                    for (const mutation of mutations) {
+                        for (const node of mutation.addedNodes) {
+                            if (node.nodeType !== Node.ELEMENT_NODE) continue;
+                            if (node.classList?.contains('MuiTooltip-popperInteractive')) {
+                                setTimeout(() => this.renderAllBadges(), 50);
+                                return;
+                            }
+                        }
+                        for (const node of mutation.removedNodes) {
+                            if (node.nodeType !== Node.ELEMENT_NODE) continue;
+                            if (node.classList?.contains('MuiTooltip-popperInteractive')) {
+                                setTimeout(() => this.renderAllBadges(), 50);
+                                return;
+                            }
                         }
                     }
-                    for (const node of mutation.removedNodes) {
-                        if (node.nodeType !== Node.ELEMENT_NODE) continue;
-                        if (node.classList?.contains('MuiTooltip-popperInteractive')) {
-                            setTimeout(() => this.renderAllBadges(), 50);
-                            return;
-                        }
-                    }
-                }
-            });
-            interactivePopperObserver.observe(document.body, { childList: true });
-            this.unregisterHandlers.push(() => interactivePopperObserver.disconnect());
+                },
+                { childList: true }
+            );
+            this.unregisterHandlers.push(unwatchPopper);
         }
 
         /**
@@ -21098,4 +20810,4 @@ self.onmessage = function (e) {
 
     console.log('[Toolasha] Market library loaded');
 
-})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.marketAPI, Toolasha.Core.webSocketHook, Toolasha.Core.storage, Toolasha.Utils.equipmentParser, Toolasha.Utils.houseEfficiency, Toolasha.Utils.efficiency, Toolasha.Utils.teaParser, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.profitConstants, Toolasha.Utils.profitHelpers, Toolasha.Utils.buffParser, Toolasha.Utils.actionCalculator, Toolasha.Utils.tokenValuation, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.formatters, Toolasha.Utils.enhancementConfig, Toolasha.Utils.dom, Toolasha.Utils.timerRegistry, Toolasha.Utils.cleanupRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Utils.enhancementMultipliers, Toolasha.Utils.reactInput, Toolasha.Utils.abilityCalc, Toolasha.Utils.houseCostCalculator);
+})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Core.marketAPI, Toolasha.Utils.houseEfficiency, Toolasha.Utils.efficiency, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.profitConstants, Toolasha.Utils.profitHelpers, Toolasha.Utils.teaParser, Toolasha.Utils.buffParser, Toolasha.Utils.equipmentParser, Toolasha.Utils.actionCalculator, Toolasha.Utils.tokenValuation, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.formatters, Toolasha.Utils.enhancementConfig, Toolasha.Utils.dom, Toolasha.Utils.timerRegistry, Toolasha.Core.storage, Toolasha.Utils.cleanupRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Utils.enhancementMultipliers, Toolasha.Utils.reactInput, Toolasha.Core.webSocketHook, Toolasha.Utils.abilityCalc, Toolasha.Utils.houseCostCalculator);
