@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.64.0
+ * Version: 1.65.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -4266,7 +4266,7 @@ self.onmessage = function (e) {
                     }
                 }
                 // Fix tooltip overflow before returning
-                dom.fixTooltipOverflow(tooltipElement);
+                dom.fixTooltipOverflow(tooltipElement, { forceTop: config.getSetting('itemTooltip_pinTop') });
                 return; // Skip price/profit display for containers
             }
 
@@ -4355,7 +4355,7 @@ self.onmessage = function (e) {
             }
 
             // Fix tooltip overflow (ensure it stays in viewport)
-            dom.fixTooltipOverflow(tooltipElement);
+            dom.fixTooltipOverflow(tooltipElement, { forceTop: config.getSetting('itemTooltip_pinTop') });
         }
 
         /**
