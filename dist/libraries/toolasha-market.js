@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.65.4
+ * Version: 1.65.5
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2703,11 +2703,14 @@ self.onmessage = function (e) {
         // Find the base (non-refined) item HRID for the Philosopher's Mirror path.
         // The mirror path consumes copies of the item at lower enhancement levels; for refined items
         // those copies are the non-refined base item, so we compute a separate cost array for it.
+        // Only applies to actual refined items (HRID contains '_refined').
         let mirrorItemHrid = itemHrid;
-        for (const action of Object.values(gameData.actionDetailMap)) {
-            if (action.outputItems?.[0]?.itemHrid === itemHrid && action.upgradeItemHrid) {
-                mirrorItemHrid = action.upgradeItemHrid;
-                break;
+        if (itemHrid.includes('_refined')) {
+            for (const action of Object.values(gameData.actionDetailMap)) {
+                if (action.outputItems?.[0]?.itemHrid === itemHrid && action.upgradeItemHrid) {
+                    mirrorItemHrid = action.upgradeItemHrid;
+                    break;
+                }
             }
         }
 
@@ -2763,7 +2766,7 @@ self.onmessage = function (e) {
         if (mirrorPrice > 0) {
             for (let level = 3; level <= currentEnhancementLevel; level++) {
                 const traditionalCost = targetCosts[level];
-                const mirrorCost = mirrorTargetCosts[level - 2] + mirrorTargetCosts[level - 1] + mirrorPrice;
+                const mirrorCost = targetCosts[level - 2] + targetCosts[level - 1] + mirrorPrice;
 
                 if (mirrorCost < traditionalCost) {
                     if (mirrorStartLevel === null) {
