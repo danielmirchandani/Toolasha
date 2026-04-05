@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.65.5
+ * Version: 1.66.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -452,6 +452,19 @@
      */
 
     const settingsGroups = {
+        ironCow: {
+            title: 'Iron Cow Mode',
+            icon: '🐄',
+            settings: {
+                ironCow_enabled: {
+                    id: 'ironCow_enabled',
+                    label: 'Iron Cow Mode',
+                    type: 'checkbox',
+                    default: false,
+                    help: 'Disable all market and profit features for a no-marketplace playthrough.',
+                },
+            },
+        },
         general: {
             title: 'General Settings',
             icon: '⚙️',

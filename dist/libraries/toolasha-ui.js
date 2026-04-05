@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.65.5
+ * Version: 1.66.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -709,6 +709,10 @@
                 {
                     label: "Socko's Combat Tracker",
                     url: 'https://sockosnewcombattracker.pages.dev/',
+                },
+                {
+                    label: 'mwilinks',
+                    url: 'https://www.mwilinks.site/',
                 },
             ];
 
@@ -12786,6 +12790,180 @@ ${hideRules}
     var settingsCSS = "/* Toolasha Settings UI Styles\n * Modern, compact design\n */\n\n/* CSS Variables */\n:root {\n    --toolasha-accent: #5b8def;\n    --toolasha-accent-hover: #7aa3f3;\n    --toolasha-accent-dim: rgba(91, 141, 239, 0.15);\n    --toolasha-secondary: #8A2BE2;\n    --toolasha-text: rgba(255, 255, 255, 0.9);\n    --toolasha-text-dim: rgba(255, 255, 255, 0.5);\n    --toolasha-bg: rgba(20, 25, 35, 0.6);\n    --toolasha-border: rgba(91, 141, 239, 0.2);\n    --toolasha-toggle-off: rgba(100, 100, 120, 0.4);\n    --toolasha-toggle-on: var(--toolasha-accent);\n}\n\n/* Settings Card Container */\n.toolasha-settings-card {\n    display: flex;\n    flex-direction: column;\n    padding: 12px 16px;\n    font-size: 12px;\n    line-height: 1.3;\n    color: var(--toolasha-text);\n    position: relative;\n    gap: 6px;\n}\n\n/* Top gradient line */\n.toolasha-settings-card::before {\n    display: none;\n}\n\n/* Collapsible Settings Groups */\n.toolasha-settings-group {\n    margin-bottom: 8px;\n}\n\n.toolasha-settings-group-header {\n    cursor: pointer;\n    user-select: none;\n    margin: 10px 0 4px 0;\n    color: var(--toolasha-accent);\n    font-weight: 600;\n    font-size: 13px;\n    display: flex;\n    align-items: center;\n    gap: 6px;\n    border-bottom: 1px solid var(--toolasha-border);\n    padding-bottom: 3px;\n    text-transform: uppercase;\n    letter-spacing: 0.5px;\n    transition: color 0.2s ease;\n}\n\n.toolasha-settings-group-header:hover {\n    color: var(--toolasha-accent-hover);\n}\n\n.toolasha-settings-group-header .collapse-icon {\n    font-size: 10px;\n    transition: transform 0.2s ease;\n}\n\n.toolasha-settings-group.collapsed .collapse-icon {\n    transform: rotate(-90deg);\n}\n\n.toolasha-settings-group-content {\n    max-height: 5000px;\n    overflow: hidden;\n    transition: max-height 0.3s ease-out;\n}\n\n.toolasha-settings-group.collapsed .toolasha-settings-group-content {\n    max-height: 0;\n}\n\n/* Section Headers */\n.toolasha-settings-card h3 {\n    margin: 10px 0 4px 0;\n    color: var(--toolasha-accent);\n    font-weight: 600;\n    font-size: 13px;\n    display: flex;\n    align-items: center;\n    gap: 6px;\n    border-bottom: 1px solid var(--toolasha-border);\n    padding-bottom: 3px;\n    text-transform: uppercase;\n    letter-spacing: 0.5px;\n}\n\n.toolasha-settings-card h3:first-child {\n    margin-top: 0;\n}\n\n.toolasha-settings-card h3 .icon {\n    font-size: 14px;\n}\n\n/* Individual Setting Row */\n.toolasha-setting {\n    display: flex;\n    align-items: center;\n    justify-content: space-between;\n    gap: 10px;\n    margin: 0;\n    padding: 6px 8px;\n    background: var(--toolasha-bg);\n    border: 1px solid var(--toolasha-border);\n    border-radius: 4px;\n    min-height: unset;\n    transition: all 0.2s ease;\n}\n\n.toolasha-setting:hover {\n    background: rgba(30, 35, 45, 0.7);\n    border-color: var(--toolasha-accent);\n}\n\n.toolasha-setting.disabled {\n    /* Visual darkening removed - dependencies still functional but not visually indicated */\n    pointer-events: none;\n}\n\n.toolasha-setting.not-implemented .toolasha-setting-label {\n    color: #ff6b6b;\n}\n\n.toolasha-setting.not-implemented .toolasha-setting-help {\n    color: rgba(255, 107, 107, 0.7);\n}\n\n.toolasha-setting-label {\n    text-align: left;\n    flex: 1;\n    margin-right: 10px;\n    line-height: 1.3;\n    font-size: 12px;\n}\n\n.toolasha-setting-help {\n    display: block;\n    font-size: 10px;\n    color: var(--toolasha-text-dim);\n    margin-top: 2px;\n    font-style: italic;\n}\n\n.toolasha-setting-input {\n    flex-shrink: 0;\n}\n\n/* Modern Toggle Switch */\n.toolasha-switch {\n    position: relative;\n    width: 38px;\n    height: 20px;\n    flex-shrink: 0;\n    display: inline-block;\n}\n\n.toolasha-switch input {\n    opacity: 0;\n    width: 0;\n    height: 0;\n    position: absolute;\n}\n\n.toolasha-slider {\n    position: absolute;\n    top: 0;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    background: var(--toolasha-toggle-off);\n    border-radius: 20px;\n    cursor: pointer;\n    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);\n    border: 2px solid transparent;\n}\n\n.toolasha-slider:before {\n    content: \"\";\n    position: absolute;\n    height: 12px;\n    width: 12px;\n    left: 2px;\n    bottom: 2px;\n    background: white;\n    border-radius: 50%;\n    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);\n    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);\n}\n\n.toolasha-switch input:checked + .toolasha-slider {\n    background: var(--toolasha-toggle-on);\n    border-color: var(--toolasha-accent-hover);\n    box-shadow: 0 0 6px var(--toolasha-accent-dim);\n}\n\n.toolasha-switch input:checked + .toolasha-slider:before {\n    transform: translateX(18px);\n}\n\n.toolasha-switch:hover .toolasha-slider {\n    border-color: var(--toolasha-accent);\n}\n\n/* Text Input */\n.toolasha-text-input {\n    padding: 5px 8px;\n    border: 1px solid var(--toolasha-border);\n    border-radius: 3px;\n    background: rgba(0, 0, 0, 0.3);\n    color: var(--toolasha-text);\n    min-width: 100px;\n    font-size: 12px;\n    transition: all 0.2s ease;\n}\n\n.toolasha-text-input:focus {\n    outline: none;\n    border-color: var(--toolasha-accent);\n    box-shadow: 0 0 0 2px var(--toolasha-accent-dim);\n}\n\n/* Number Input */\n.toolasha-number-input {\n    padding: 5px 8px;\n    border: 1px solid var(--toolasha-border);\n    border-radius: 3px;\n    background: rgba(0, 0, 0, 0.3);\n    color: var(--toolasha-text);\n    min-width: 80px;\n    font-size: 12px;\n    transition: all 0.2s ease;\n}\n\n.toolasha-number-input:focus {\n    outline: none;\n    border-color: var(--toolasha-accent);\n    box-shadow: 0 0 0 2px var(--toolasha-accent-dim);\n}\n\n/* Select Dropdown */\n.toolasha-select-input {\n    padding: 5px 8px;\n    border: 1px solid var(--toolasha-border);\n    border-radius: 3px;\n    background: rgba(0, 0, 0, 0.3);\n    color: var(--toolasha-accent);\n    font-weight: 600;\n    min-width: 150px;\n    cursor: pointer;\n    font-size: 12px;\n    -webkit-appearance: none;\n    -moz-appearance: none;\n    appearance: none;\n    background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%207l5%205%205-5z%22%20fill%3D%22%235b8def%22%2F%3E%3C%2Fsvg%3E');\n    background-repeat: no-repeat;\n    background-position: right 6px center;\n    background-size: 14px;\n    padding-right: 28px;\n    transition: all 0.2s ease;\n}\n\n.toolasha-select-input:focus {\n    outline: none;\n    border-color: var(--toolasha-accent);\n    box-shadow: 0 0 0 2px var(--toolasha-accent-dim);\n}\n\n.toolasha-select-input option {\n    background: #1a1a2e;\n    color: var(--toolasha-text);\n    padding: 8px;\n}\n\n/* Utility Buttons Container */\n.toolasha-utility-buttons {\n    display: flex;\n    gap: 8px;\n    margin-top: 12px;\n    padding-top: 10px;\n    border-top: 1px solid var(--toolasha-border);\n    flex-wrap: wrap;\n}\n\n.toolasha-utility-button {\n    background: linear-gradient(135deg, var(--toolasha-secondary), #6A1B9A);\n    border: 1px solid rgba(138, 43, 226, 0.4);\n    color: #ffffff;\n    padding: 6px 12px;\n    border-radius: 4px;\n    font-size: 11px;\n    font-weight: 600;\n    cursor: pointer;\n    transition: all 0.2s ease;\n    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);\n}\n\n.toolasha-utility-button:hover {\n    background: linear-gradient(135deg, #9A4BCF, var(--toolasha-secondary));\n    box-shadow: 0 0 10px rgba(138, 43, 226, 0.3);\n    transform: translateY(-1px);\n}\n\n.toolasha-utility-button:active {\n    transform: translateY(0);\n}\n\n/* Sync button - special styling for prominence */\n.toolasha-sync-button {\n    background: linear-gradient(135deg, #047857, #059669) !important;\n    border: 1px solid rgba(4, 120, 87, 0.4) !important;\n    flex: 1 1 auto; /* Allow it to grow and take more space */\n    min-width: 200px; /* Ensure it's wide enough for the text */\n}\n\n.toolasha-sync-button:hover {\n    background: linear-gradient(135deg, #059669, #10b981) !important;\n    box-shadow: 0 0 10px rgba(16, 185, 129, 0.3) !important;\n}\n\n/* Refresh Notice */\n.toolasha-refresh-notice {\n    background: rgba(255, 152, 0, 0.1);\n    border: 1px solid rgba(255, 152, 0, 0.3);\n    border-radius: 4px;\n    padding: 8px 12px;\n    margin-top: 10px;\n    color: #ffa726;\n    font-size: 11px;\n    display: flex;\n    align-items: center;\n    gap: 8px;\n}\n\n.toolasha-refresh-notice::before {\n    content: \"⚠️\";\n    font-size: 14px;\n}\n\n/* Dependency Indicator */\n.toolasha-setting.has-dependency::before {\n    content: \"↳\";\n    position: absolute;\n    left: -4px;\n    color: var(--toolasha-accent);\n    font-size: 14px;\n    opacity: 0.5;\n}\n\n.toolasha-setting.has-dependency {\n    margin-left: 16px;\n    position: relative;\n}\n\n/* Nested setting collapse icons */\n.setting-collapse-icon {\n    flex-shrink: 0;\n    color: var(--toolasha-accent);\n    opacity: 0.7;\n}\n\n.toolasha-setting.dependents-collapsed .setting-collapse-icon {\n    opacity: 1;\n}\n\n.toolasha-setting-label-container:hover .setting-collapse-icon {\n    opacity: 1;\n}\n\n/* Tab Panel Override (for game's settings panel) */\n.TabPanel_tabPanel__tXMJF#toolasha-settings {\n    display: block !important;\n}\n\n.TabPanel_tabPanel__tXMJF#toolasha-settings.TabPanel_hidden__26UM3 {\n    display: none !important;\n}\n";
 
     /**
+     * Iron Cow Mode
+     * Force-disables and locks all market/profit-related settings for players
+     * who have no marketplace access.
+     */
+
+
+    /**
+     * The complete set of setting IDs that are force-disabled in Iron Cow mode.
+     */
+    const IRON_COW_SETTINGS = new Set([
+        // Market UI (all market_* keys + related)
+        'networkAlert',
+        'marketFilter',
+        'marketSort',
+        'fillMarketOrderPrice',
+        'market_autoFillSellStrategy',
+        'market_autoFillBuyStrategy',
+        'market_autoClickMax',
+        'market_quickInputButtons',
+        'market_marketplaceShortcuts',
+        'market_visibleItemCount',
+        'market_visibleItemCountOpacity',
+        'market_visibleItemCountIncludeEquipped',
+        'market_showListingPrices',
+        'market_tradeHistory',
+        'market_tradeHistoryComparisonMode',
+        'market_listingPricePrecision',
+        'market_showListingAge',
+        'market_showTopOrderAge',
+        'market_showEstimatedListingAge',
+        'market_listingAgeFormat',
+        'market_listingTimeFormat',
+        'market_listingDateFormat',
+        'market_showOrderTotals',
+        'market_showHistoryViewer',
+        'market_showPhiloCalculator',
+        'market_showQueueLength',
+        // Profit / pricing calculations
+        'profitCalc_pricingMode',
+        'profitCalc_pricingNaming',
+        'actionPanel_showProfitPerHour',
+        'actionPanel_foragingTotal',
+        'actionPanel_hideNegativeProfit',
+        'actionQueue_valueMode',
+        'alchemy_profitDisplay',
+        'itemTooltip_profit',
+        'itemTooltip_detailedProfit',
+        'itemTooltip_multiActionProfit',
+        'taskProfitCalculator',
+        'combatStats_keyPricing',
+        // Prices in tooltips / UI
+        'itemTooltip_prices',
+        'itemTooltip_expectedValue',
+        'expectedValue_showDrops',
+        'expectedValue_respectPricingMode',
+        'labyrinthShopPrices',
+        // Inventory value display
+        'invWorth',
+        'invBadgePrices',
+        'invCategoryTotals',
+        'invSort_showBadges',
+        'invSort_badgesOnNone',
+        'invSort_netOfTax',
+        // Net worth
+        'networth',
+        'networth_highEnhancementUseCost',
+        'networth_highEnhancementMinLevel',
+        'networth_historyChart',
+        'networth_includeCowbells',
+        'networth_includeTaskTokens',
+        'networth_abilityBooksAsInventory',
+        // Missing materials marketplace button
+        'actions_missingMaterialsButton',
+        'actions_missingMaterialsButton_ignoreQueue',
+        // Color settings for market-only UI elements
+        'color_invBadge_ask',
+        'color_invBadge_bid',
+        'color_queueLength_known',
+        'color_queueLength_estimated',
+    ]);
+
+    /**
+     * Returns the forced-off value for a setting when Iron Cow mode is enabled.
+     * Checkboxes → false, sliders → 0, everything else → schema default.
+     * @param {string} settingId
+     * @returns {*}
+     */
+    function getIronCowDisabledValue(settingId) {
+        for (const group of Object.values(settingsSchema_js.settingsGroups)) {
+            const def = group.settings[settingId];
+            if (!def) continue;
+            const type = def.type || 'checkbox';
+            if (type === 'checkbox') return false;
+            if (type === 'slider') return 0;
+            return def.default ?? ''; // select / number / color → schema default
+        }
+        return false;
+    }
+
+    class IronCowMode {
+        /**
+         * Per-character snapshot storage key.
+         * @returns {string}
+         */
+        _snapshotKey() {
+            const cid = dataManager.getCurrentCharacterId?.();
+            return cid ? `toolasha_ironCowSnapshot_${cid}` : 'toolasha_ironCowSnapshot';
+        }
+
+        /**
+         * Whether Iron Cow mode is currently enabled.
+         * @returns {boolean}
+         */
+        isEnabled() {
+            return config.getSetting('ironCow_enabled');
+        }
+
+        /**
+         * Enable Iron Cow mode.
+         * Saves a snapshot of current values then force-disables every affected setting.
+         * @returns {Promise<void>}
+         */
+        async enable() {
+            // 1. Save snapshot of current values before forcing them off
+            const snapshot = {};
+            for (const id of IRON_COW_SETTINGS) {
+                const entry = config.settingsMap[id];
+                if (!entry) continue;
+                snapshot[id] =
+                    entry.type === 'checkbox'
+                        ? { type: 'checkbox', value: entry.isTrue ?? false }
+                        : { type: entry.type, value: entry.value };
+            }
+            await storage.setJSON(this._snapshotKey(), snapshot, 'settings', true);
+
+            // 2. Force-disable each setting (fires onSettingChange callbacks automatically)
+            for (const id of IRON_COW_SETTINGS) {
+                const entry = config.settingsMap[id];
+                if (!entry) continue;
+                const val = getIronCowDisabledValue(id);
+                if (entry.type === 'checkbox') {
+                    config.setSetting(id, val);
+                } else {
+                    config.setSettingValue(id, val);
+                }
+            }
+        }
+
+        /**
+         * Disable Iron Cow mode.
+         * Restores each setting to its pre-Iron-Cow value from the snapshot.
+         * @returns {Promise<void>}
+         */
+        async disable() {
+            const snapshot = await storage.getJSON(this._snapshotKey(), 'settings', null);
+            if (snapshot) {
+                for (const [id, entry] of Object.entries(snapshot)) {
+                    if (!IRON_COW_SETTINGS.has(id)) continue;
+                    const configEntry = config.settingsMap[id];
+                    if (!configEntry) continue;
+                    if (entry.type === 'checkbox') {
+                        config.setSetting(id, entry.value);
+                    } else {
+                        config.setSettingValue(id, entry.value);
+                    }
+                }
+            }
+            await storage.delete(this._snapshotKey(), 'settings');
+        }
+    }
+
+    const ironCowMode = new IronCowMode();
+
+    /**
      * Settings UI Module
      * Injects Toolasha settings tab into the game's settings panel
      * Based on MWITools Extended approach
@@ -13091,6 +13269,9 @@ ${hideRules}
             // Add search box at the top
             this.addSearchBox(card);
 
+            // Add Iron Cow mode toggle banner
+            this.addIronCowToggle(card);
+
             // Generate settings from config
             this.generateSettings(card);
 
@@ -13180,6 +13361,22 @@ ${hideRules}
                         settingEl.style.opacity = '';
                         settingEl.style.pointerEvents = '';
                     }
+                }
+            }
+
+            // Iron Cow locking pass
+            const ironCowActive = ironCowMode.isEnabled();
+            for (const id of IRON_COW_SETTINGS) {
+                const el = document.querySelector(`.toolasha-setting[data-setting-id="${id}"]`);
+                if (!el) continue;
+                if (ironCowActive) {
+                    el.style.opacity = '0.35';
+                    el.style.pointerEvents = 'none';
+                    el.dataset.ironCowLocked = 'true';
+                } else if (el.dataset.ironCowLocked) {
+                    delete el.dataset.ironCowLocked;
+                    el.style.opacity = '';
+                    el.style.pointerEvents = '';
                 }
             }
         }
@@ -13620,6 +13817,9 @@ ${hideRules}
             if (!input.id) return;
 
             const settingId = input.id;
+
+            // Block changes to locked settings while Iron Cow mode is active
+            if (ironCowMode.isEnabled() && IRON_COW_SETTINGS.has(settingId)) return;
             const type = input.closest('.toolasha-setting')?.dataset.type || 'checkbox';
 
             let value;
@@ -14261,6 +14461,118 @@ ${hideRules}
             itemEl.appendChild(deleteBtn);
 
             return itemEl;
+        }
+
+        /**
+         * Add Iron Cow mode toggle banner above settings groups.
+         * @param {HTMLElement} container - The card/panel container
+         */
+        addIronCowToggle(container) {
+            const enabled = ironCowMode.isEnabled();
+
+            const wrapper = document.createElement('div');
+            wrapper.id = 'toolasha-iron-cow-toggle';
+            wrapper.style.cssText = `
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin: 0 0 12px 0;
+            padding: 10px 14px;
+            border-radius: 6px;
+            border: 1px solid ${enabled ? '#7c5c20' : '#3a3a3a'};
+            background: ${enabled ? '#2a1e0a' : '#1e1e1e'};
+            cursor: default;
+        `;
+
+            const emoji = document.createElement('span');
+            emoji.textContent = '🐄';
+            emoji.style.cssText = 'font-size: 22px; line-height: 1; flex-shrink: 0; margin-top: 2px;';
+
+            const textBlock = document.createElement('div');
+            textBlock.style.cssText = 'flex: 1; min-width: 0;';
+
+            const title = document.createElement('div');
+            title.style.cssText = `font-weight: 700; font-size: 14px; color: ${enabled ? '#d4900a' : '#c0c0c0'};`;
+            title.textContent = 'Iron Cow Mode';
+
+            const desc = document.createElement('div');
+            desc.style.cssText = 'font-size: 12px; color: #888; margin-top: 2px;';
+            desc.innerHTML = enabled
+                ? 'Disable all market &amp; profit features. <span style="color:#d4900a;font-weight:600;">ACTIVE — market features locked.</span>'
+                : 'Disable all market &amp; profit features for a no-marketplace playthrough.';
+
+            textBlock.appendChild(title);
+            textBlock.appendChild(desc);
+
+            // Toggle switch
+            const label = document.createElement('label');
+            label.style.cssText =
+                'display: flex; align-items: center; gap: 0; cursor: pointer; flex-shrink: 0; margin-top: 2px;';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = enabled;
+            checkbox.style.cssText = 'width: 36px; height: 20px; cursor: pointer;';
+
+            checkbox.addEventListener('change', async (e) => {
+                e.stopPropagation();
+                const enabling = e.target.checked;
+                config.setSetting('ironCow_enabled', enabling);
+                if (enabling) {
+                    await ironCowMode.enable();
+                } else {
+                    await ironCowMode.disable();
+                }
+                this._refreshIronCowToggleAppearance(wrapper, enabling);
+                this._syncIronCowSettingInputs();
+                this.applyDisabledByState();
+            });
+
+            label.appendChild(checkbox);
+
+            wrapper.appendChild(emoji);
+            wrapper.appendChild(textBlock);
+            wrapper.appendChild(label);
+
+            container.appendChild(wrapper);
+        }
+
+        /**
+         * Update the Iron Cow toggle banner appearance without re-creating it.
+         * @param {HTMLElement} wrapper - The banner wrapper element
+         * @param {boolean} enabled - Whether Iron Cow is now active
+         */
+        _refreshIronCowToggleAppearance(wrapper, enabled) {
+            wrapper.style.border = `1px solid ${enabled ? '#7c5c20' : '#3a3a3a'}`;
+            wrapper.style.background = enabled ? '#2a1e0a' : '#1e1e1e';
+
+            const title = wrapper.querySelector('div > div:first-child');
+            if (title) title.style.color = enabled ? '#d4900a' : '#c0c0c0';
+
+            const desc = wrapper.querySelector('div > div:last-child');
+            if (desc) {
+                desc.innerHTML = enabled
+                    ? 'Disable all market &amp; profit features. <span style="color:#d4900a;font-weight:600;">ACTIVE — market features locked.</span>'
+                    : 'Disable all market &amp; profit features for a no-marketplace playthrough.';
+            }
+        }
+
+        /**
+         * Sync all Iron Cow-locked setting DOM inputs to match their current config values.
+         * Called after enabling or disabling Iron Cow so the UI reflects forced values.
+         */
+        _syncIronCowSettingInputs() {
+            for (const id of IRON_COW_SETTINGS) {
+                const entry = config.settingsMap[id];
+                if (!entry) continue;
+                const input = document.getElementById(id);
+                if (!input) continue;
+                if (entry.type === 'checkbox') {
+                    input.checked = entry.isTrue ?? false;
+                } else {
+                    input.value = entry.value ?? '';
+                }
+            }
         }
 
         /**
