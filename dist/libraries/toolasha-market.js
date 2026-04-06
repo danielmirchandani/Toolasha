@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 1.66.0
+ * Version: 1.67.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -4314,7 +4314,7 @@ self.onmessage = function (e) {
                     let keyPrice = 0;
                     const chestKeyHrid = DUNGEON_CHEST_CHEST_KEYS[itemHrid];
                     if (chestKeyHrid) {
-                        const keyPricingSetting = config.getSettingValue('combatStats_keyPricing') || 'ask';
+                        const keyPricingSetting = config.getSettingValue('profitCalc_keyPricingMode') || 'ask';
                         const keyPrices = marketAPI.getPrice(chestKeyHrid);
                         const keyDetails = dataManager.getItemDetails(chestKeyHrid);
                         keyPrice = keyPrices?.[keyPricingSetting] ?? keyPrices?.ask ?? 0;
@@ -8858,6 +8858,7 @@ self.onmessage = function (e) {
             this.unregisterObserver = null;
             this.isInitialized = false;
             this.cleanupRegistry = cleanupRegistry_js.createCleanupRegistry();
+            this.orderBooksCache = {}; // itemHrid → { data: marketItemOrderBooks, lastUpdated }
         }
 
         /**
@@ -8869,12 +8870,6 @@ self.onmessage = function (e) {
             }
 
             if (!config.getSetting('market_showQueueLength')) {
-                return;
-            }
-
-            // Dependency check - requires estimated listing age feature
-            if (!config.getSetting('market_showEstimatedListingAge')) {
-                console.warn('[QueueLengthEstimator] Requires "Market: Show estimated listing age" to be enabled');
                 return;
             }
 
@@ -8890,6 +8885,14 @@ self.onmessage = function (e) {
         setupWebSocketListeners() {
             const orderBookHandler = (data) => {
                 if (data.marketItemOrderBooks) {
+                    const itemHrid = data.marketItemOrderBooks.itemHrid;
+                    if (itemHrid) {
+                        this.orderBooksCache[itemHrid] = {
+                            data: data.marketItemOrderBooks,
+                            lastUpdated: Date.now(),
+                        };
+                    }
+
                     // Clear processed flags to re-render with new data
                     document.querySelectorAll('.mwi-queue-length-set').forEach((container) => {
                         container.classList.remove('mwi-queue-length-set');
@@ -8959,7 +8962,7 @@ self.onmessage = function (e) {
                 return;
             }
 
-            const orderBooksCache = estimatedListingAge.orderBooksCache;
+            const orderBooksCache = this.orderBooksCache;
             if (!orderBooksCache[currentItemHrid]) {
                 return;
             }
@@ -15571,7 +15574,7 @@ self.onmessage = function (e) {
                     // Deduct chest key cost for dungeon chests
                     const chestKeyHrid = DUNGEON_CHEST_CHEST_KEYS[itemHrid];
                     if (chestKeyHrid) {
-                        const keyPricingSetting = config.getSettingValue('combatStats_keyPricing') || 'ask';
+                        const keyPricingSetting = config.getSettingValue('profitCalc_keyPricingMode') || 'ask';
                         const keyPrices = marketAPI.getPrice(chestKeyHrid);
                         const keyPrice = keyPrices?.[keyPricingSetting] ?? keyPrices?.ask ?? 0;
                         netValue -= keyPrice;
@@ -18297,7 +18300,7 @@ self.onmessage = function (e) {
                 let keyPrice = 0;
                 let keyName = null;
                 if (chestKeyHrid) {
-                    const setting = config.getSettingValue('combatStats_keyPricing') || 'ask';
+                    const setting = config.getSettingValue('profitCalc_keyPricingMode') || 'ask';
                     const keyPrices = marketAPI.getPrice(chestKeyHrid);
                     keyPrice = keyPrices?.[setting] ?? keyPrices?.ask ?? 0;
                     keyName = dataManager.getItemDetails(chestKeyHrid)?.name;

@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 1.66.0
+ * Version: 1.67.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -10370,7 +10370,7 @@
             return { ask: 0, bid: 0, dailyCost: 0, breakdown: [] };
         }
 
-        const keyPricingSetting = config.getSettingValue('combatStats_keyPricing') || 'ask';
+        const keyPricingSetting = config.getSettingValue('profitCalc_keyPricingMode') || 'ask';
 
         for (const loot of Object.values(lootMap)) {
             const keyHrid = DUNGEON_CHEST_KEYS[loot.itemHrid];
@@ -10833,7 +10833,7 @@
         shareStatsToChat(stats) {
             // Get chat message format from config (use getSettingValue for template type)
             const messageTemplate = config.getSettingValue('combatStatsChatMessage');
-            const priceKey = config.getSettingValue('combatStats_keyPricing') || 'ask';
+            const priceKey = config.getSettingValue('profitCalc_keyPricingMode') || 'ask';
 
             // Convert array format to string if needed
             let message = '';
@@ -11227,7 +11227,7 @@
                     ? formatters_js.coinFormatter(Math.round(num))
                     : new Intl.NumberFormat('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(num);
 
-            const priceKey = config.getSettingValue('combatStats_keyPricing') || 'ask';
+            const priceKey = config.getSettingValue('profitCalc_keyPricingMode') || 'ask';
 
             const statsRows = [
                 { label: 'Duration', value: stats.durationFormatted || '0s' },
@@ -11500,7 +11500,7 @@
                             } else if (row.breakdown && row.breakdown.length > 0) {
                                 // Add key pricing note if applicable
                                 if (row.showKeyPricingNote) {
-                                    const keyPricing = config.getSettingValue('combatStats_keyPricing') || 'ask';
+                                    const keyPricing = config.getSettingValue('profitCalc_keyPricingMode') || 'ask';
                                     const keyPricingNote = document.createElement('div');
                                     keyPricingNote.style.cssText = `
                                     font-size: 11px;

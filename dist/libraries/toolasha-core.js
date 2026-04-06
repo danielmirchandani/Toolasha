@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 1.66.0
+ * Version: 1.67.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -990,6 +990,14 @@
                     default: false,
                     help: 'Show pricing modes as "Instant Buy / Instant Sell" instead of "Buy: Ask / Sell: Bid"',
                 },
+                profitCalc_keyPricingMode: {
+                    id: 'profitCalc_keyPricingMode',
+                    label: 'Key pricing mode',
+                    type: 'select',
+                    default: 'ask',
+                    options: ['ask', 'bid'],
+                    help: 'Whether to use ask (instant buy) or bid (patient buy) prices when valuing dungeon keys in tooltips, networth, and combat income calculations.',
+                },
                 actions_artisanMaterialMode: {
                     id: 'actions_artisanMaterialMode',
                     label: 'Missing materials: Artisan requirement mode',
@@ -1180,14 +1188,6 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Adds a Statistics button to the Combat panel showing income, profit, consumable costs, EXP, and drop details',
-                },
-                combatStats_keyPricing: {
-                    id: 'combatStats_keyPricing',
-                    label: 'Combat Statistics: Pricing mode',
-                    type: 'select',
-                    default: 'ask',
-                    options: ['ask', 'bid'],
-                    help: 'Whether to use ask (instant buy) or bid (patient buy) prices for income, key costs, and profit calculations.',
                 },
                 combatStatsChatMessage: {
                     id: 'combatStatsChatMessage',

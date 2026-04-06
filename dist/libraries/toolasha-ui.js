@@ -1,11 +1,11 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 1.66.0
+ * Version: 1.67.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (config, dataManager, domObserver, formatters_js, timerRegistry_js, domObserverHelpers_js, storage, marketAPI, webSocketHook, reactInput_js, actionPanelHelper_js, expectedValueCalculator, bonusRevenueCalculator_js, marketData_js, profitConstants_js, efficiency_js, profitHelpers_js, profitCalculator, selectors_js, cleanupRegistry_js, settingsSchema_js, settingsStorage, enhancementCalculator_js, enhancementConfig_js) {
+(function (config, dataManager, domObserver, formatters_js, timerRegistry_js, domObserverHelpers_js, storage, marketAPI, efficiency_js, webSocketHook, reactInput_js, actionPanelHelper_js, expectedValueCalculator, bonusRevenueCalculator_js, marketData_js, profitConstants_js, profitHelpers_js, profitCalculator, selectors_js, cleanupRegistry_js, settingsSchema_js, settingsStorage, enhancementCalculator_js, enhancementConfig_js) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -1855,8 +1855,9 @@ ${hideRules}
             this.collections = {};
             this.favorites = {};
             this.showUncollected = false;
-            this.sortMode = 'default'; // 'default' | 'items-needed' | 'gold-cost'
+            this.sortMode = 'default'; // 'default' | 'items-needed' | 'gold-cost' | 'time-to-next-tier'
             this.catsObserver = null;
+            this.itemActionCache = null;
         }
 
         // -------------------------------------------------------------------------
@@ -1919,6 +1920,7 @@ ${hideRules}
             this.unregisterHandlers.forEach((fn) => fn());
             this.unregisterHandlers = [];
             this.isInitialized = false;
+            this.itemActionCache = null;
             this._removeCSS();
             if (this.catsObserver) {
                 this.catsObserver.disconnect();
@@ -2021,7 +2023,7 @@ ${hideRules}
                 const itemId = href.split('#')[1] || '';
                 if (!itemId) return;
 
-                const countText = el.querySelector('.Collection_count__3oj-t')?.textContent ?? '0';
+                const countText = el.querySelector('[class*="Collection_count"]')?.textContent ?? '0';
                 const n = unformatNumber(countText);
 
                 // Update cached counts
@@ -2098,6 +2100,7 @@ ${hideRules}
                     `<option value="default"${this.sortMode === 'default' ? ' selected' : ''}>Default</option>` +
                     `<option value="items-needed"${this.sortMode === 'items-needed' ? ' selected' : ''}>Items to next tier</option>` +
                     `<option value="gold-cost"${this.sortMode === 'gold-cost' ? ' selected' : ''}>Gold cost to next tier</option>` +
+                    `<option value="time-to-next-tier"${this.sortMode === 'time-to-next-tier' ? ' selected' : ''}>Time to next tier</option>` +
                     `</select></div>`
             );
             panelEl.querySelector('.cf-sort-select').addEventListener('change', (e) => {
@@ -2200,6 +2203,9 @@ ${hideRules}
         _applySorting(catsEl) {
             const tiles = Array.from(catsEl.querySelectorAll('.Collection_collectionContainer__3ZlUO'));
 
+            // Always clear time badges so they disappear when switching modes
+            catsEl.querySelectorAll('.toolasha-cf.time-to-tier').forEach((el) => el.remove());
+
             if (this.sortMode === 'default') {
                 tiles.forEach((el) => el.style.removeProperty('order'));
                 return;
@@ -2216,19 +2222,87 @@ ${hideRules}
                 let score;
                 if (this.sortMode === 'items-needed') {
                     score = needed;
-                } else {
-                    // gold-cost
+                } else if (this.sortMode === 'gold-cost') {
                     const price = marketAPI.getPrice('/items/' + itemId, 0);
                     const ask = price?.ask ?? 0;
                     score = ask > 0 && needed !== Infinity ? needed * ask : Infinity;
+                } else {
+                    // time-to-next-tier
+                    const itemsPerHour = this._getEffectiveItemsPerHour(itemId);
+                    score = itemsPerHour > 0 && needed !== Infinity ? needed / itemsPerHour : Infinity;
                 }
-                return { el, score };
+                return { el, score, itemId };
             });
 
             scored.sort((a, b) => a.score - b.score);
             scored.forEach(({ el }, i) => {
                 el.style.order = i;
             });
+
+            if (this.sortMode === 'time-to-next-tier') {
+                scored.forEach(({ el, score }) => {
+                    if (score === Infinity) return;
+                    const circleEl = el.querySelector('[class*="Collection_collection"]');
+                    if (!circleEl) return;
+                    circleEl.insertAdjacentHTML(
+                        'afterend',
+                        `<span class="toolasha-cf time-to-tier" style="font-size:10px;color:#aaa;display:block;text-align:center;line-height:1.4;">${formatters_js.timeReadable(score * 3600)}</span>`
+                    );
+                });
+            }
+        }
+
+        // -------------------------------------------------------------------------
+        // Time-to-next-tier helpers
+        // -------------------------------------------------------------------------
+
+        /**
+         * Lazily build a map of itemId → actionDetails for the first action that produces each item.
+         * Gathering actions take priority over production (first-come wins, and actionDetailMap
+         * iteration order is stable within a session).
+         */
+        _buildItemActionCache() {
+            if (this.itemActionCache) return;
+            this.itemActionCache = {};
+            const actionDetailMap = dataManager.getInitClientData()?.actionDetailMap ?? {};
+            for (const actionDetails of Object.values(actionDetailMap)) {
+                if (!actionDetails.outputItems?.length) continue;
+                const itemHrid = actionDetails.outputItems[0].itemHrid;
+                const itemId = itemHrid?.split('/').pop();
+                if (itemId && !(itemId in this.itemActionCache)) {
+                    this.itemActionCache[itemId] = actionDetails;
+                }
+            }
+        }
+
+        /**
+         * Returns the effective items per hour for a collection item, accounting for
+         * the player's current action speed, efficiency, and gathering quantity bonuses.
+         * Returns 0 if no direct gather/craft action exists for the item.
+         * @param {string} itemId - e.g. 'milk', 'log'
+         * @returns {number}
+         */
+        _getEffectiveItemsPerHour(itemId) {
+            this._buildItemActionCache();
+            const actionDetails = this.itemActionCache[itemId];
+            if (!actionDetails) return 0;
+
+            // Production actions consume input items; gathering actions do not
+            const isProduction = !!actionDetails.inputItems?.length;
+
+            try {
+                const ctx = efficiency_js.getActionEfficiencyContext(actionDetails, { isProduction });
+                const outputCount = actionDetails.outputItems[0].count ?? 1;
+                // totalGathering is 0 for production actions (efficiency.js zeroes it out)
+                const rate = (3600 / ctx.actionTime) * ctx.efficiencyMultiplier * (1 + ctx.totalGathering) * outputCount;
+                console.log(
+                    `[CollectionFilters] ${itemId}: actionTime=${ctx.actionTime?.toFixed(2)}s, effMult=${ctx.efficiencyMultiplier?.toFixed(2)}, gathering=${ctx.totalGathering?.toFixed(2)}, outputCount=${outputCount}, rate=${rate.toFixed(1)}/hr`
+                );
+                return rate;
+            } catch (err) {
+                console.warn(`[CollectionFilters] _getEffectiveItemsPerHour error for ${itemId}:`, err);
+                return 0;
+            }
         }
 
         // -------------------------------------------------------------------------
@@ -12839,8 +12913,7 @@ ${hideRules}
         'itemTooltip_detailedProfit',
         'itemTooltip_multiActionProfit',
         'taskProfitCalculator',
-        'combatStats_keyPricing',
-        // Prices in tooltips / UI
+        'profitCalc_keyPricingMode', // Prices in tooltips / UI
         'itemTooltip_prices',
         'itemTooltip_expectedValue',
         'expectedValue_showDrops',
@@ -22783,4 +22856,4 @@ ${hideRules}
 
     console.log('[Toolasha] UI library loaded');
 
-})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Utils.formatters, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Core.storage, Toolasha.Core.marketAPI, Toolasha.Core.webSocketHook, Toolasha.Utils.reactInput, Toolasha.Utils.actionPanelHelper, Toolasha.Market.expectedValueCalculator, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.profitConstants, Toolasha.Utils.efficiency, Toolasha.Utils.profitHelpers, Toolasha.Market.profitCalculator, Toolasha.Utils.selectors, Toolasha.Utils.cleanupRegistry, Toolasha.Core, Toolasha.Core.settingsStorage, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.enhancementConfig);
+})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Utils.formatters, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Core.storage, Toolasha.Core.marketAPI, Toolasha.Utils.efficiency, Toolasha.Core.webSocketHook, Toolasha.Utils.reactInput, Toolasha.Utils.actionPanelHelper, Toolasha.Market.expectedValueCalculator, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.profitConstants, Toolasha.Utils.profitHelpers, Toolasha.Market.profitCalculator, Toolasha.Utils.selectors, Toolasha.Utils.cleanupRegistry, Toolasha.Core, Toolasha.Core.settingsStorage, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.enhancementConfig);
