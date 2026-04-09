@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.0.0
+ * Version: 2.2.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -12297,6 +12297,38 @@
     }
 
     /**
+     * Build the click handler for a material tab.
+     * Defined outside the loop to satisfy the no-loop-func lint rule.
+     * @param {{ tab: HTMLElement|null }} tabRef - Holder updated to the tab element after creation
+     * @returns {Function}
+     */
+    function makeMaterialClickHandler(tabRef) {
+        return (_e, mat) => {
+            // Store a lazy recalculation function — called each time a buy modal opens,
+            // so the quantity always reflects current inventory state at that moment.
+            autofillManager.setPendingCalculation(() => {
+                if (storedEnhancementContext) {
+                    const ctx = storedEnhancementContext;
+                    const mats = materialCalculator_js.calculateEnhancementMaterialRequirements(
+                        ctx.itemHrid,
+                        ctx.startLevel,
+                        ctx.targetLevel,
+                        ctx.protectionItemHrid,
+                        ctx.protectFromLevel
+                    );
+                    return mats.find((m) => m.itemHrid === mat.itemHrid)?.missing ?? 0;
+                } else if (storedActionHrid && storedNumActions > 0) {
+                    const ignoreQueue = config.getSetting('actions_missingMaterialsButton_ignoreQueue') || false;
+                    const mats = materialCalculator_js.calculateMaterialRequirements(storedActionHrid, storedNumActions, !ignoreQueue);
+                    return mats.find((m) => m.itemHrid === mat.itemHrid)?.missing ?? 0;
+                }
+                return parseInt(tabRef.tab.getAttribute('data-missing-quantity') || '0', 10);
+            });
+            navigateToMarketplace(mat.itemHrid, 0);
+        };
+    }
+
+    /**
      * Create custom tabs for missing materials
      * @param {Array} missingMaterials - Array of missing material objects
      */
@@ -12341,29 +12373,10 @@
         // Create tab for each missing material
         currentMaterialsTabs.length = 0; // Clear without reassigning (preserves observer reference)
         for (const material of missingMaterials) {
-            const tab = createMaterialTab(material, referenceTab, (_e, mat) => {
-                // Store a lazy recalculation function — called each time a buy modal opens,
-                // so the quantity always reflects current inventory state at that moment.
-                autofillManager.setPendingCalculation(() => {
-                    if (storedEnhancementContext) {
-                        const ctx = storedEnhancementContext;
-                        const mats = materialCalculator_js.calculateEnhancementMaterialRequirements(
-                            ctx.itemHrid,
-                            ctx.startLevel,
-                            ctx.targetLevel,
-                            ctx.protectionItemHrid,
-                            ctx.protectFromLevel
-                        );
-                        return mats.find((m) => m.itemHrid === mat.itemHrid)?.missing ?? 0;
-                    } else if (storedActionHrid && storedNumActions > 0) {
-                        const ignoreQueue = config.getSetting('actions_missingMaterialsButton_ignoreQueue') || false;
-                        const mats = materialCalculator_js.calculateMaterialRequirements(storedActionHrid, storedNumActions, !ignoreQueue);
-                        return mats.find((m) => m.itemHrid === mat.itemHrid)?.missing ?? 0;
-                    }
-                    return parseInt(tab.getAttribute('data-missing-quantity') || '0', 10);
-                });
-                navigateToMarketplace(mat.itemHrid, 0);
-            });
+            const tabRef = { tab: null };
+            const handler = makeMaterialClickHandler(tabRef);
+            const tab = createMaterialTab(material, referenceTab, handler);
+            tabRef.tab = tab;
             tabsContainer.appendChild(tab);
             currentMaterialsTabs.push(tab);
         }

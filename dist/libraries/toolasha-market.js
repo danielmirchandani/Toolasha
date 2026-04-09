@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.0.0
+ * Version: 2.2.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -20852,6 +20852,231 @@ self.onmessage = function (e) {
     const inventoryCategoryTotals = new InventoryCategoryTotals();
 
     /**
+     * Loadout Snapshot
+     *
+     * Listens for `loadouts_updated` WebSocket messages to capture all loadout configurations
+     * (equipment, abilities, consumables, enhancement levels) in real time.
+     *
+     * Stored snapshots are used by profit calculators to apply the correct tool/equipment
+     * bonuses for a skill even when that loadout is not currently equipped.
+     *
+     * Skill matching: the loadout's actionTypeHrid (e.g. "/action_types/brewing") is compared
+     * to the action type of the profit calculation. An "All Skills" loadout (empty actionTypeHrid)
+     * is used as a fallback when no skill-specific snapshot is found.
+     *
+     * Priority: skill default > all skills default > skill non-default > all skills non-default
+     */
+
+
+    const STORAGE_KEY_PREFIX = 'loadout_snapshots';
+
+    /**
+     * Get character-scoped storage key.
+     * @returns {string}
+     */
+    function getStorageKey$1() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX}_${charId}`;
+    }
+
+    /**
+     * Parse a wearable hash string into itemLocationHrid, itemHrid, and enhancementLevel.
+     * Format: "characterId::/item_locations/location::/items/item_hrid::enhancementLevel"
+     * Empty string means no item in that slot.
+     * @param {string} itemLocationHrid - The equipment slot key (e.g. "/item_locations/body")
+     * @param {string} wearableHash - The wearable hash value
+     * @returns {{ itemLocationHrid: string, itemHrid: string, enhancementLevel: number }|null}
+     */
+    function parseWearable(itemLocationHrid, wearableHash) {
+        if (!wearableHash) return null;
+
+        const parts = wearableHash.split('::');
+        const itemHrid = parts.find((p) => p.startsWith('/items/'));
+        if (!itemHrid) return null;
+
+        const lastPart = parts[parts.length - 1];
+        const enhancementLevel = !lastPart.startsWith('/') ? parseInt(lastPart, 10) || 0 : 0;
+
+        return { itemLocationHrid, itemHrid, enhancementLevel };
+    }
+
+    /**
+     * Convert a server loadout object into our snapshot format.
+     * @param {Object} loadout - A loadout entry from characterLoadoutMap
+     * @returns {Object} snapshot
+     */
+    function buildSnapshot(loadout) {
+        // Parse equipment from wearableMap
+        const equipment = [];
+        for (const [locationHrid, hash] of Object.entries(loadout.wearableMap || {})) {
+            const parsed = parseWearable(locationHrid, hash);
+            if (parsed) equipment.push(parsed);
+        }
+
+        // Parse drinks
+        const drinks = (loadout.drinkItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse food
+        const food = (loadout.foodItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse abilities
+        const abilities = [];
+        for (const [slot, hrid] of Object.entries(loadout.abilityMap || {})) {
+            if (hrid) abilities.push({ abilityHrid: hrid, slot: parseInt(slot, 10) });
+        }
+
+        return {
+            name: loadout.name,
+            actionTypeHrid: loadout.actionTypeHrid || '',
+            isDefault: !!loadout.isDefault,
+            equipment,
+            abilities,
+            food,
+            drinks,
+            savedAt: Date.now(),
+        };
+    }
+
+    class LoadoutSnapshot {
+        constructor() {
+            this.snapshots = {}; // In-memory cache: { [loadoutName]: snapshot }
+            this.loadoutsUpdatedHandler = null;
+            this.isInitialized = false;
+        }
+
+        async initialize() {
+            if (this.isInitialized) return;
+            this.isInitialized = true;
+
+            // Load existing snapshots into memory
+            this.snapshots = (await storage.getJSON(getStorageKey$1(), 'settings', null)) || {};
+            console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
+
+            // Listen for loadouts_updated WebSocket messages
+            this.loadoutsUpdatedHandler = (data) => this._onLoadoutsUpdated(data);
+            webSocketHook.on('loadouts_updated', this.loadoutsUpdatedHandler);
+        }
+
+        /**
+         * Handle a loadouts_updated WebSocket message.
+         * Replaces all snapshots with the server's current state.
+         * @param {Object} data - The WebSocket message payload
+         */
+        _onLoadoutsUpdated(data) {
+            console.log('[LoadoutSnapshot] loadouts_updated WebSocket message received');
+            const loadoutMap = data.characterLoadoutMap;
+            if (!loadoutMap) {
+                console.log('[LoadoutSnapshot] no characterLoadoutMap in message');
+                return;
+            }
+
+            const newSnapshots = {};
+            for (const [id, loadout] of Object.entries(loadoutMap)) {
+                if (!loadout.name) continue;
+                newSnapshots[id] = buildSnapshot(loadout);
+                console.log(
+                    `[LoadoutSnapshot]   → ${loadout.name} (id=${id}): type=${loadout.actionTypeHrid || 'All Skills'}, default=${loadout.isDefault}`
+                );
+            }
+
+            this.snapshots = newSnapshots;
+            storage.setJSON(getStorageKey$1(), this.snapshots, 'settings');
+            console.log(
+                `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
+                Object.values(newSnapshots).map((s) => s.name)
+            );
+        }
+
+        /**
+         * Find the best snapshot for a given action type.
+         * Priority: skill default > all skills default > skill non-default > all skills non-default
+         * @param {string} actionTypeHrid - e.g. "/action_types/brewing"
+         * @returns {Object|null} snapshot entry or null
+         */
+        _findSnapshot(actionTypeHrid) {
+            if (!config.getSetting('loadoutSnapshot')) return null;
+
+            let skillDefault = null;
+            let allSkillsDefault = null;
+            let skillNonDefault = null;
+            let allSkillsNonDefault = null;
+
+            for (const snapshot of Object.values(this.snapshots)) {
+                if (snapshot.actionTypeHrid === actionTypeHrid) {
+                    if (snapshot.isDefault) {
+                        skillDefault = snapshot;
+                    } else {
+                        skillNonDefault = snapshot;
+                    }
+                } else if (snapshot.actionTypeHrid === '') {
+                    if (snapshot.isDefault) {
+                        allSkillsDefault = snapshot;
+                    } else {
+                        allSkillsNonDefault = snapshot;
+                    }
+                }
+            }
+
+            return skillDefault || allSkillsDefault || skillNonDefault || allSkillsNonDefault || null;
+        }
+
+        /**
+         * Get a Map<itemLocationHrid, item> for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned Map has the same format as dataManager.getEquipment().
+         * @param {string} actionTypeHrid
+         * @returns {Map<string, Object>|null}
+         */
+        getSnapshotForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot || !snapshot.equipment?.length) return null;
+            return new Map(snapshot.equipment.map((e) => [e.itemLocationHrid, e]));
+        }
+
+        /**
+         * Get the drink slots array for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned array has the same format as dataManager.getActionDrinkSlots().
+         * @param {string} actionTypeHrid
+         * @returns {Array<{itemHrid: string}>|null}
+         */
+        getSnapshotDrinksForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            // Filter out empty slots so callers get only actual items
+            const filled = (snapshot.drinks || []).filter((d) => d.itemHrid);
+            return filled.length > 0 ? filled : null;
+        }
+
+        /**
+         * Get the name and default status of the saved loadout being used for a given action type.
+         * Returns an object with name and isDefault, or null if no snapshot exists or feature is disabled.
+         * @param {string} actionTypeHrid
+         * @returns {{ name: string, isDefault: boolean }|null}
+         */
+        getSnapshotInfoForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            return { name: snapshot.name, isDefault: !!snapshot.isDefault };
+        }
+
+        disable() {
+            if (this.loadoutsUpdatedHandler) {
+                webSocketHook.off('loadouts_updated', this.loadoutsUpdatedHandler);
+                this.loadoutsUpdatedHandler = null;
+            }
+
+            this.isInitialized = false;
+        }
+    }
+
+    const loadoutSnapshot = new LoadoutSnapshot();
+
+    /**
      * Custom Inventory Tabs — Data Module
      * Manages tab configuration storage and CRUD operations.
      * All mutating helpers return new objects (never mutate in place).
@@ -21040,6 +21265,26 @@ self.onmessage = function (e) {
         if (result && !result.tab.items.includes(itemHrid)) {
             result.tab.items.push(itemHrid);
         }
+        return c;
+    }
+
+    /**
+     * Reorder an item within a tab's items array
+     * @param {Object} config
+     * @param {string} tabId
+     * @param {number} fromIndex
+     * @param {number} toIndex
+     * @returns {Object} new config
+     */
+    function reorderItem(config, tabId, fromIndex, toIndex) {
+        const c = clone(config);
+        const result = _findNode(c.tabs, tabId);
+        if (!result) return c;
+        const items = result.tab.items;
+        if (fromIndex < 0 || fromIndex >= items.length) return c;
+        const clamped = Math.max(0, Math.min(toIndex, items.length - 1));
+        const [removed] = items.splice(fromIndex, 1);
+        items.splice(clamped, 0, removed);
         return c;
     }
 
@@ -21268,6 +21513,11 @@ self.onmessage = function (e) {
     color: #666;
     margin-left: 4px;
 }
+.toolasha-ct-section-value {
+    font-size: 11px;
+    color: #aaa;
+    margin-left: 6px;
+}
 .toolasha-ct-section-actions {
     display: none;
     gap: 2px;
@@ -21333,8 +21583,15 @@ self.onmessage = function (e) {
     padding: 16px;
     width: 380px;
     max-height: 80vh;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     color: #d4d4d4;
+}
+.toolasha-ct-modal-body {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
 }
 .toolasha-ct-modal * { box-sizing: border-box; }
 .toolasha-ct-modal h3 {
@@ -21362,6 +21619,7 @@ self.onmessage = function (e) {
 .toolasha-ct-swatches {
     display: flex;
     gap: 6px;
+    align-items: center;
     margin-bottom: 12px;
 }
 .toolasha-ct-swatch {
@@ -21372,6 +21630,41 @@ self.onmessage = function (e) {
     cursor: pointer;
 }
 .toolasha-ct-swatch--active { border-color: #fff; }
+.toolasha-ct-swatch-divider {
+    width: 1px;
+    height: 18px;
+    background: #555;
+    margin: 0 2px;
+}
+.toolasha-ct-color-picker {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    background: none;
+    overflow: hidden;
+}
+.toolasha-ct-color-picker--active { border-color: #fff; }
+.toolasha-ct-color-picker::-webkit-color-swatch-wrapper { padding: 0; }
+.toolasha-ct-color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
+.toolasha-ct-color-picker::-moz-color-swatch { border: none; border-radius: 50%; }
+.toolasha-ct-modal input.toolasha-ct-hex-input {
+    width: 72px;
+    height: 22px;
+    box-sizing: border-box;
+    background: #333;
+    border: 1px solid #555;
+    border-radius: 3px;
+    color: #eee;
+    font-size: 11px;
+    padding: 0 5px;
+    font-family: monospace;
+    margin: 0;
+}
 .toolasha-ct-search-results {
     max-height: 160px;
     overflow-y: auto;
@@ -21391,6 +21684,21 @@ self.onmessage = function (e) {
     height: 24px;
     flex-shrink: 0;
 }
+.toolasha-ct-search-group-header { font-weight: 500; }
+.toolasha-ct-search-level-row { padding-left: 32px; }
+.toolasha-ct-level-badges {
+    color: #888;
+    font-size: 11px;
+    margin-left: 4px;
+    flex-shrink: 0;
+}
+.toolasha-ct-expand-btn {
+    margin-left: auto;
+    color: #666;
+    font-size: 11px;
+    flex-shrink: 0;
+    padding: 0 2px;
+}
 .toolasha-ct-assigned-list {
     margin-top: 8px;
 }
@@ -21402,6 +21710,7 @@ self.onmessage = function (e) {
     border-radius: 3px;
 }
 .toolasha-ct-assigned-item:hover { background: rgba(255,255,255,0.05); }
+.toolasha-ct-assigned-item.toolasha-ct-drag-over { background: rgba(255,255,255,0.12); outline: 1px dashed #888; }
 .toolasha-ct-assigned-item svg {
     width: 20px;
     height: 20px;
@@ -21410,6 +21719,15 @@ self.onmessage = function (e) {
 .toolasha-ct-assigned-item .toolasha-ct-node-btn {
     margin-left: auto;
 }
+.toolasha-ct-drag-handle {
+    cursor: grab;
+    color: #555;
+    font-size: 14px;
+    flex-shrink: 0;
+    user-select: none;
+    padding: 0 2px;
+}
+.toolasha-ct-drag-handle:active { cursor: grabbing; }
 .toolasha-ct-modal-footer {
     display: flex;
     justify-content: space-between;
@@ -21536,6 +21854,7 @@ self.onmessage = function (e) {
             this._deleteConfirmId = null;
             this._dragInProgress = false; // Suppress click-toggles immediately after a drag-drop
             this._inventoryTabEl = null; // Ref to native Inventory tab button (for restore on cleanup)
+            this._expandedSearchHrids = null; // Set of base hrids expanded in the item picker
         }
 
         // -----------------------------------------------------------------------
@@ -21590,6 +21909,12 @@ self.onmessage = function (e) {
                 if (this._isActive) this._applyLayout();
             });
             this._unregisterHandlers.push(unregisterSort);
+
+            // Inject "Add to Tab" button into item action menus
+            const unregisterItemAction = domObserver.onClass('CustomTabs_itemAction', 'Item_actionMenu', (menu) => {
+                this._injectAddToTabButton(menu);
+            });
+            this._unregisterHandlers.push(unregisterItemAction);
         }
 
         cleanup() {
@@ -21609,6 +21934,7 @@ self.onmessage = function (e) {
 
             this._tabBtn?.remove();
             this._styleEl?.remove();
+            document.querySelectorAll('.toolasha-ct-add-to-tab').forEach((el) => el.remove());
             this._isActive = false;
         }
 
@@ -21662,7 +21988,7 @@ self.onmessage = function (e) {
                 }
 
                 for (const tab of tabList.querySelectorAll('[role="tab"]:not(.toolasha-inv-tab)')) {
-                    tab.addEventListener('click', () => this._deactivatePanel());
+                    tab.addEventListener('click', () => this._deactivatePanel(tab));
                 }
 
                 this._applyDefaultTabSetting();
@@ -21713,12 +22039,18 @@ self.onmessage = function (e) {
             this._applyLayout();
         }
 
-        _deactivatePanel() {
+        _deactivatePanel(clickedTab = null) {
             if (!this._isActive) return;
             this._isActive = false;
             if (this._tabBtn) this._tabBtn.classList.remove('Mui-selected');
             this._clearLayout();
             this._showGameContent();
+            // Restore the selected state on the clicked native tab. React won't re-render because
+            // MUI still thinks this tab was selected (we bypassed its state when activating Toolasha).
+            if (clickedTab) {
+                clickedTab.classList.add('Mui-selected');
+                clickedTab.setAttribute('aria-selected', 'true');
+            }
         }
 
         /**
@@ -21874,7 +22206,8 @@ self.onmessage = function (e) {
                 const assignedSet = getAssignedItemSet(this._config);
                 const unorgTiles = [];
                 for (const [hrid, tiles] of tileMap) {
-                    if (!assignedSet.has(hrid)) {
+                    const baseHrid = hrid.replace(/\+\d+$/, '');
+                    if (!assignedSet.has(hrid) && !assignedSet.has(baseHrid)) {
                         for (const tile of tiles) unorgTiles.push(tile);
                     }
                 }
@@ -21896,10 +22229,7 @@ self.onmessage = function (e) {
                 if (tab.open) {
                     const sectionTiles = [];
                     for (const hrid of tab.items) {
-                        const tiles = tileMap.get(hrid);
-                        if (!tiles) continue;
-                        for (const tile of tiles) sectionTiles.push(tile);
-                        tileMap.delete(hrid);
+                        for (const tile of this._claimTilesForHrid(hrid, tileMap)) sectionTiles.push(tile);
                     }
                     this._assignTileOrders(sectionTiles, headerOrder + 1);
 
@@ -21978,12 +22308,72 @@ self.onmessage = function (e) {
             const topbar = document.createElement('div');
             topbar.className = 'toolasha-ct-topbar';
             topbar.innerHTML = '<span style="font-size:12px;color:#888;">Custom Tabs</span>';
+
             const addBtn = document.createElement('button');
             addBtn.className = 'toolasha-ct-add-btn';
             addBtn.textContent = '+ Tab';
             addBtn.addEventListener('click', () => this._onAddTab(null));
+
+            const exportBtn = document.createElement('button');
+            exportBtn.className = 'toolasha-ct-add-btn';
+            exportBtn.textContent = 'Export';
+            exportBtn.addEventListener('click', () => this._exportLayout());
+
+            const importBtn = document.createElement('button');
+            importBtn.className = 'toolasha-ct-add-btn';
+            importBtn.textContent = 'Import';
+            importBtn.addEventListener('click', () => this._importLayout());
+
             topbar.appendChild(addBtn);
+            topbar.appendChild(exportBtn);
+            topbar.appendChild(importBtn);
             return topbar;
+        }
+
+        /**
+         * Serialize the current layout to a JSON file and trigger a download.
+         */
+        _exportLayout() {
+            const payload = { _toolasha: 'tabs-v1', ...this._config };
+            const json = JSON.stringify(payload, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'toolasha-tabs.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        /**
+         * Open a file picker, read the selected JSON, validate it, and replace the current layout.
+         */
+        _importLayout() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json,application/json';
+            input.addEventListener('change', async () => {
+                const file = input.files?.[0];
+                if (!file) return;
+                try {
+                    const text = await file.text();
+                    const parsed = JSON.parse(text);
+                    if (parsed._toolasha !== 'tabs-v1' || !Array.isArray(parsed.tabs)) {
+                        alert('[Toolasha] Invalid layout file.');
+                        console.error('[CustomTabs] Import failed: missing _toolasha marker or tabs array', parsed);
+                        return;
+                    }
+                    const { _toolasha: _, ...config } = parsed;
+                    this._config = config;
+                    await this._save();
+                    this._removeInjectedEls();
+                    this._applyLayout();
+                } catch (err) {
+                    alert('[Toolasha] Failed to read layout file.');
+                    console.error('[CustomTabs] Import error:', err);
+                }
+            });
+            input.click();
         }
 
         /**
@@ -21997,15 +22387,50 @@ self.onmessage = function (e) {
             for (const tile of tiles) {
                 const svg = tile.querySelector('svg[aria-label]');
                 if (!svg) continue;
-                const label = svg.getAttribute('aria-label');
-                // Strip enhancement suffix (e.g. "Cheese Boots +3" → "Cheese Boots")
-                const baseName = label.replace(/\s+\+\d+$/, '');
+                const baseName = svg.getAttribute('aria-label');
                 const hrid = this._nameToHrid(baseName);
                 if (!hrid) continue;
+                // Always register under base hrid (matches all enhancement levels)
                 if (!map.has(hrid)) map.set(hrid, []);
                 map.get(hrid).push(tile);
+                // Check for enhancement level badge element
+                const enhEl = tile.querySelector('[class*="Item_enhancementLevel"]');
+                if (enhEl) {
+                    const level = parseInt(enhEl.textContent.trim().replace('+', ''), 10);
+                    if (!isNaN(level) && level > 0) {
+                        const enhancedHrid = `${hrid}+${level}`;
+                        if (!map.has(enhancedHrid)) map.set(enhancedHrid, []);
+                        map.get(enhancedHrid).push(tile);
+                    }
+                }
             }
             return map;
+        }
+
+        /**
+         * Claim tiles for a given hrid from the tileMap.
+         * - Base hrid (/items/foo): claims all tiles (all enhancement levels)
+         * - Enhanced hrid (/items/foo+3): claims only +3 tiles and removes them from the base key too
+         * @param {string} hrid
+         * @param {Map} tileMap
+         * @returns {HTMLElement[]}
+         */
+        _claimTilesForHrid(hrid, tileMap) {
+            const entries = tileMap.get(hrid);
+            if (!entries) return [];
+            tileMap.delete(hrid);
+            if (/\+\d+$/.test(hrid)) {
+                // Enhanced hrid: also remove these tiles from the base key to prevent double-claim
+                const baseHrid = hrid.replace(/\+\d+$/, '');
+                const baseEntries = tileMap.get(baseHrid);
+                if (baseEntries) {
+                    const claimedSet = new Set(entries);
+                    const remaining = baseEntries.filter((t) => !claimedSet.has(t));
+                    if (remaining.length > 0) tileMap.set(baseHrid, remaining);
+                    else tileMap.delete(baseHrid);
+                }
+            }
+            return entries;
         }
 
         /**
@@ -22159,10 +22584,43 @@ self.onmessage = function (e) {
                 // Collect all tiles for this tab's items
                 const sectionTiles = [];
                 for (const hrid of tab.items) {
-                    const tiles = tileMap.get(hrid);
-                    if (!tiles) continue;
-                    for (const tile of tiles) sectionTiles.push(tile);
-                    tileMap.delete(hrid);
+                    for (const tile of this._claimTilesForHrid(hrid, tileMap)) sectionTiles.push(tile);
+                }
+
+                // Warn when items are assigned but none found in the DOM (collapsed game category)
+                if (tab.items.length > 0 && sectionTiles.length === 0) {
+                    const warn = document.createElement('span');
+                    warn.textContent = '⚠';
+                    warn.title =
+                        'Items are hidden — expand the relevant categories in the Inventory tab to show them here.';
+                    warn.style.cssText = 'color:#ff3333;margin-left:4px;cursor:default;font-size:13px;flex-shrink:0;';
+                    const actionsEl = header.querySelector('.toolasha-ct-section-actions');
+                    if (actionsEl) header.insertBefore(warn, actionsEl);
+                    else header.appendChild(warn);
+                }
+
+                // Sum badge values across all tiles in this section
+                const valueKey = (() => {
+                    const mode = inventorySort.currentMode;
+                    if (mode === 'ask' || mode === 'bid') {
+                        return config.getSetting('invSort_showBadges') ? mode + 'Value' : null;
+                    }
+                    if (mode === 'none') {
+                        const badgesOnNone = config.getSettingValue('invSort_badgesOnNone', 'None');
+                        return badgesOnNone !== 'None' ? badgesOnNone.toLowerCase() + 'Value' : null;
+                    }
+                    return null;
+                })();
+                if (valueKey) {
+                    const total = sectionTiles.reduce((sum, t) => sum + (parseFloat(t.dataset[valueKey]) || 0), 0);
+                    if (total > 0) {
+                        const valueBadge = document.createElement('span');
+                        valueBadge.className = 'toolasha-ct-section-value';
+                        valueBadge.textContent = formatters_js.formatKMB(total, 2);
+                        const actionsEl = header.querySelector('.toolasha-ct-section-actions');
+                        if (actionsEl) header.insertBefore(valueBadge, actionsEl);
+                        else header.appendChild(valueBadge);
+                    }
                 }
 
                 // Sort tiles by value if a sort mode is active, then assign orders
@@ -22197,7 +22655,7 @@ self.onmessage = function (e) {
          */
         _removeTilesFromMapForChildren(tabs, tileMap) {
             for (const tab of tabs) {
-                for (const hrid of tab.items) tileMap.delete(hrid);
+                for (const hrid of tab.items) this._claimTilesForHrid(hrid, tileMap);
                 if (tab.children.length > 0) this._removeTilesFromMapForChildren(tab.children, tileMap);
             }
         }
@@ -22240,7 +22698,9 @@ self.onmessage = function (e) {
             const assignedSet = getAssignedItemSet(this._config);
             const remainingEntries = [];
             for (const [hrid, tiles] of tileMap) {
-                if (!assignedSet.has(hrid)) {
+                // An enhanced key (e.g. /items/foo+3) is also covered if the base hrid is assigned
+                const baseHrid = hrid.replace(/\+\d+$/, '');
+                if (!assignedSet.has(hrid) && !assignedSet.has(baseHrid)) {
                     remainingEntries.push({ hrid, tiles });
                 }
             }
@@ -22260,6 +22720,22 @@ self.onmessage = function (e) {
             this._injectedEls.push(headerEl);
 
             if (this._unorgOpen) {
+                // Sort remaining entries by category sortIndex then item sortIndex
+                const initData = dataManager.getInitClientData();
+                const itemDetailMap = initData?.itemDetailMap || {};
+                const categoryDetailMap = initData?.itemCategoryDetailMap || {};
+                remainingEntries.sort((a, b) => {
+                    const baseA = a.hrid.replace(/\+\d+$/, '');
+                    const baseB = b.hrid.replace(/\+\d+$/, '');
+                    const detA = itemDetailMap[baseA];
+                    const detB = itemDetailMap[baseB];
+                    const catSortA = categoryDetailMap[detA?.categoryHrid]?.sortIndex ?? 9999;
+                    const catSortB = categoryDetailMap[detB?.categoryHrid]?.sortIndex ?? 9999;
+                    if (catSortA !== catSortB) return catSortA - catSortB;
+                    const itemSortA = detA?.sortIndex ?? 9999;
+                    const itemSortB = detB?.sortIndex ?? 9999;
+                    return itemSortA - itemSortB;
+                });
                 const unorgTiles = remainingEntries.flatMap(({ tiles }) => tiles);
                 orderCounter = this._assignTileOrders(unorgTiles, orderCounter);
             }
@@ -22274,6 +22750,7 @@ self.onmessage = function (e) {
         _openEditor(tabId) {
             this._editorTabId = tabId;
             this._deleteConfirmId = null;
+            this._expandedSearchHrids = new Set();
             const result = findTab(this._config, tabId);
             if (!result) return;
             const tab = result.tab;
@@ -22296,25 +22773,30 @@ self.onmessage = function (e) {
             modal.className = 'toolasha-ct-modal';
 
             modal.innerHTML = `
-            <h3>Edit Tab</h3>
-            <label>Name</label>
-            <input type="text" class="toolasha-ct-editor-name" value="${this._escHtml(tab.name)}">
+            <div class="toolasha-ct-modal-body">
+                <h3>Edit Tab</h3>
+                <label>Name</label>
+                <input type="text" class="toolasha-ct-editor-name" value="${this._escHtml(tab.name)}">
 
-            <label>Color</label>
-            <div class="toolasha-ct-swatches"></div>
+                <label>Color</label>
+                <div class="toolasha-ct-swatches"></div>
 
-            <label>Add Category</label>
-            <div class="toolasha-ct-categories"></div>
+                <label>Add Category</label>
+                <div class="toolasha-ct-categories"></div>
 
-            <label>Items</label>
-            <div class="toolasha-ct-search-row">
-                <input type="search" class="toolasha-ct-editor-search" placeholder="Search items to add...">
-                <select class="toolasha-ct-cat-filter">
-                    <option value="">All</option>
-                </select>
+                <label>From Loadout</label>
+                <div class="toolasha-ct-loadouts"></div>
+
+                <label>Items</label>
+                <div class="toolasha-ct-search-row">
+                    <input type="search" class="toolasha-ct-editor-search" placeholder="Search items to add...">
+                    <select class="toolasha-ct-cat-filter">
+                        <option value="">All</option>
+                    </select>
+                </div>
+                <div class="toolasha-ct-search-results"></div>
+                <div class="toolasha-ct-assigned-list"></div>
             </div>
-            <div class="toolasha-ct-search-results"></div>
-            <div class="toolasha-ct-assigned-list"></div>
 
             <div class="toolasha-ct-modal-footer">
                 <button class="toolasha-ct-delete-btn">Delete Tab</button>
@@ -22334,27 +22816,83 @@ self.onmessage = function (e) {
             });
 
             const swatchContainer = modal.querySelector('.toolasha-ct-swatches');
+            const isPreset = (color) => color === null || COLOR_PRESETS.includes(color);
+
+            const applyColor = (color) => {
+                this._config = setTabColor(this._config, tabId, color);
+                this._save();
+                this._applyLayout();
+            };
+
+            const updateActiveStates = (activeColor) => {
+                swatchContainer.querySelectorAll('.toolasha-ct-swatch').forEach((s) => {
+                    s.classList.toggle('toolasha-ct-swatch--active', s.dataset.color === (activeColor ?? '__null__'));
+                });
+                colorPicker.classList.toggle('toolasha-ct-color-picker--active', !!activeColor && !isPreset(activeColor));
+            };
+
+            // Preset swatches (null = clear)
             for (const color of [null, ...COLOR_PRESETS]) {
                 const sw = document.createElement('span');
-                sw.className = 'toolasha-ct-swatch' + (tab.color === color ? ' toolasha-ct-swatch--active' : '');
+                sw.className = 'toolasha-ct-swatch';
+                sw.dataset.color = color ?? '__null__';
                 sw.style.background = color || '#555';
-                if (!color) sw.textContent = '×';
-                sw.style.textAlign = 'center';
-                sw.style.lineHeight = '18px';
-                sw.style.fontSize = '12px';
+                if (!color) {
+                    sw.textContent = '×';
+                    sw.style.textAlign = 'center';
+                    sw.style.lineHeight = '18px';
+                    sw.style.fontSize = '12px';
+                }
                 sw.addEventListener('click', () => {
-                    this._config = setTabColor(this._config, tabId, color);
-                    this._save();
-                    this._applyLayout();
-                    swatchContainer
-                        .querySelectorAll('.toolasha-ct-swatch')
-                        .forEach((s) => s.classList.remove('toolasha-ct-swatch--active'));
-                    sw.classList.add('toolasha-ct-swatch--active');
+                    applyColor(color);
+                    colorPicker.value = color || '#555555';
+                    hexInput.value = color || '';
+                    updateActiveStates(color);
                 });
                 swatchContainer.appendChild(sw);
             }
 
+            // Divider
+            const divider = document.createElement('span');
+            divider.className = 'toolasha-ct-swatch-divider';
+            swatchContainer.appendChild(divider);
+
+            // Native color picker
+            const colorPicker = document.createElement('input');
+            colorPicker.type = 'color';
+            colorPicker.className = 'toolasha-ct-color-picker';
+            colorPicker.title = 'Custom color';
+            colorPicker.value = tab.color && tab.color.startsWith('#') ? tab.color : '#888888';
+            colorPicker.addEventListener('input', () => {
+                const hex = colorPicker.value;
+                hexInput.value = hex;
+                applyColor(hex);
+                updateActiveStates(hex);
+            });
+            swatchContainer.appendChild(colorPicker);
+
+            // Hex text input
+            const hexInput = document.createElement('input');
+            hexInput.type = 'text';
+            hexInput.className = 'toolasha-ct-hex-input';
+            hexInput.placeholder = '#rrggbb';
+            hexInput.maxLength = 7;
+            hexInput.value = tab.color || '';
+            hexInput.addEventListener('input', () => {
+                const val = hexInput.value.trim();
+                if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+                    colorPicker.value = val;
+                    applyColor(val);
+                    updateActiveStates(val);
+                }
+            });
+            swatchContainer.appendChild(hexInput);
+
+            // Set initial active state
+            updateActiveStates(tab.color);
+
             this._renderCategoryButtons(modal.querySelector('.toolasha-ct-categories'), tabId);
+            this._renderLoadoutButtons(modal.querySelector('.toolasha-ct-loadouts'), tabId);
             this._populateCategoryFilter(modal.querySelector('.toolasha-ct-cat-filter'));
 
             const searchInput = modal.querySelector('.toolasha-ct-editor-search');
@@ -22429,6 +22967,16 @@ self.onmessage = function (e) {
             const currentItems = new Set(currentTab?.items || []);
             const addAllItems = config.getSettingValue('inventoryTabs_categoryAddAll');
             const ownedHrids = addAllItems ? null : this._getOwnedItemHrids();
+
+            // Build map: baseHrid → Set<enhancementLevel> from current inventory
+            const levelMap = new Map();
+            for (const item of dataManager.getInventory() || []) {
+                if (item.itemLocationHrid === '/item_locations/inventory') {
+                    if (!levelMap.has(item.itemHrid)) levelMap.set(item.itemHrid, new Set());
+                    levelMap.get(item.itemHrid).add(item.enhancementLevel || 0);
+                }
+            }
+
             let count = 0;
 
             for (const [hrid, details] of Object.entries(initData.itemDetailMap)) {
@@ -22439,19 +22987,78 @@ self.onmessage = function (e) {
                 if (lowerQuery && !details.name.toLowerCase().includes(lowerQuery)) continue;
                 if (ownedHrids && !ownedHrids.has(hrid)) continue;
 
-                const row = document.createElement('div');
-                row.className = 'toolasha-ct-search-result';
                 const iconId = hrid.replace('/items/', '');
                 const spriteUrl = getSpriteBaseUrl();
                 const iconHref = spriteUrl ? `${spriteUrl}#${iconId}` : `#${iconId}`;
-                row.innerHTML = `<svg viewBox="0 0 32 32"><use href="${iconHref}"></use></svg><span>${this._escHtml(details.name)}</span>`;
-                row.addEventListener('click', () => {
-                    this._config = addItem(this._config, tabId, hrid);
-                    this._save();
-                    row.remove();
-                    this._renderAssignedItems(container.parentElement.querySelector('.toolasha-ct-assigned-list'), tabId);
-                });
-                container.appendChild(row);
+
+                const ownedLevels = levelMap.get(hrid);
+                const hasEnhanced = ownedLevels && [...ownedLevels].some((l) => l > 0);
+                const isExpanded = this._expandedSearchHrids?.has(hrid);
+
+                if (hasEnhanced) {
+                    if (isExpanded) {
+                        // Collapse header row
+                        const headerRow = document.createElement('div');
+                        headerRow.className = 'toolasha-ct-search-result toolasha-ct-search-group-header';
+                        headerRow.innerHTML = `<svg viewBox="0 0 32 32"><use href="${iconHref}"></use></svg><span>${this._escHtml(details.name)}</span><span class="toolasha-ct-expand-btn">▲</span>`;
+                        headerRow.addEventListener('click', () => {
+                            this._expandedSearchHrids.delete(hrid);
+                            this._renderSearchResults(container, query, tabId, categoryFilter);
+                        });
+                        container.appendChild(headerRow);
+
+                        // One row per owned enhancement level
+                        for (const level of [...ownedLevels].sort((a, b) => a - b)) {
+                            const levelHrid = level === 0 ? hrid : `${hrid}+${level}`;
+                            if (currentItems.has(levelHrid)) continue;
+
+                            const levelRow = document.createElement('div');
+                            levelRow.className = 'toolasha-ct-search-result toolasha-ct-search-level-row';
+                            const displayName = level === 0 ? details.name : `${details.name} +${level}`;
+                            levelRow.innerHTML = `<svg viewBox="0 0 32 32"><use href="${iconHref}"></use></svg><span>${this._escHtml(displayName)}</span>`;
+                            levelRow.addEventListener('click', () => {
+                                this._config = addItem(this._config, tabId, levelHrid);
+                                this._save();
+                                this._renderSearchResults(container, query, tabId, categoryFilter);
+                                this._renderAssignedItems(
+                                    container.parentElement.querySelector('.toolasha-ct-assigned-list'),
+                                    tabId
+                                );
+                            });
+                            container.appendChild(levelRow);
+                        }
+                    } else {
+                        // Collapsed group row — shows owned levels as badge, expand on click
+                        const sortedLevels = [...ownedLevels].sort((a, b) => a - b);
+                        const levelBadges = sortedLevels.map((l) => `+${l}`).join(' ');
+
+                        const row = document.createElement('div');
+                        row.className = 'toolasha-ct-search-result toolasha-ct-search-group-header';
+                        row.innerHTML = `<svg viewBox="0 0 32 32"><use href="${iconHref}"></use></svg><span>${this._escHtml(details.name)}</span><span class="toolasha-ct-level-badges">${this._escHtml(levelBadges)}</span><span class="toolasha-ct-expand-btn">▶</span>`;
+                        row.addEventListener('click', () => {
+                            if (!this._expandedSearchHrids) this._expandedSearchHrids = new Set();
+                            this._expandedSearchHrids.add(hrid);
+                            this._renderSearchResults(container, query, tabId, categoryFilter);
+                        });
+                        container.appendChild(row);
+                    }
+                } else {
+                    // Flat row — no enhanced variants in inventory
+                    const row = document.createElement('div');
+                    row.className = 'toolasha-ct-search-result';
+                    row.innerHTML = `<svg viewBox="0 0 32 32"><use href="${iconHref}"></use></svg><span>${this._escHtml(details.name)}</span>`;
+                    row.addEventListener('click', () => {
+                        this._config = addItem(this._config, tabId, hrid);
+                        this._save();
+                        row.remove();
+                        this._renderAssignedItems(
+                            container.parentElement.querySelector('.toolasha-ct-assigned-list'),
+                            tabId
+                        );
+                    });
+                    container.appendChild(row);
+                }
+
                 count++;
             }
 
@@ -22468,16 +23075,69 @@ self.onmessage = function (e) {
                 return;
             }
 
-            for (const hrid of tab.items) {
-                const details = dataManager.getItemDetails(hrid);
-                const name = details?.name || hrid;
-                const iconId = hrid.replace('/items/', '');
+            let dragFromIndex = null;
+
+            tab.items.forEach((hrid, index) => {
+                const enhanceMatch = hrid.match(/\+(\d+)$/);
+                const baseHrid = enhanceMatch ? hrid.slice(0, hrid.length - enhanceMatch[0].length) : hrid;
+                const level = enhanceMatch ? parseInt(enhanceMatch[1], 10) : 0;
+                const details = dataManager.getItemDetails(baseHrid);
+                const baseName = details?.name || baseHrid;
+                const name = level > 0 ? `${baseName} +${level}` : baseName;
+                const iconId = baseHrid.replace('/items/', '');
                 const spriteUrl = getSpriteBaseUrl();
                 const iconHref = spriteUrl ? `${spriteUrl}#${iconId}` : `#${iconId}`;
 
                 const row = document.createElement('div');
                 row.className = 'toolasha-ct-assigned-item';
-                row.innerHTML = `<svg viewBox="0 0 32 32"><use href="${iconHref}"></use></svg><span>${this._escHtml(name)}</span>`;
+                row.draggable = true;
+
+                const handle = document.createElement('span');
+                handle.className = 'toolasha-ct-drag-handle';
+                handle.textContent = '⠿';
+                row.appendChild(handle);
+
+                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                icon.setAttribute('viewBox', '0 0 32 32');
+                icon.innerHTML = `<use href="${iconHref}"></use>`;
+                row.appendChild(icon);
+
+                const label = document.createElement('span');
+                label.textContent = name;
+                row.appendChild(label);
+
+                row.addEventListener('dragstart', (e) => {
+                    dragFromIndex = index;
+                    e.dataTransfer.effectAllowed = 'move';
+                    row.style.opacity = '0.4';
+                });
+                row.addEventListener('dragend', () => {
+                    row.style.opacity = '';
+                    container
+                        .querySelectorAll('.toolasha-ct-drag-over')
+                        .forEach((el) => el.classList.remove('toolasha-ct-drag-over'));
+                });
+                row.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    container
+                        .querySelectorAll('.toolasha-ct-drag-over')
+                        .forEach((el) => el.classList.remove('toolasha-ct-drag-over'));
+                    row.classList.add('toolasha-ct-drag-over');
+                });
+                row.addEventListener('dragleave', () => {
+                    row.classList.remove('toolasha-ct-drag-over');
+                });
+                row.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    row.classList.remove('toolasha-ct-drag-over');
+                    if (dragFromIndex !== null && dragFromIndex !== index) {
+                        this._config = reorderItem(this._config, tabId, dragFromIndex, index);
+                        this._save();
+                        this._renderAssignedItems(container, tabId);
+                    }
+                    dragFromIndex = null;
+                });
 
                 const removeBtn = document.createElement('button');
                 removeBtn.className = 'toolasha-ct-node-btn';
@@ -22490,7 +23150,7 @@ self.onmessage = function (e) {
                 });
                 row.appendChild(removeBtn);
                 container.appendChild(row);
-            }
+            });
         }
 
         // -----------------------------------------------------------------------
@@ -22525,7 +23185,12 @@ self.onmessage = function (e) {
             const inventory = dataManager.getInventory() || [];
             const set = new Set();
             for (const item of inventory) {
-                if (item.itemLocationHrid === '/item_locations/inventory') set.add(item.itemHrid);
+                if (item.itemLocationHrid === '/item_locations/inventory') {
+                    set.add(item.itemHrid);
+                    if (item.enhancementLevel > 0) {
+                        set.add(`${item.itemHrid}+${item.enhancementLevel}`);
+                    }
+                }
             }
             return set;
         }
@@ -22575,6 +23240,74 @@ self.onmessage = function (e) {
                         if (modal) this._renderAssignedItems(modal.querySelector('.toolasha-ct-assigned-list'), tabId);
                     });
                 }
+                container.appendChild(btn);
+            }
+        }
+
+        _renderLoadoutButtons(container, tabId) {
+            container.innerHTML = '';
+            const snapshots = loadoutSnapshot.snapshots;
+            const entries = Object.values(snapshots);
+
+            if (entries.length === 0) {
+                const msg = document.createElement('span');
+                msg.style.cssText = 'font-size:11px;color:#888;';
+                msg.textContent = 'No loadout snapshots — open your loadout panel first.';
+                container.appendChild(msg);
+                return;
+            }
+
+            const includeConsumables = config.getSetting('inventoryTabs_loadoutIncludeConsumables');
+            const currentTab = findTab(this._config, tabId)?.tab;
+            const currentItems = new Set(currentTab?.items || []);
+
+            entries.sort((a, b) => a.name.localeCompare(b.name));
+
+            for (const snapshot of entries) {
+                const skillLabel = snapshot.actionTypeHrid
+                    ? snapshot.actionTypeHrid
+                          .split('/')
+                          .pop()
+                          .replace(/_/g, ' ')
+                          .replace(/\b\w/g, (c) => c.toUpperCase())
+                    : 'All Skills';
+
+                const loadoutItems = [];
+                for (const eq of snapshot.equipment || []) {
+                    if (!eq.itemHrid) continue;
+                    const hrid = eq.enhancementLevel > 0 ? `${eq.itemHrid}+${eq.enhancementLevel}` : eq.itemHrid;
+                    loadoutItems.push(hrid);
+                }
+                if (includeConsumables) {
+                    for (const f of snapshot.food || []) {
+                        if (f.itemHrid) loadoutItems.push(f.itemHrid);
+                    }
+                    for (const d of snapshot.drinks || []) {
+                        if (d.itemHrid) loadoutItems.push(d.itemHrid);
+                    }
+                }
+
+                const newItems = loadoutItems.filter((h) => !currentItems.has(h));
+                const allAdded = newItems.length === 0 && loadoutItems.length > 0;
+
+                const btn = document.createElement('button');
+                btn.className = 'toolasha-ct-cat-btn' + (allAdded ? ' toolasha-ct-cat-btn--added' : '');
+                btn.textContent = `${snapshot.name} (${skillLabel})`;
+                btn.title = allAdded
+                    ? `All items from "${snapshot.name}" already added`
+                    : `Add ${newItems.length} item(s) from "${snapshot.name}"`;
+
+                btn.addEventListener('click', () => {
+                    for (const hrid of newItems) {
+                        this._config = addItem(this._config, tabId, hrid);
+                        currentItems.add(hrid);
+                    }
+                    this._save();
+                    this._renderLoadoutButtons(container, tabId);
+                    const modal = container.closest('.toolasha-ct-modal');
+                    if (modal) this._renderAssignedItems(modal.querySelector('.toolasha-ct-assigned-list'), tabId);
+                });
+
                 container.appendChild(btn);
             }
         }
@@ -22645,6 +23378,167 @@ self.onmessage = function (e) {
         // -----------------------------------------------------------------------
         // Helpers
         // -----------------------------------------------------------------------
+
+        // -----------------------------------------------------------------------
+        // Item action menu: "Add to Tab" button
+        // -----------------------------------------------------------------------
+
+        /**
+         * Inject an "Add to Tab" dropdown into the game's item action menu.
+         * @param {HTMLElement} actionMenu
+         */
+        _injectAddToTabButton(actionMenu) {
+            if (actionMenu.querySelector('.toolasha-ct-add-to-tab')) return;
+            if (!this._config?.tabs?.length) return;
+
+            // Resolve item HRID and enhancement level from the action menu DOM
+            const nameEl = actionMenu.querySelector('[class*="Item_name"]');
+            if (!nameEl) return;
+            const itemName = nameEl.textContent.trim();
+            const hrid = this._nameToHrid(itemName);
+            if (!hrid) return;
+
+            const enhEl = actionMenu.querySelector('[class*="Item_enhancementLevel"]');
+            const enhLevel = enhEl ? parseInt(enhEl.textContent.trim().replace('+', ''), 10) : 0;
+            const itemHrid = !isNaN(enhLevel) && enhLevel > 0 ? `${hrid}+${enhLevel}` : hrid;
+
+            // Build wrapper in the same style as marketplace shortcuts
+            const wrapper = document.createElement('div');
+            wrapper.className = 'toolasha-ct-add-to-tab';
+            wrapper.style.cssText = 'position: relative; width: 100%;';
+
+            const toggle = document.createElement('button');
+            const existingBtn = actionMenu.querySelector('button');
+            if (existingBtn) toggle.className = existingBtn.className;
+            toggle.style.cssText = 'display: flex; justify-content: space-between; align-items: center; width: 100%;';
+
+            const label = document.createElement('span');
+            label.style.cssText = 'flex: 1; text-align: center;';
+            label.textContent = 'Add to Tab';
+            const chevron = document.createElement('span');
+            chevron.style.cssText = 'font-size: 0.65em; transition: transform 0.15s; display: inline-block;';
+            chevron.textContent = '▼';
+            toggle.appendChild(label);
+            toggle.appendChild(chevron);
+
+            const panel = document.createElement('div');
+            panel.style.cssText = `
+            display: none;
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            width: 100%;
+            z-index: 9999;
+            flex-direction: column;
+            background: var(--color-surface, #1e1e2e);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 6px;
+            overflow: hidden;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+            padding: 4px;
+            gap: 3px;
+            box-sizing: border-box;
+        `;
+
+            // Populate panel with all tabs (depth-first)
+            const flatTabs = this._flattenTabs(this._config.tabs);
+            for (const { tab, depth } of flatTabs) {
+                const alreadyAdded = tab.items.includes(itemHrid);
+                const btn = document.createElement('button');
+                btn.textContent = '\u00a0'.repeat(depth * 2) + tab.name;
+                btn.style.cssText = `
+                display: block;
+                width: 100%;
+                padding: 6px 12px;
+                border: none;
+                border-radius: 4px;
+                cursor: ${alreadyAdded ? 'default' : 'pointer'};
+                font-size: 0.85rem;
+                font-weight: 600;
+                color: ${alreadyAdded ? '#888' : '#fff'};
+                background: ${tab.color ? tab.color + '55' : 'rgba(255,255,255,0.08)'};
+                text-align: left;
+                transition: opacity 0.15s;
+            `;
+                if (tab.color && !alreadyAdded) btn.style.borderLeft = `3px solid ${tab.color}`;
+                if (alreadyAdded) {
+                    btn.title = 'Already in this tab';
+                } else {
+                    btn.addEventListener('mouseenter', () => {
+                        btn.style.opacity = '0.8';
+                    });
+                    btn.addEventListener('mouseleave', () => {
+                        btn.style.opacity = '1';
+                    });
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        this._config = addItem(this._config, tab.id, itemHrid);
+                        this._save();
+                        if (this._isActive) {
+                            this._removeInjectedEls();
+                            this._applyLayout();
+                        }
+                        closePanel();
+                        document.dispatchEvent(
+                            new KeyboardEvent('keydown', {
+                                key: 'Escape',
+                                code: 'Escape',
+                                keyCode: 27,
+                                which: 27,
+                                bubbles: true,
+                                cancelable: true,
+                            })
+                        );
+                    });
+                }
+                panel.appendChild(btn);
+            }
+
+            let open = false;
+            const closePanel = () => {
+                open = false;
+                panel.style.display = 'none';
+                chevron.style.transform = '';
+            };
+            const outsideClick = () => closePanel();
+            document.addEventListener('click', outsideClick);
+
+            toggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                open = !open;
+                panel.style.display = open ? 'flex' : 'none';
+                chevron.style.transform = open ? 'rotate(180deg)' : '';
+                if (open) {
+                    // Defer adding the outside-click listener so this click doesn't immediately close it
+                    setTimeout(() => document.addEventListener('click', outsideClick), 0);
+                } else {
+                    document.removeEventListener('click', outsideClick);
+                }
+            });
+
+            wrapper.appendChild(toggle);
+            wrapper.appendChild(panel);
+            actionMenu.appendChild(wrapper);
+        }
+
+        /**
+         * Flatten the tab tree depth-first into [{tab, depth}] pairs.
+         * @param {Array} tabs
+         * @param {number} depth
+         * @returns {Array<{tab: Object, depth: number}>}
+         */
+        _flattenTabs(tabs, depth = 0) {
+            const result = [];
+            for (const tab of tabs) {
+                result.push({ tab, depth });
+                if (tab.children.length > 0) {
+                    result.push(...this._flattenTabs(tab.children, depth + 1));
+                }
+            }
+            return result;
+        }
 
         _escHtml(str) {
             const div = document.createElement('div');

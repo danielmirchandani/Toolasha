@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.0.0
+ * Version: 2.2.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1106,6 +1106,13 @@
                     type: 'checkbox',
                     default: false,
                     help: 'Hides the native Inventory tab and automatically activates the Toolasha tab whenever the character panel opens.',
+                },
+                inventoryTabs_loadoutIncludeConsumables: {
+                    id: 'inventoryTabs_loadoutIncludeConsumables',
+                    label: 'Custom Inventory Tabs: Include food & drinks when adding from loadout',
+                    type: 'checkbox',
+                    default: false,
+                    help: 'When adding items from a loadout to a tab, also include food and drink items.',
                 },
             },
         },
