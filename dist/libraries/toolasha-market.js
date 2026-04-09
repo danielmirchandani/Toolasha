@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.2.0
+ * Version: 2.2.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -23162,9 +23162,9 @@ self.onmessage = function (e) {
             if (!initData?.itemCategoryDetailMap) return [];
             const categories = [];
             for (const [hrid, detail] of Object.entries(initData.itemCategoryDetailMap)) {
-                if (detail?.name) categories.push({ hrid, name: detail.name });
+                if (detail?.name) categories.push({ hrid, name: detail.name, sortIndex: detail.sortIndex ?? 9999 });
             }
-            return categories.sort((a, b) => a.name.localeCompare(b.name));
+            return categories.sort((a, b) => a.sortIndex - b.sortIndex);
         }
 
         _getItemsInCategory(categoryHrid) {
@@ -23175,10 +23175,11 @@ self.onmessage = function (e) {
             const items = [];
             for (const [hrid, details] of Object.entries(initData.itemDetailMap)) {
                 if (details.categoryHrid === categoryHrid) {
-                    if (!ownedHrids || ownedHrids.has(hrid)) items.push(hrid);
+                    if (!ownedHrids || ownedHrids.has(hrid)) items.push({ hrid, sortIndex: details.sortIndex ?? 9999 });
                 }
             }
-            return items;
+            items.sort((a, b) => a.sortIndex - b.sortIndex);
+            return items.map((item) => item.hrid);
         }
 
         _getOwnedItemHrids() {
