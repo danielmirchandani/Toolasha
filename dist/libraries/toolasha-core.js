@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.5.0
+ * Version: 2.5.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -461,6 +461,7 @@
                     label: 'Iron Cow Mode',
                     type: 'checkbox',
                     default: false,
+                    hidden: true,
                     help: 'Disable all market and profit features for a no-marketplace playthrough.',
                 },
             },

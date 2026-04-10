@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.5.0
+ * Version: 2.5.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1864,6 +1864,27 @@ ${hideRules}
         // Feature interface
         // -------------------------------------------------------------------------
 
+        setupSettingListener() {
+            config.onSettingChange('collectionFilters', (value) => {
+                if (value) {
+                    this.initialize();
+                } else {
+                    this.disable();
+                }
+            });
+
+            config.onSettingChange('collectionFilters_skillingBadges', (value) => {
+                if (!this.isInitialized) return;
+                if (value) {
+                    // Re-initialize to register the skilling observer
+                    this.disable();
+                    this.initialize();
+                } else {
+                    document.querySelectorAll('.toolasha-cf.collection-badge').forEach((el) => el.remove());
+                }
+            });
+        }
+
         async initialize() {
             if (this.isInitialized) return;
             if (!config.isFeatureEnabled('collectionFilters')) return;
@@ -2340,7 +2361,8 @@ ${hideRules}
         }
     }
 
-    var collectionFilters = new CollectionFilters();
+    const collectionFilters = new CollectionFilters();
+    collectionFilters.setupSettingListener();
 
     /**
      * Chat Commands Module
@@ -5479,6 +5501,10 @@ ${hideRules}
                     this.initialize();
                 } else {
                     this.disable();
+                    // Re-initialize if other features hosted by this module are still enabled
+                    if (config.getSetting('taskGoMerge') || config.getSetting('taskQueuedIndicator')) {
+                        this.initialize();
+                    }
                 }
             });
 
@@ -10534,7 +10560,7 @@ ${hideRules}
 
         async initialize() {
             if (this.initialized) return;
-            if (!config.getSetting('xpTracker', true)) return;
+            if (!config.getSetting('xpTracker', true) && !config.getSetting('xpTracker_timeTillLevel', true)) return;
 
             const characterInitHandler = async (data) => {
                 await this._onCharacterInit(data);
@@ -10710,7 +10736,6 @@ ${hideRules}
          * @param {HTMLElement} tooltipEl
          */
         _addTimeTillLevelUp(tooltipEl) {
-            if (!config.getSetting('xpTracker', true)) return;
             if (!config.getSetting('xpTracker_timeTillLevel', true)) return;
 
             // Tooltip structure: div[0]=name, div[1]=level, div[2]=xp progress, div[3]="XP to next level: N"
@@ -13399,6 +13424,9 @@ ${hideRules}
                     const settingEl = this.createSettingElement(settingId, settingDef);
                     content.appendChild(settingEl);
                 }
+
+                // Skip groups with no visible settings (all hidden or group is empty)
+                if (content.children.length === 0) continue;
 
                 groupContainer.appendChild(header);
                 groupContainer.appendChild(content);
