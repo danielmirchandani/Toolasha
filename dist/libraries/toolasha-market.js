@@ -7154,8 +7154,14 @@ self.onmessage = function (e) {
                             // New listing being created - mark as unknown (history viewer will set to active)
                             listing._toolashaStatus = 'unknown';
                         } else if (listing.status === '/market_listing_status/cancelled') {
-                            // User canceled the listing
-                            listing._toolashaStatus = 'canceled';
+                            if (listing.filledQuantity > 0) {
+                                // Partially filled before cancel (e.g. Missing Materials split) — record as filled for the amount received
+                                listing._toolashaStatus = 'filled';
+                                listing.orderQuantity = listing.filledQuantity;
+                            } else {
+                                // User canceled the listing with nothing filled
+                                listing._toolashaStatus = 'canceled';
+                            }
                         } else if (listing.status === '/market_listing_status/filled') {
                             // Listing was filled
                             listing._toolashaStatus = 'filled';
@@ -9457,7 +9463,7 @@ self.onmessage = function (e) {
             this.sortDirection = 'desc'; // Most recent first
             this.searchTerm = '';
             this.typeFilter = 'all'; // 'all', 'buy', 'sell'
-            this.statusFilter = 'all'; // 'all', 'active', 'filled', 'canceled', 'expired', 'unknown'
+            this.statusFilter = 'all'; // 'all', 'active', 'filled', 'filled_active', 'canceled', 'expired', 'unknown'
             this.useKMBFormat = false; // K/M/B formatting toggle
             this.storageKey = 'marketListingTimestamps';
             this.timerRegistry = timerRegistry_js.createTimerRegistry();
@@ -9857,8 +9863,12 @@ self.onmessage = function (e) {
                 }
 
                 // Status filter
-                if (hasStatusFilter && listing.status !== this.statusFilter) {
-                    return false;
+                if (hasStatusFilter) {
+                    if (this.statusFilter === 'filled_active') {
+                        if (listing.status !== 'filled' && listing.status !== 'active') return false;
+                    } else if (listing.status !== this.statusFilter) {
+                        return false;
+                    }
                 }
 
                 // Search term filter (with cached item names)
@@ -10287,6 +10297,7 @@ self.onmessage = function (e) {
                 { value: 'all', label: 'All Statuses' },
                 { value: 'active', label: 'Active Only' },
                 { value: 'filled', label: 'Filled Only' },
+                { value: 'filled_active', label: 'Filled or Active' },
                 { value: 'canceled', label: 'Canceled Only' },
                 { value: 'expired', label: 'Expired Only' },
                 { value: 'unknown', label: 'Unknown Only' },
@@ -21446,6 +21457,9 @@ self.onmessage = function (e) {
      * to visually group tiles under headers. Tiles never leave Inventory_items.
      */
 
+    function getLoadoutSnapshot() {
+        return window.Toolasha?.Combat?.loadoutSnapshot || loadoutSnapshot;
+    }
 
     // ---------------------------------------------------------------------------
     // CSS
@@ -22457,10 +22471,21 @@ self.onmessage = function (e) {
             exportBtn.textContent = 'Export';
             exportBtn.addEventListener('click', () => this._exportLayout());
 
-            const importBtn = document.createElement('button');
+            const importBtn = document.createElement('div');
             importBtn.className = 'toolasha-ct-add-btn';
+            importBtn.style.position = 'relative';
+            importBtn.style.overflow = 'hidden';
             importBtn.textContent = 'Import';
-            importBtn.addEventListener('click', () => this._importLayout());
+            const importInput = document.createElement('input');
+            importInput.type = 'file';
+            importInput.accept = '.json,application/json';
+            importInput.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;';
+            importInput.addEventListener('change', () => {
+                const file = importInput.files?.[0];
+                if (file) this._handleImportFile(file);
+                importInput.value = '';
+            });
+            importBtn.appendChild(importInput);
 
             actionsDiv.appendChild(addBtn);
             actionsDiv.appendChild(exportBtn);
@@ -22497,34 +22522,30 @@ self.onmessage = function (e) {
         }
 
         /**
-         * Open a file picker, read the selected JSON, validate it, and replace the current layout.
+         * Process an imported JSON layout file and apply it.
+         * @param {File} file
          */
-        _importLayout() {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.json,application/json';
-            input.addEventListener('change', async () => {
-                const file = input.files?.[0];
-                if (!file) return;
-                try {
-                    const text = await file.text();
-                    const parsed = JSON.parse(text);
-                    if (parsed._toolasha !== 'tabs-v1' || !Array.isArray(parsed.tabs)) {
-                        alert('[Toolasha] Invalid layout file.');
-                        console.error('[CustomTabs] Import failed: missing _toolasha marker or tabs array', parsed);
-                        return;
-                    }
-                    const { _toolasha: _, ...config } = parsed;
-                    this._config = config;
-                    await this._save();
-                    this._removeInjectedEls();
-                    this._applyLayout();
-                } catch (err) {
-                    alert('[Toolasha] Failed to read layout file.');
-                    console.error('[CustomTabs] Import error:', err);
+        async _handleImportFile(file) {
+            try {
+                const text = await file.text();
+                const parsed = JSON.parse(text);
+                if (parsed._toolasha !== 'tabs-v1' || !Array.isArray(parsed.tabs)) {
+                    alert('[Toolasha] Invalid layout file.');
+                    console.error('[CustomTabs] Import failed: missing _toolasha marker or tabs array', parsed);
+                    return;
                 }
-            });
-            input.click();
+                const { _toolasha: _, ...config } = parsed;
+                this._config = config;
+                // Apply layout immediately — save to IndexedDB in the background
+                this._removeInjectedEls();
+                const invContainer = this._findInvContainer();
+                if (invContainer) invContainer.scrollTop = 0;
+                await this._applyLayout();
+                this._save();
+            } catch (err) {
+                alert('[Toolasha] Failed to read layout file.');
+                console.error('[CustomTabs] Import error:', err);
+            }
         }
 
         /**
@@ -22844,6 +22865,31 @@ self.onmessage = function (e) {
                 // Unorganized bucket already filters assigned items via getAssignedItemSet,
                 // so we don't need to delete them here to keep them out of unorganized.
                 // Children are still hidden (parent is closed), so remove them.
+
+                // Show rolled-up value on the collapsed header (own items + all descendants)
+                const valueKey = (() => {
+                    const mode = inventorySort.currentMode;
+                    if (mode === 'ask' || mode === 'bid') {
+                        return config.getSetting('invSort_showBadges') ? mode + 'Value' : null;
+                    }
+                    if (mode === 'none') {
+                        const badgesOnNone = config.getSettingValue('invSort_badgesOnNone', 'None');
+                        return badgesOnNone !== 'None' ? badgesOnNone.toLowerCase() + 'Value' : null;
+                    }
+                    return null;
+                })();
+                if (valueKey) {
+                    const total = this._peekTileValue(tab, tileMap, valueKey);
+                    if (total > 0) {
+                        const valueBadge = document.createElement('span');
+                        valueBadge.className = 'toolasha-ct-section-value';
+                        valueBadge.textContent = formatters_js.formatKMB(total, 2);
+                        const actionsEl = header.querySelector('.toolasha-ct-section-actions');
+                        if (actionsEl) header.insertBefore(valueBadge, actionsEl);
+                        else header.appendChild(valueBadge);
+                    }
+                }
+
                 this._removeTilesFromMapForChildren(tab.children, tileMap);
             }
 
@@ -22860,6 +22906,29 @@ self.onmessage = function (e) {
                 for (const hrid of tab.items) this._claimTilesForHrid(hrid, tileMap);
                 if (tab.children.length > 0) this._removeTilesFromMapForChildren(tab.children, tileMap);
             }
+        }
+
+        /**
+         * Recursively sum a badge value across a tab's own items and all descendant tabs,
+         * peeking at tileMap without claiming tiles.
+         * @param {object} tab
+         * @param {Map} tileMap
+         * @param {string} valueKey - dataset key to sum (e.g. 'askValue', 'bidValue')
+         * @returns {number}
+         */
+        _peekTileValue(tab, tileMap, valueKey) {
+            let total = 0;
+            for (const hrid of tab.items) {
+                if (hrid === LINEBREAK_HRID) continue;
+                const tiles = tileMap.get(hrid);
+                if (tiles) {
+                    for (const tile of tiles) total += parseFloat(tile.dataset[valueKey]) || 0;
+                }
+            }
+            for (const child of tab.children) {
+                total += this._peekTileValue(child, tileMap, valueKey);
+            }
+            return total;
         }
 
         /**
@@ -23507,8 +23576,21 @@ self.onmessage = function (e) {
 
         _renderLoadoutButtons(container, tabId) {
             container.innerHTML = '';
+            const loadoutSnapshot = getLoadoutSnapshot();
             const snapshots = loadoutSnapshot.snapshots;
             const entries = Object.values(snapshots);
+
+            console.log(
+                '[CustomTabs] _renderLoadoutButtons:',
+                'isInitialized=',
+                loadoutSnapshot.isInitialized,
+                'snapshotKeys=',
+                Object.keys(snapshots),
+                'entryCount=',
+                entries.length,
+                'snapshotsRef===loadoutSnapshot.snapshots?',
+                snapshots === loadoutSnapshot.snapshots
+            );
 
             if (entries.length === 0) {
                 const msg = document.createElement('span');
