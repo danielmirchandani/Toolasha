@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.6.2
+ * Version: 2.7.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -179,7 +179,7 @@
             const totalItemsPerHour = itemsPerHour + gourmetBonusItems;
 
             // Calculate material costs (with artisan reduction if applicable)
-            const materialCosts = this.calculateMaterialCosts(actionDetails, artisanBonus, getCachedPrice);
+            const materialCosts = this.calculateMaterialCosts(actionDetails, artisanBonus);
 
             // Total material cost per action
             const totalMaterialCost = materialCosts.reduce((sum, mat) => sum + mat.totalCost, 0);
@@ -360,10 +360,9 @@
          * Calculate material costs for an action
          * @param {Object} actionDetails - Action details from game data
          * @param {number} artisanBonus - Artisan material reduction (0 to 1, e.g., 0.112 for 11.2% reduction)
-         * @param {Function} getCachedPrice - Price lookup function with caching
          * @returns {Array} Array of material cost objects
          */
-        calculateMaterialCosts(actionDetails, artisanBonus = 0, getCachedPrice) {
+        calculateMaterialCosts(actionDetails, artisanBonus = 0) {
             const costs = [];
 
             // Check for upgrade item (e.g., Crimson Bulwark → Rainbow Bulwark)
@@ -371,17 +370,11 @@
                 const itemDetails = dataManager.getItemDetails(actionDetails.upgradeItemHrid);
 
                 if (itemDetails) {
-                    // Get material price based on pricing mode (uses 'profit' context with 'buy' side)
-                    const materialPrice = getCachedPrice(actionDetails.upgradeItemHrid, { context: 'profit', side: 'buy' });
-                    const isPriceMissing = materialPrice === null;
-                    const resolvedPrice = isPriceMissing ? 0 : materialPrice;
-
-                    // Special case: Coins have no market price but have face value of 1
-                    let finalPrice = resolvedPrice;
-                    let isMissing = isPriceMissing;
-                    if (actionDetails.upgradeItemHrid === '/items/coin' && finalPrice === 0) {
-                        finalPrice = 1;
-                        isMissing = false;
+                    let resolved;
+                    if (actionDetails.upgradeItemHrid === '/items/coin') {
+                        resolved = { price: 1, custom: false, missing: false };
+                    } else {
+                        resolved = profitHelpers_js.resolveItemPrice(actionDetails.upgradeItemHrid, { context: 'profit', side: 'buy' });
                     }
 
                     // Upgrade items are NOT affected by Artisan Tea (only regular inputItems are)
@@ -392,9 +385,10 @@
                         itemName: itemDetails.name,
                         baseAmount: 1,
                         amount: reducedAmount,
-                        askPrice: finalPrice,
-                        totalCost: finalPrice * reducedAmount,
-                        missingPrice: isMissing,
+                        askPrice: resolved.price,
+                        totalCost: resolved.price * reducedAmount,
+                        missingPrice: resolved.missing,
+                        customPrice: resolved.custom,
                     });
                 }
             }
@@ -414,17 +408,11 @@
                     // Apply artisan reduction
                     const reducedAmount = baseAmount * (1 - artisanBonus);
 
-                    // Get material price based on pricing mode (uses 'profit' context with 'buy' side)
-                    const materialPrice = getCachedPrice(input.itemHrid, { context: 'profit', side: 'buy' });
-                    const isPriceMissing = materialPrice === null;
-                    const resolvedPrice = isPriceMissing ? 0 : materialPrice;
-
-                    // Special case: Coins have no market price but have face value of 1
-                    let finalPrice = resolvedPrice;
-                    let isMissing = isPriceMissing;
-                    if (input.itemHrid === '/items/coin' && finalPrice === 0) {
-                        finalPrice = 1; // 1 coin = 1 gold value
-                        isMissing = false;
+                    let resolved;
+                    if (input.itemHrid === '/items/coin') {
+                        resolved = { price: 1, custom: false, missing: false };
+                    } else {
+                        resolved = profitHelpers_js.resolveItemPrice(input.itemHrid, { context: 'profit', side: 'buy' });
                     }
 
                     costs.push({
@@ -432,9 +420,10 @@
                         itemName: itemDetails.name,
                         baseAmount: baseAmount,
                         amount: reducedAmount,
-                        askPrice: finalPrice,
-                        totalCost: finalPrice * reducedAmount,
-                        missingPrice: isMissing,
+                        askPrice: resolved.price,
+                        totalCost: resolved.price * reducedAmount,
+                        missingPrice: resolved.missing,
+                        customPrice: resolved.custom,
                     });
                 }
             }
@@ -4114,6 +4103,7 @@ self.onmessage = function (e) {
     // Compiled regex patterns (created once, reused for performance)
     const REGEX_ENHANCEMENT_LEVEL = /\+(\d+)$/;
     const REGEX_ENHANCEMENT_STRIP = /\s*\+\d+$/;
+    const REGEX_REFINED_STAR = /\s*★/g;
 
     /**
      * Get the items sprite URL from the DOM (matches pattern used across other display modules)
@@ -4404,7 +4394,7 @@ self.onmessage = function (e) {
             }
 
             // Show enhancement path for enhanced items (1-20)
-            if (enhancementLevel > 0) {
+            if (enhancementLevel > 0 && config.getSetting('itemTooltip_enhancementPath')) {
                 // Get enhancement configuration
                 const enhancementConfig = enhancementConfig_js.getEnhancingParams();
                 if (enhancementConfig) {
@@ -4489,9 +4479,9 @@ self.onmessage = function (e) {
 
             let itemName = nameElement.textContent.trim();
 
-            // Strip enhancement level (e.g., "+10" from "Griffin Bulwark +10")
-            // This is critical - enhanced items need to lookup the base item
-            itemName = itemName.replace(REGEX_ENHANCEMENT_STRIP, '');
+            // Strip enhancement level only (e.g., "+10" from "Griffin Bulwark ★ +10")
+            // Leave ★ intact so extractItemHridFromName can try the (R) variant first
+            itemName = itemName.replace(REGEX_ENHANCEMENT_STRIP, '').trim();
 
             return this.extractItemHridFromName(itemName);
         }
@@ -4502,34 +4492,45 @@ self.onmessage = function (e) {
          * @returns {string|null} Item HRID or null
          */
         extractItemHridFromName(itemName) {
-            // Strip enhancement level (e.g., "+10" from "Griffin Bulwark +10")
-            // This is critical - enhanced items need to lookup the base item
-            itemName = itemName.replace(REGEX_ENHANCEMENT_STRIP, '');
+            // Strip enhancement level (e.g., "+10" from "Griffin Bulwark ★ +10")
+            itemName = itemName.replace(REGEX_ENHANCEMENT_STRIP, '').trim();
 
             const initData = dataManager.getInitClientData();
             if (!initData || !initData.itemDetailMap) {
                 return null;
             }
 
-            // Return cached map if source data hasn't changed (handles character switch)
+            // Build or return cached itemName -> HRID map
+            let map;
             if (this.itemNameToHridCache && this.itemNameToHridCacheSource === initData.itemDetailMap) {
-                return this.itemNameToHridCache.get(itemName) || null;
+                map = this.itemNameToHridCache;
+            } else {
+                map = new Map();
+                for (const [hrid, item] of Object.entries(initData.itemDetailMap)) {
+                    map.set(item.name, hrid);
+                }
+
+                // Only cache if we got actual entries (avoid poisoning with empty map)
+                if (map.size > 0) {
+                    this.itemNameToHridCache = map;
+                    this.itemNameToHridCacheSource = initData.itemDetailMap;
+                }
             }
 
-            // Build itemName -> HRID map
-            const map = new Map();
-            for (const [hrid, item] of Object.entries(initData.itemDetailMap)) {
-                map.set(item.name, hrid);
+            // 1. Exact match (handles base items and items already in "(R)" form)
+            if (map.has(itemName)) return map.get(itemName);
+
+            // 2. ★ → (R) substitution for refined items ("Dodocamel Gauntlets ★" → "Dodocamel Gauntlets (R)")
+            if (itemName.includes('★')) {
+                const refinedVariant = itemName.replace(/\s*★/g, ' (R)').replace(/\s+/g, ' ').trim();
+                if (map.has(refinedVariant)) return map.get(refinedVariant);
+
+                // 3. Strip ★ entirely as a last-resort fallback
+                const baseName = itemName.replace(REGEX_REFINED_STAR, '').trim();
+                return map.get(baseName) || null;
             }
 
-            // Only cache if we got actual entries (avoid poisoning with empty map)
-            if (map.size > 0) {
-                this.itemNameToHridCache = map;
-                this.itemNameToHridCacheSource = initData.itemDetailMap;
-            }
-
-            // Return result from newly built map
-            return map.get(itemName) || null;
+            return null;
         }
 
         /**
@@ -4676,36 +4677,19 @@ self.onmessage = function (e) {
                 html += '<th style="padding: 2px 4px; text-align: right;">Bid</th>';
                 html += '</tr>';
 
-                // Fetch market prices for all materials (profit calculator only stores one price based on mode)
+                // Resolve prices for all materials through unified chain
                 const materialsWithPrices = profitData.materialCosts.map((material) => {
-                    const itemHrid = material.itemHrid;
-
-                    // Special case: Coins have no market price but have face value of 1
-                    if (itemHrid === '/items/coin') {
-                        return {
-                            ...material,
-                            askPrice: 1,
-                            bidPrice: 1,
-                        };
+                    if (material.itemHrid === '/items/coin') {
+                        return { ...material, askPrice: 1, bidPrice: 1 };
                     }
 
-                    const marketPrice = marketAPI.getPrice(itemHrid, 0);
+                    const askResult = profitHelpers_js.resolveItemPrice(material.itemHrid, { mode: 'ask', side: 'buy' });
+                    const bidResult = profitHelpers_js.resolveItemPrice(material.itemHrid, { mode: 'bid', side: 'buy' });
 
-                    if (marketPrice?.ask > 0 || marketPrice?.bid > 0) {
-                        return {
-                            ...material,
-                            askPrice: marketPrice.ask > 0 ? marketPrice.ask : getProductionCost(itemHrid, 'ask') || 0,
-                            bidPrice: marketPrice.bid > 0 ? marketPrice.bid : getProductionCost(itemHrid, 'bid') || 0,
-                        };
-                    }
-
-                    // Fallback: production cost, then 0
-                    const prodAsk = getProductionCost(itemHrid, 'ask') || 0;
-                    const prodBid = getProductionCost(itemHrid, 'bid') || 0;
                     return {
                         ...material,
-                        askPrice: prodAsk,
-                        bidPrice: prodBid,
+                        askPrice: askResult.price,
+                        bidPrice: bidResult.price,
                     };
                 });
 
@@ -15457,6 +15441,39 @@ self.onmessage = function (e) {
     }
 
     /**
+     * Game Data Lookup Utilities
+     *
+     * Centralized functions for resolving display names to HRIDs.
+     * Handles the ★ ↔ (R) refined item display name difference between
+     * test server and live server.
+     */
+
+
+    /**
+     * Get the coin cost of an item from the in-game shop.
+     * Returns 0 if the item is not available in the shop or not purchasable with coins.
+     * @param {string} itemHrid - Item HRID
+     * @returns {number} Coin cost, or 0 if not available in shop
+     */
+    function getShopCoinCost(itemHrid) {
+        const gameData = dataManager.getInitClientData();
+        if (!gameData?.shopItemDetailMap) return 0;
+
+        for (const shopItem of Object.values(gameData.shopItemDetailMap)) {
+            if (shopItem.itemHrid === itemHrid) {
+                if (shopItem.costs && shopItem.costs.length > 0) {
+                    const coinCost = shopItem.costs.find((cost) => cost.itemHrid === '/items/coin');
+                    if (coinCost) {
+                        return coinCost.count;
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    /**
      * Networth Calculator
      * Calculates total character networth including:
      * - Equipped items
@@ -15602,34 +15619,9 @@ self.onmessage = function (e) {
             }
 
             // Try shop cost as final fallback (for shop-only items)
-            const shopCost = getShopCost(itemHrid);
+            const shopCost = getShopCoinCost(itemHrid);
             if (shopCost > 0) {
                 return shopCost;
-            }
-        }
-
-        return 0;
-    }
-
-    /**
-     * Get shop cost for an item (if purchaseable with coins)
-     * @param {string} itemHrid - Item HRID
-     * @returns {number} Coin cost, or 0 if not in shop or not purchaseable with coins
-     */
-    function getShopCost(itemHrid) {
-        const gameData = dataManager.getInitClientData();
-        if (!gameData) return 0;
-
-        // Find shop item for this itemHrid
-        for (const shopItem of Object.values(gameData.shopItemDetailMap || {})) {
-            if (shopItem.itemHrid === itemHrid) {
-                // Check if purchaseable with coins
-                if (shopItem.costs && shopItem.costs.length > 0) {
-                    const coinCost = shopItem.costs.find((cost) => cost.itemHrid === '/items/coin');
-                    if (coinCost) {
-                        return coinCost.count;
-                    }
-                }
             }
         }
 

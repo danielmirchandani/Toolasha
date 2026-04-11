@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.6.2
+ * Version: 2.7.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -780,6 +780,13 @@
                     default: false,
                     help: 'Shows expected cost and XP to reach +5, +7, +10, and +12 on unenhanced equipment tooltips',
                 },
+                itemTooltip_enhancementPath: {
+                    id: 'itemTooltip_enhancementPath',
+                    label: 'Show enhancement path on enhanced items',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Shows the optimal enhancement path cost breakdown when hovering over enhanced (+1 to +20) items',
+                },
                 itemTooltip_pinTop: {
                     id: 'itemTooltip_pinTop',
                     label: 'Pin tooltips to top-center of screen',
@@ -998,6 +1005,13 @@
                     default: 'ask',
                     options: ['ask', 'bid'],
                     help: 'Whether to use ask (instant buy) or bid (patient buy) prices when valuing dungeon keys in tooltips, networth, and combat income calculations.',
+                },
+                profitCalc_customPriceOverrides: {
+                    id: 'profitCalc_customPriceOverrides',
+                    label: 'Custom price overrides',
+                    type: 'customPriceOverrides',
+                    default: {},
+                    help: 'Set custom buy/sell prices for specific items. Overrides marketplace prices in profit calculations.',
                 },
                 actions_artisanMaterialMode: {
                     id: 'actions_artisanMaterialMode',

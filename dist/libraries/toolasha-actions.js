@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.6.2
+ * Version: 2.7.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2748,7 +2748,8 @@
                 }
 
                 const missingPriceNote = getMissingPriceIndicator(material.missingPrice);
-                materialText += ` @ ${formatters_js.formatWithSeparator(Math.round(material.askPrice))}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(material.totalCost * profitData.actionsPerHour * efficiencyMultiplier))}/hr`;
+                const customPriceNote = material.customPrice ? ' *' : '';
+                materialText += ` @ ${formatters_js.formatWithSeparator(Math.round(material.askPrice))}${missingPriceNote}${customPriceNote} → ${formatters_js.formatLargeNumber(Math.round(material.totalCost * profitData.actionsPerHour * efficiencyMultiplier))}/hr`;
 
                 line.textContent = materialText;
                 materialCostsContent.appendChild(line);
@@ -3602,7 +3603,8 @@
                 }
 
                 const missingPriceNote = getMissingPriceIndicator(material.missingPrice);
-                materialText += ` @ ${formatters_js.formatWithSeparator(Math.round(material.askPrice))}${missingPriceNote} → ${formatPerAction(costPerAction)}/action`;
+                const customPriceNote = material.customPrice ? ' *' : '';
+                materialText += ` @ ${formatters_js.formatWithSeparator(Math.round(material.askPrice))}${missingPriceNote}${customPriceNote} → ${formatPerAction(costPerAction)}/action`;
 
                 line.textContent = materialText;
                 materialCostsContent.appendChild(line);
@@ -4212,7 +4214,8 @@
                 }
 
                 const missingPriceNote = getMissingPriceIndicator(material.missingPrice);
-                materialText += ` @ ${formatters_js.formatWithSeparator(Math.round(material.askPrice))}${missingPriceNote} → ${formatters_js.formatLargeNumber(Math.round(totalMaterialCost))}`;
+                const customPriceNote = material.customPrice ? ' *' : '';
+                materialText += ` @ ${formatters_js.formatWithSeparator(Math.round(material.askPrice))}${missingPriceNote}${customPriceNote} → ${formatters_js.formatLargeNumber(Math.round(totalMaterialCost))}`;
 
                 line.textContent = materialText;
                 materialCostsContent.appendChild(line);

@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 2.6.2
+ * Version: 2.7.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -13095,6 +13095,39 @@ self.onmessage = function (e) {
     }
 
     /**
+     * Game Data Lookup Utilities
+     *
+     * Centralized functions for resolving display names to HRIDs.
+     * Handles the ★ ↔ (R) refined item display name difference between
+     * test server and live server.
+     */
+
+
+    /**
+     * Get the coin cost of an item from the in-game shop.
+     * Returns 0 if the item is not available in the shop or not purchasable with coins.
+     * @param {string} itemHrid - Item HRID
+     * @returns {number} Coin cost, or 0 if not available in shop
+     */
+    function getShopCoinCost(itemHrid) {
+        const gameData = dataManager.getInitClientData();
+        if (!gameData?.shopItemDetailMap) return 0;
+
+        for (const shopItem of Object.values(gameData.shopItemDetailMap)) {
+            if (shopItem.itemHrid === itemHrid) {
+                if (shopItem.costs && shopItem.costs.length > 0) {
+                    const coinCost = shopItem.costs.find((cost) => cost.itemHrid === '/items/coin');
+                    if (coinCost) {
+                        return coinCost.count;
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    /**
      * Combat Score Calculator
      * Calculates player gear score based on:
      * - House Score: Cost of battle houses
@@ -13299,34 +13332,9 @@ self.onmessage = function (e) {
             }
 
             // Try shop cost as final fallback (for shop-only items)
-            const shopCost = getShopCost(itemHrid, gameData);
+            const shopCost = getShopCoinCost(itemHrid);
             if (shopCost > 0) {
                 return shopCost;
-            }
-        }
-
-        return 0;
-    }
-
-    /**
-     * Get shop cost for an item (if purchaseable with coins)
-     * @param {string} itemHrid - Item HRID
-     * @param {Object} gameData - Game data object
-     * @returns {number} Coin cost, or 0 if not in shop or not purchaseable with coins
-     */
-    function getShopCost(itemHrid, gameData) {
-        if (!gameData) return 0;
-
-        // Find shop item for this itemHrid
-        for (const shopItem of Object.values(gameData.shopItemDetailMap || {})) {
-            if (shopItem.itemHrid === itemHrid) {
-                // Check if purchaseable with coins
-                if (shopItem.costs && shopItem.costs.length > 0) {
-                    const coinCost = shopItem.costs.find((cost) => cost.itemHrid === '/items/coin');
-                    if (coinCost) {
-                        return coinCost.count;
-                    }
-                }
             }
         }
 

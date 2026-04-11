@@ -1,11 +1,11 @@
 /**
  * Toolasha Utils Library
  * All utility modules
- * Version: 2.6.2
+ * Version: 2.7.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (config, dataManager, webSocketHook, storage, domObserver, marketAPI) {
+(function (config, dataManager, webSocketHook, storage, marketAPI, domObserver) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -2193,6 +2193,671 @@
     });
 
     /**
+     * Custom Price Overrides
+     * Manages user-defined buy/sell price overrides for profit calculations.
+     * Overrides are stored in IndexedDB and cached in memory.
+     */
+
+
+    const STORAGE_KEY = 'Toolasha_customPriceOverrides';
+
+    /** @type {Object|null} In-memory cache of overrides */
+    let overridesCache = null;
+
+    /**
+     * Load overrides from storage into cache
+     * @returns {Promise<Object>} The overrides object
+     */
+    async function loadOverrides() {
+        if (overridesCache === null) {
+            overridesCache = (await storage.getJSON(STORAGE_KEY, 'settings', {})) || {};
+        }
+        return overridesCache;
+    }
+
+    /**
+     * Get all custom price overrides
+     * @returns {Object} The overrides object (may be empty if not yet loaded)
+     */
+    function getCustomPriceOverrides() {
+        if (overridesCache === null) {
+            // Trigger async load but return empty for now
+            loadOverrides();
+            return {};
+        }
+        return overridesCache;
+    }
+
+    /**
+     * Get a custom price for a specific item, enhancement level, and transaction side.
+     * @param {string} itemHrid - Item HRID
+     * @param {number} enhancementLevel - Enhancement level (default 0)
+     * @param {string} side - Transaction side ('buy' or 'sell')
+     * @returns {number|null} Custom price or null if no override exists
+     */
+    function getCustomPrice(itemHrid, enhancementLevel = 0, side = 'sell') {
+        const overrides = getCustomPriceOverrides();
+        const key = `${itemHrid}:${enhancementLevel}`;
+        const override = overrides[key];
+        if (!override) {
+            return null;
+        }
+        const price = override[side];
+        if (price === undefined || price === null || price === '') {
+            return null;
+        }
+        return price;
+    }
+
+    /**
+     * Market Data Utility
+     * Centralized access to market prices with smart pricing mode handling
+     */
+
+
+    // Track logged warnings to prevent console spam
+    const loggedWarnings = new Set();
+
+    /**
+     * Get item price based on pricing mode and context
+     * @param {string} itemHrid - Item HRID
+     * @param {Object} options - Configuration options
+     * @param {number} [options.enhancementLevel=0] - Enhancement level
+     * @param {string} [options.mode] - Pricing mode ('ask'|'bid'|'average'). If not provided, uses context or user settings
+     * @param {string} [options.context] - Context hint ('profit'|'networth'|null). Used to determine pricing mode from settings
+     * @param {string} [options.side='sell'] - Transaction side ('buy'|'sell') - used with 'profit' context to determine correct price
+     * @returns {number|null} Price in gold, or null if no market data
+     */
+    function getItemPrice(itemHrid, options = {}) {
+        // Validate inputs
+        if (!itemHrid || typeof itemHrid !== 'string') {
+            return null;
+        }
+
+        // Handle case where someone passes enhancementLevel as second arg (old API)
+        if (typeof options === 'number') {
+            options = { enhancementLevel: options };
+        }
+
+        // Ensure options is an object
+        if (typeof options !== 'object' || options === null) {
+            options = {};
+        }
+
+        const { enhancementLevel = 0, mode, context, side = 'sell' } = options;
+
+        // Check for custom price override
+        const customPrice = getCustomPrice(itemHrid, enhancementLevel, side);
+        if (customPrice !== null) {
+            return customPrice;
+        }
+
+        // Get raw price data from API
+        const priceData = marketAPI.getPrice(itemHrid, enhancementLevel);
+
+        if (!priceData) {
+            return null;
+        }
+
+        // Determine pricing mode
+        const pricingMode = mode || getPricingMode(context, side);
+
+        // Validate pricing mode
+        const validModes = ['ask', 'bid', 'average'];
+        if (!validModes.includes(pricingMode)) {
+            const warningKey = `mode:${pricingMode}`;
+            if (!loggedWarnings.has(warningKey)) {
+                console.warn(`[Market Data] Unknown pricing mode: ${pricingMode}, defaulting to ask`);
+                loggedWarnings.add(warningKey);
+            }
+            return priceData.ask || 0;
+        }
+
+        const resolvePrice = (value) => {
+            if (typeof value !== 'number') {
+                return null;
+            }
+
+            if (value < 0) {
+                return null;
+            }
+
+            return value;
+        };
+
+        // Return price based on mode
+        switch (pricingMode) {
+            case 'ask':
+                return resolvePrice(priceData.ask);
+            case 'bid':
+                return resolvePrice(priceData.bid);
+            case 'average':
+                if (typeof priceData.ask !== 'number' || typeof priceData.bid !== 'number') {
+                    return null;
+                }
+
+                if (priceData.ask < 0 || priceData.bid < 0) {
+                    return null;
+                }
+
+                return (priceData.ask + priceData.bid) / 2;
+            default:
+                return resolvePrice(priceData.ask);
+        }
+    }
+
+    /**
+     * Get all price variants for an item
+     * @param {string} itemHrid - Item HRID
+     * @param {number} [enhancementLevel=0] - Enhancement level
+     * @returns {Object|null} Object with {ask, bid, average} or null if no market data
+     */
+    function getItemPrices(itemHrid, enhancementLevel = 0) {
+        const priceData = marketAPI.getPrice(itemHrid, enhancementLevel);
+
+        if (!priceData) {
+            return null;
+        }
+
+        return {
+            ask: priceData.ask,
+            bid: priceData.bid,
+            average: (priceData.ask + priceData.bid) / 2,
+        };
+    }
+
+    /**
+     * Format price with K/M/B suffixes
+     * @param {number} amount - Amount to format
+     * @param {Object} options - Formatting options
+     * @param {number} [options.decimals=1] - Number of decimal places
+     * @param {boolean} [options.showZero=true] - Whether to show '0' for zero values
+     * @returns {string} Formatted price string
+     */
+    function formatPrice(amount, options = {}) {
+        const { decimals = 1, showZero = true } = options;
+
+        if (amount === null || amount === undefined) {
+            return '--';
+        }
+
+        if (amount === 0) {
+            return showZero ? '0' : '--';
+        }
+
+        const absAmount = Math.abs(amount);
+        const sign = amount < 0 ? '-' : '';
+
+        if (absAmount >= 1_000_000_000) {
+            return `${sign}${(absAmount / 1_000_000_000).toFixed(decimals)}B`;
+        } else if (absAmount >= 1_000_000) {
+            return `${sign}${(absAmount / 1_000_000).toFixed(decimals)}M`;
+        } else if (absAmount >= 1_000) {
+            return `${sign}${(absAmount / 1_000).toFixed(decimals)}K`;
+        } else {
+            return `${sign}${absAmount.toFixed(decimals)}`;
+        }
+    }
+
+    /**
+     * Determine pricing mode from context and user settings
+     * @param {string} [context] - Context hint ('profit'|'networth'|null)
+     * @param {string} [side='sell'] - Transaction side ('buy'|'sell') - used with 'profit' context
+     * @returns {string} Pricing mode ('ask'|'bid'|'average')
+     */
+    function getPricingMode(context, side = 'sell') {
+        // If no context, default to 'ask'
+        if (!context) {
+            return 'ask';
+        }
+
+        // Validate context is a string
+        if (typeof context !== 'string') {
+            return 'ask';
+        }
+
+        // Get pricing mode from settings based on context
+        switch (context) {
+            case 'profit': {
+                const profitMode = config.getSettingValue('profitCalc_pricingMode');
+
+                // Convert profit calculation modes to price types based on transaction side
+                // Conservative: Ask/Bid (instant buy materials, instant sell output)
+                // Hybrid: Ask/Ask (instant buy materials, patient sell output)
+                // Optimistic: Bid/Ask (patient buy materials, patient sell output)
+                // Patient Buy: Bid/Bid (patient buy materials, instant sell output)
+                let selectedPriceType;
+                switch (profitMode) {
+                    case 'conservative':
+                        selectedPriceType = side === 'buy' ? 'ask' : 'bid';
+                        break;
+                    case 'hybrid':
+                        selectedPriceType = 'ask'; // Ask for both buy and sell
+                        break;
+                    case 'optimistic':
+                        selectedPriceType = side === 'buy' ? 'bid' : 'ask';
+                        break;
+                    case 'patientBuy':
+                        selectedPriceType = 'bid'; // Bid for both buy and sell
+                        break;
+                    default:
+                        selectedPriceType = 'ask';
+                }
+                return selectedPriceType;
+            }
+            default: {
+                const warningKey = `context:${context}`;
+                if (!loggedWarnings.has(warningKey)) {
+                    console.warn(`[Market Data] Unknown context: ${context}, defaulting to ask`);
+                    loggedWarnings.add(warningKey);
+                }
+                return 'ask';
+            }
+        }
+    }
+
+    /**
+     * Get prices for multiple items in batch
+     * @param {Array<{itemHrid: string, enhancementLevel?: number}>} items - Array of items to price
+     * @param {Object} options - Configuration options
+     * @param {string} [options.mode] - Pricing mode ('ask'|'bid'|'average')
+     * @param {string} [options.context] - Context hint ('profit'|'networth'|null)
+     * @param {string} [options.side='sell'] - Transaction side ('buy'|'sell')
+     * @returns {Map<string, number>} Map of itemHrid+enhancementLevel to price
+     */
+    function getItemPricesBatch(items, options = {}) {
+        const result = new Map();
+
+        for (const item of items) {
+            const key = `${item.itemHrid}:${item.enhancementLevel || 0}`;
+            const price = getItemPrice(item.itemHrid, {
+                enhancementLevel: item.enhancementLevel || 0,
+                mode: options.mode,
+                context: options.context,
+                side: options.side,
+            });
+
+            if (price !== null) {
+                result.set(key, price);
+            }
+        }
+
+        return result;
+    }
+
+    var marketData = {
+        getItemPrice,
+        getItemPrices,
+        formatPrice,
+        getPricingMode,
+        getItemPricesBatch,
+    };
+
+    var marketData$1 = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        default: marketData,
+        formatPrice: formatPrice,
+        getItemPrice: getItemPrice,
+        getItemPrices: getItemPrices,
+        getItemPricesBatch: getItemPricesBatch,
+        getPricingMode: getPricingMode
+    });
+
+    /**
+     * Game Data Lookup Utilities
+     *
+     * Centralized functions for resolving display names to HRIDs.
+     * Handles the ★ ↔ (R) refined item display name difference between
+     * test server and live server.
+     */
+
+
+    /**
+     * Get the coin cost of an item from the in-game shop.
+     * Returns 0 if the item is not available in the shop or not purchasable with coins.
+     * @param {string} itemHrid - Item HRID
+     * @returns {number} Coin cost, or 0 if not available in shop
+     */
+    function getShopCoinCost(itemHrid) {
+        const gameData = dataManager.getInitClientData();
+        if (!gameData?.shopItemDetailMap) return 0;
+
+        for (const shopItem of Object.values(gameData.shopItemDetailMap)) {
+            if (shopItem.itemHrid === itemHrid) {
+                if (shopItem.costs && shopItem.costs.length > 0) {
+                    const coinCost = shopItem.costs.find((cost) => cost.itemHrid === '/items/coin');
+                    if (coinCost) {
+                        return coinCost.count;
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * Enhancement Calculator
+     *
+     * Uses Markov Chain matrix math to calculate exact expected values for enhancement attempts.
+     * Based on the original MWI Tools Enhancelate() function.
+     *
+     * Math.js library is loaded via userscript @require header.
+     */
+
+
+    /**
+     * Base success rates by enhancement level (before bonuses)
+     */
+    const BASE_SUCCESS_RATES = [
+        50, // +1
+        45, // +2
+        45, // +3
+        40, // +4
+        40, // +5
+        40, // +6
+        35, // +7
+        35, // +8
+        35, // +9
+        35, // +10
+        30, // +11
+        30, // +12
+        30, // +13
+        30, // +14
+        30, // +15
+        30, // +16
+        30, // +17
+        30, // +18
+        30, // +19
+        30, // +20
+    ];
+
+    /**
+     * Calculate total success rate bonus multiplier
+     * @param {Object} params - Enhancement parameters
+     * @param {number} params.enhancingLevel - Effective enhancing level (base + tea bonus)
+     * @param {number} params.toolBonus - Tool success bonus % (already includes equipment + house bonus)
+     * @param {number} params.itemLevel - Item level being enhanced
+     * @returns {number} Success rate multiplier (e.g., 1.0519 = 105.19% of base rates)
+     */
+    function calculateSuccessMultiplier(params) {
+        const { enhancingLevel, toolBonus, itemLevel } = params;
+
+        // Total bonus calculation
+        // toolBonus already includes equipment + house success bonus from config
+        // We only need to add level advantage here
+
+        let totalBonus;
+
+        if (enhancingLevel >= itemLevel) {
+            // Above or at item level: +0.05% per level above item level
+            const levelAdvantage = 0.05 * (enhancingLevel - itemLevel);
+            totalBonus = 1 + (toolBonus + levelAdvantage) / 100;
+        } else {
+            // Below item level: Penalty based on level deficit
+            totalBonus = 1 - 0.5 * (1 - enhancingLevel / itemLevel) + toolBonus / 100;
+        }
+
+        return totalBonus;
+    }
+
+    /**
+     * Calculate per-action time for enhancement
+     * Simple calculation that doesn't require Markov chain analysis
+     * @param {number} enhancingLevel - Effective enhancing level (includes tea bonus)
+     * @param {number} itemLevel - Item level being enhanced
+     * @param {number} speedBonus - Speed bonus % (for action time calculation)
+     * @returns {number} Per-action time in seconds
+     */
+    function calculatePerActionTime(enhancingLevel, itemLevel, speedBonus = 0) {
+        const baseActionTime = 12; // seconds
+        let speedMultiplier;
+
+        if (enhancingLevel > itemLevel) {
+            // Above item level: Get speed bonus from level advantage + equipment + house
+            // Note: speedBonus already includes house level bonus (1% per level)
+            speedMultiplier = 1 + (enhancingLevel - itemLevel + speedBonus) / 100;
+        } else {
+            // Below item level: Only equipment + house speed bonus
+            // Note: speedBonus already includes house level bonus (1% per level)
+            speedMultiplier = 1 + speedBonus / 100;
+        }
+
+        return Math.max(MIN_ACTION_TIME_SECONDS, baseActionTime / speedMultiplier);
+    }
+
+    /**
+     * Calculate enhancement statistics using Markov Chain matrix inversion
+     * @param {Object} params - Enhancement parameters
+     * @param {number} params.enhancingLevel - Effective enhancing level (includes tea bonus)
+     * @param {number} params.houseLevel - Observatory house room level (used for speed calculation only)
+     * @param {number} params.toolBonus - Tool success bonus % (already includes equipment + house success bonus from config)
+     * @param {number} params.speedBonus - Speed bonus % (for action time calculation)
+     * @param {number} params.itemLevel - Item level being enhanced
+     * @param {number} params.targetLevel - Target enhancement level (1-20)
+     * @param {number} params.startLevel - Starting enhancement level (0-19, default 0)
+     * @param {number} params.protectFrom - Start using protection items at this level (0 = never)
+     * @param {boolean} params.blessedTea - Whether Blessed Tea is active (1% double jump)
+     * @param {number} params.guzzlingBonus - Drink concentration multiplier (1.0 = no bonus, scales blessed tea)
+     * @returns {Object} Enhancement statistics
+     */
+    function calculateEnhancement(params) {
+        const {
+            enhancingLevel,
+            _houseLevel,
+            toolBonus,
+            speedBonus = 0,
+            itemLevel,
+            targetLevel,
+            startLevel = 0,
+            protectFrom = 0,
+            blessedTea = false,
+            guzzlingBonus = 1.0,
+        } = params;
+
+        // Validate inputs
+        if (targetLevel < 1 || targetLevel > 20) {
+            throw new Error('Target level must be between 1 and 20');
+        }
+        if (protectFrom < 0 || protectFrom > targetLevel) {
+            throw new Error('Protection level must be between 0 and target level');
+        }
+
+        // Calculate success rate multiplier
+        const successMultiplier = calculateSuccessMultiplier({
+            enhancingLevel,
+            toolBonus,
+            itemLevel,
+        });
+
+        // Build Markov Chain transition matrix (20×20)
+        const markov = math.zeros(20, 20);
+
+        for (let i = 0; i < targetLevel; i++) {
+            const baseSuccessRate = BASE_SUCCESS_RATES[i] / 100.0;
+            const successChance = baseSuccessRate * successMultiplier;
+
+            // Where do we go on failure?
+            // Protection only applies when protectFrom > 0 AND we're at or above that level
+            const failureDestination = protectFrom > 0 && i >= protectFrom ? i - 1 : 0;
+
+            if (blessedTea) {
+                // Blessed Tea: 1% base chance to jump +2, scaled by guzzling bonus
+                // Remaining success chance goes to +1 (after accounting for skip chance)
+                const skipChance = successChance * 0.01 * guzzlingBonus;
+                const remainingSuccess = successChance * (1 - 0.01 * guzzlingBonus);
+
+                markov.set([i, i + 2], skipChance);
+                markov.set([i, i + 1], remainingSuccess);
+                markov.set([i, failureDestination], 1 - successChance);
+            } else {
+                // Normal: Success goes to +1, failure goes to destination
+                markov.set([i, i + 1], successChance);
+                markov.set([i, failureDestination], 1.0 - successChance);
+            }
+        }
+
+        // Absorbing state at target level
+        markov.set([targetLevel, targetLevel], 1.0);
+
+        // Extract transient matrix Q (all states before target)
+        const Q = markov.subset(math.index(math.range(0, targetLevel), math.range(0, targetLevel)));
+
+        // Fundamental matrix: M = (I - Q)^-1
+        const I = math.identity(targetLevel);
+        const M = math.inv(math.subtract(I, Q));
+
+        // Expected attempts from startLevel to target
+        // Sum all elements in startLevel row of M from startLevel to targetLevel
+        let attempts = 0;
+        for (let i = startLevel; i < targetLevel; i++) {
+            attempts += M.get([startLevel, i]);
+        }
+
+        // Expected protection item uses
+        let protects = 0;
+        if (protectFrom > 0 && protectFrom < targetLevel) {
+            for (let i = protectFrom; i < targetLevel; i++) {
+                const timesAtLevel = M.get([startLevel, i]);
+                const failureChance = markov.get([i, i - 1]);
+                protects += timesAtLevel * failureChance;
+            }
+        }
+
+        // Action time calculation
+        const baseActionTime = 12; // seconds
+        let speedMultiplier;
+
+        if (enhancingLevel > itemLevel) {
+            // Above item level: Get speed bonus from level advantage + equipment + house
+            // Note: speedBonus already includes house level bonus (1% per level)
+            speedMultiplier = 1 + (enhancingLevel - itemLevel + speedBonus) / 100;
+        } else {
+            // Below item level: Only equipment + house speed bonus
+            // Note: speedBonus already includes house level bonus (1% per level)
+            speedMultiplier = 1 + speedBonus / 100;
+        }
+
+        const perActionTime = Math.max(MIN_ACTION_TIME_SECONDS, baseActionTime / speedMultiplier);
+        const totalTime = perActionTime * attempts;
+
+        return {
+            attempts: attempts, // Keep exact decimal value for calculations
+            attemptsRounded: Math.round(attempts), // Rounded for display
+            protectionCount: protects, // Keep decimal precision
+            perActionTime: perActionTime,
+            totalTime: totalTime,
+            successMultiplier: successMultiplier,
+
+            // Detailed success rates for each level
+            successRates: BASE_SUCCESS_RATES.slice(0, targetLevel).map((base, i) => {
+                return {
+                    level: i + 1,
+                    baseRate: base,
+                    actualRate: Math.min(100, base * successMultiplier),
+                };
+            }),
+
+            // Expected number of times each state is visited (from fundamental matrix M)
+            visitCounts: Array.from({ length: targetLevel }, (_, i) => M.get([startLevel, i])),
+        };
+    }
+
+    var enhancementCalculator = /*#__PURE__*/Object.freeze({
+        __proto__: null,
+        BASE_SUCCESS_RATES: BASE_SUCCESS_RATES,
+        calculateEnhancement: calculateEnhancement,
+        calculatePerActionTime: calculatePerActionTime
+    });
+
+    /**
+     * Enhancement Tooltip Module
+     *
+     * Provides enhancement analysis for item tooltips.
+     * Calculates optimal enhancement path and total costs for reaching current enhancement level.
+     *
+     * This module is part of Phase 2 of Option D (Hybrid Approach):
+     * - Enhancement panel: Shows 20-level enhancement table
+     * - Item tooltips: Shows optimal path to reach current enhancement level
+     */
+
+
+    /**
+     * Calculate production cost from crafting recipe
+     * Matches original MWI Tools v25.0 getBaseItemProductionCost logic
+     * @param {string} itemHrid
+     * @param {'ask'|'bid'} [mode='ask'] - Pricing side to use for input materials
+     * @private
+     */
+    function getProductionCost(itemHrid, mode = 'ask') {
+        const gameData = dataManager.getInitClientData();
+        const itemDetails = gameData.itemDetailMap[itemHrid];
+
+        if (!itemDetails || !itemDetails.name) {
+            return 0;
+        }
+
+        // Find the action that produces this item
+        let actionHrid = null;
+        let outputCount = 1;
+        for (const [hrid, action] of Object.entries(gameData.actionDetailMap)) {
+            if (action.outputItems && action.outputItems.length > 0) {
+                const output = action.outputItems[0];
+                if (output.itemHrid === itemHrid) {
+                    actionHrid = hrid;
+                    outputCount = output.count || 1;
+                    break;
+                }
+            }
+        }
+
+        if (!actionHrid) {
+            return 0;
+        }
+
+        const action = gameData.actionDetailMap[actionHrid];
+        let totalPrice = 0;
+
+        // Compute artisan tea reduction dynamically (same approach as material-calculator.js)
+        let artisanBonus = 0;
+        try {
+            const equipment = dataManager.getEquipment();
+            const itemDetailMap = gameData.itemDetailMap || {};
+            const drinkConcentration = getDrinkConcentration(equipment, itemDetailMap);
+            const activeDrinks = dataManager.getActionDrinkSlots(action.type);
+            artisanBonus = parseArtisanBonus(activeDrinks, itemDetailMap, drinkConcentration);
+        } catch {
+            // Fall back to no reduction if data unavailable
+        }
+
+        // Sum up input material costs (artisan tea reduces material quantities, not upgrade items)
+        if (action.inputItems) {
+            for (const input of action.inputItems) {
+                if (input.itemHrid === '/items/coin') {
+                    totalPrice += input.count * (1 - artisanBonus);
+                    continue;
+                }
+                let inputPrice = getItemPrice(input.itemHrid, { mode }) || 0;
+                if (inputPrice === 0) {
+                    inputPrice = getProductionCost(input.itemHrid, mode);
+                }
+                totalPrice += inputPrice * input.count * (1 - artisanBonus);
+            }
+        }
+
+        // Add upgrade item cost if this is an upgrade recipe (not affected by artisan tea)
+        if (action.upgradeItemHrid) {
+            let upgradePrice = getItemPrice(action.upgradeItemHrid, { mode }) || 0;
+            if (upgradePrice === 0) {
+                upgradePrice = getProductionCost(action.upgradeItemHrid, mode);
+            }
+            totalPrice += upgradePrice;
+        }
+
+        return totalPrice / outputCount;
+    }
+
+    /**
      * Profit Calculation Helpers
      * Pure functions for profit/rate calculations used across features
      *
@@ -2588,6 +3253,52 @@
         };
     }
 
+    /**
+     * Resolve the best available price for an item through the full resolution chain:
+     * custom override → shop floor → market price → production cost fallback
+     *
+     * @param {string} itemHrid - Item HRID
+     * @param {Object} options - Configuration options
+     * @param {number} [options.enhancementLevel=0] - Enhancement level
+     * @param {string} [options.mode] - Pricing mode ('ask'|'bid'|'average')
+     * @param {string} [options.context] - Context for pricing mode ('profit'|'networth')
+     * @param {string} [options.side='sell'] - Transaction side ('buy'|'sell')
+     * @returns {{ price: number, custom: boolean, missing: boolean }}
+     */
+    function resolveItemPrice(itemHrid, options = {}) {
+        const { enhancementLevel = 0, mode, context, side = 'sell' } = options;
+
+        // 1. Custom override — absolute priority
+        const customPrice = getCustomPrice(itemHrid, enhancementLevel, side);
+        if (customPrice !== null) {
+            return { price: customPrice, custom: true, missing: false };
+        }
+
+        // 2. Market price (via getItemPrice which handles pricing mode)
+        const marketPrice = getItemPrice(itemHrid, { enhancementLevel, mode, context, side });
+
+        // 3. Shop price floor (buy-side only)
+        if (side === 'buy') {
+            const shopCost = getShopCoinCost(itemHrid);
+            if (shopCost > 0 && (marketPrice === null || shopCost < marketPrice)) {
+                return { price: shopCost, custom: false, missing: false };
+            }
+        }
+
+        if (marketPrice !== null) {
+            return { price: marketPrice, custom: false, missing: false };
+        }
+
+        // 4. Production cost fallback
+        const prodCost = getProductionCost(itemHrid, mode || 'ask');
+        if (prodCost > 0) {
+            return { price: prodCost, custom: false, missing: false };
+        }
+
+        // 5. No price found
+        return { price: 0, custom: false, missing: true };
+    }
+
     var profitHelpers = {
         // Rate conversions
         calculateActionsPerHour,
@@ -2605,6 +3316,7 @@
         calculateTeaCostsPerHour,
         calculatePriceAfterTax,
         createPriceCache,
+        resolveItemPrice,
 
         calculateProductionActionTotalsFromBase,
         calculateGatheringActionTotalsFromBase,
@@ -2625,7 +3337,8 @@
         calculateTeaCostsPerHour: calculateTeaCostsPerHour,
         calculateTotalProfitForActions: calculateTotalProfitForActions,
         createPriceCache: createPriceCache,
-        default: profitHelpers
+        default: profitHelpers,
+        resolveItemPrice: resolveItemPrice
     });
 
     /**
@@ -3493,254 +4206,6 @@
         __proto__: null,
         calculateDungeonTokenValue: calculateDungeonTokenValue,
         calculateTaskTokenValue: calculateTaskTokenValue
-    });
-
-    /**
-     * Market Data Utility
-     * Centralized access to market prices with smart pricing mode handling
-     */
-
-
-    // Track logged warnings to prevent console spam
-    const loggedWarnings = new Set();
-
-    /**
-     * Get item price based on pricing mode and context
-     * @param {string} itemHrid - Item HRID
-     * @param {Object} options - Configuration options
-     * @param {number} [options.enhancementLevel=0] - Enhancement level
-     * @param {string} [options.mode] - Pricing mode ('ask'|'bid'|'average'). If not provided, uses context or user settings
-     * @param {string} [options.context] - Context hint ('profit'|'networth'|null). Used to determine pricing mode from settings
-     * @param {string} [options.side='sell'] - Transaction side ('buy'|'sell') - used with 'profit' context to determine correct price
-     * @returns {number|null} Price in gold, or null if no market data
-     */
-    function getItemPrice(itemHrid, options = {}) {
-        // Validate inputs
-        if (!itemHrid || typeof itemHrid !== 'string') {
-            return null;
-        }
-
-        // Handle case where someone passes enhancementLevel as second arg (old API)
-        if (typeof options === 'number') {
-            options = { enhancementLevel: options };
-        }
-
-        // Ensure options is an object
-        if (typeof options !== 'object' || options === null) {
-            options = {};
-        }
-
-        const { enhancementLevel = 0, mode, context, side = 'sell' } = options;
-
-        // Get raw price data from API
-        const priceData = marketAPI.getPrice(itemHrid, enhancementLevel);
-
-        if (!priceData) {
-            return null;
-        }
-
-        // Determine pricing mode
-        const pricingMode = mode || getPricingMode(context, side);
-
-        // Validate pricing mode
-        const validModes = ['ask', 'bid', 'average'];
-        if (!validModes.includes(pricingMode)) {
-            const warningKey = `mode:${pricingMode}`;
-            if (!loggedWarnings.has(warningKey)) {
-                console.warn(`[Market Data] Unknown pricing mode: ${pricingMode}, defaulting to ask`);
-                loggedWarnings.add(warningKey);
-            }
-            return priceData.ask || 0;
-        }
-
-        const resolvePrice = (value) => {
-            if (typeof value !== 'number') {
-                return null;
-            }
-
-            if (value < 0) {
-                return null;
-            }
-
-            return value;
-        };
-
-        // Return price based on mode
-        switch (pricingMode) {
-            case 'ask':
-                return resolvePrice(priceData.ask);
-            case 'bid':
-                return resolvePrice(priceData.bid);
-            case 'average':
-                if (typeof priceData.ask !== 'number' || typeof priceData.bid !== 'number') {
-                    return null;
-                }
-
-                if (priceData.ask < 0 || priceData.bid < 0) {
-                    return null;
-                }
-
-                return (priceData.ask + priceData.bid) / 2;
-            default:
-                return resolvePrice(priceData.ask);
-        }
-    }
-
-    /**
-     * Get all price variants for an item
-     * @param {string} itemHrid - Item HRID
-     * @param {number} [enhancementLevel=0] - Enhancement level
-     * @returns {Object|null} Object with {ask, bid, average} or null if no market data
-     */
-    function getItemPrices(itemHrid, enhancementLevel = 0) {
-        const priceData = marketAPI.getPrice(itemHrid, enhancementLevel);
-
-        if (!priceData) {
-            return null;
-        }
-
-        return {
-            ask: priceData.ask,
-            bid: priceData.bid,
-            average: (priceData.ask + priceData.bid) / 2,
-        };
-    }
-
-    /**
-     * Format price with K/M/B suffixes
-     * @param {number} amount - Amount to format
-     * @param {Object} options - Formatting options
-     * @param {number} [options.decimals=1] - Number of decimal places
-     * @param {boolean} [options.showZero=true] - Whether to show '0' for zero values
-     * @returns {string} Formatted price string
-     */
-    function formatPrice(amount, options = {}) {
-        const { decimals = 1, showZero = true } = options;
-
-        if (amount === null || amount === undefined) {
-            return '--';
-        }
-
-        if (amount === 0) {
-            return showZero ? '0' : '--';
-        }
-
-        const absAmount = Math.abs(amount);
-        const sign = amount < 0 ? '-' : '';
-
-        if (absAmount >= 1_000_000_000) {
-            return `${sign}${(absAmount / 1_000_000_000).toFixed(decimals)}B`;
-        } else if (absAmount >= 1_000_000) {
-            return `${sign}${(absAmount / 1_000_000).toFixed(decimals)}M`;
-        } else if (absAmount >= 1_000) {
-            return `${sign}${(absAmount / 1_000).toFixed(decimals)}K`;
-        } else {
-            return `${sign}${absAmount.toFixed(decimals)}`;
-        }
-    }
-
-    /**
-     * Determine pricing mode from context and user settings
-     * @param {string} [context] - Context hint ('profit'|'networth'|null)
-     * @param {string} [side='sell'] - Transaction side ('buy'|'sell') - used with 'profit' context
-     * @returns {string} Pricing mode ('ask'|'bid'|'average')
-     */
-    function getPricingMode(context, side = 'sell') {
-        // If no context, default to 'ask'
-        if (!context) {
-            return 'ask';
-        }
-
-        // Validate context is a string
-        if (typeof context !== 'string') {
-            return 'ask';
-        }
-
-        // Get pricing mode from settings based on context
-        switch (context) {
-            case 'profit': {
-                const profitMode = config.getSettingValue('profitCalc_pricingMode');
-
-                // Convert profit calculation modes to price types based on transaction side
-                // Conservative: Ask/Bid (instant buy materials, instant sell output)
-                // Hybrid: Ask/Ask (instant buy materials, patient sell output)
-                // Optimistic: Bid/Ask (patient buy materials, patient sell output)
-                // Patient Buy: Bid/Bid (patient buy materials, instant sell output)
-                let selectedPriceType;
-                switch (profitMode) {
-                    case 'conservative':
-                        selectedPriceType = side === 'buy' ? 'ask' : 'bid';
-                        break;
-                    case 'hybrid':
-                        selectedPriceType = 'ask'; // Ask for both buy and sell
-                        break;
-                    case 'optimistic':
-                        selectedPriceType = side === 'buy' ? 'bid' : 'ask';
-                        break;
-                    case 'patientBuy':
-                        selectedPriceType = 'bid'; // Bid for both buy and sell
-                        break;
-                    default:
-                        selectedPriceType = 'ask';
-                }
-                return selectedPriceType;
-            }
-            default: {
-                const warningKey = `context:${context}`;
-                if (!loggedWarnings.has(warningKey)) {
-                    console.warn(`[Market Data] Unknown context: ${context}, defaulting to ask`);
-                    loggedWarnings.add(warningKey);
-                }
-                return 'ask';
-            }
-        }
-    }
-
-    /**
-     * Get prices for multiple items in batch
-     * @param {Array<{itemHrid: string, enhancementLevel?: number}>} items - Array of items to price
-     * @param {Object} options - Configuration options
-     * @param {string} [options.mode] - Pricing mode ('ask'|'bid'|'average')
-     * @param {string} [options.context] - Context hint ('profit'|'networth'|null)
-     * @param {string} [options.side='sell'] - Transaction side ('buy'|'sell')
-     * @returns {Map<string, number>} Map of itemHrid+enhancementLevel to price
-     */
-    function getItemPricesBatch(items, options = {}) {
-        const result = new Map();
-
-        for (const item of items) {
-            const key = `${item.itemHrid}:${item.enhancementLevel || 0}`;
-            const price = getItemPrice(item.itemHrid, {
-                enhancementLevel: item.enhancementLevel || 0,
-                mode: options.mode,
-                context: options.context,
-                side: options.side,
-            });
-
-            if (price !== null) {
-                result.set(key, price);
-            }
-        }
-
-        return result;
-    }
-
-    var marketData = {
-        getItemPrice,
-        getItemPrices,
-        formatPrice,
-        getPricingMode,
-        getItemPricesBatch,
-    };
-
-    var marketData$1 = /*#__PURE__*/Object.freeze({
-        __proto__: null,
-        default: marketData,
-        formatPrice: formatPrice,
-        getItemPrice: getItemPrice,
-        getItemPrices: getItemPrices,
-        getItemPricesBatch: getItemPricesBatch,
-        getPricingMode: getPricingMode
     });
 
     /**
@@ -6650,240 +7115,6 @@ self.onmessage = function (e) {
     });
 
     /**
-     * Enhancement Calculator
-     *
-     * Uses Markov Chain matrix math to calculate exact expected values for enhancement attempts.
-     * Based on the original MWI Tools Enhancelate() function.
-     *
-     * Math.js library is loaded via userscript @require header.
-     */
-
-
-    /**
-     * Base success rates by enhancement level (before bonuses)
-     */
-    const BASE_SUCCESS_RATES = [
-        50, // +1
-        45, // +2
-        45, // +3
-        40, // +4
-        40, // +5
-        40, // +6
-        35, // +7
-        35, // +8
-        35, // +9
-        35, // +10
-        30, // +11
-        30, // +12
-        30, // +13
-        30, // +14
-        30, // +15
-        30, // +16
-        30, // +17
-        30, // +18
-        30, // +19
-        30, // +20
-    ];
-
-    /**
-     * Calculate total success rate bonus multiplier
-     * @param {Object} params - Enhancement parameters
-     * @param {number} params.enhancingLevel - Effective enhancing level (base + tea bonus)
-     * @param {number} params.toolBonus - Tool success bonus % (already includes equipment + house bonus)
-     * @param {number} params.itemLevel - Item level being enhanced
-     * @returns {number} Success rate multiplier (e.g., 1.0519 = 105.19% of base rates)
-     */
-    function calculateSuccessMultiplier(params) {
-        const { enhancingLevel, toolBonus, itemLevel } = params;
-
-        // Total bonus calculation
-        // toolBonus already includes equipment + house success bonus from config
-        // We only need to add level advantage here
-
-        let totalBonus;
-
-        if (enhancingLevel >= itemLevel) {
-            // Above or at item level: +0.05% per level above item level
-            const levelAdvantage = 0.05 * (enhancingLevel - itemLevel);
-            totalBonus = 1 + (toolBonus + levelAdvantage) / 100;
-        } else {
-            // Below item level: Penalty based on level deficit
-            totalBonus = 1 - 0.5 * (1 - enhancingLevel / itemLevel) + toolBonus / 100;
-        }
-
-        return totalBonus;
-    }
-
-    /**
-     * Calculate per-action time for enhancement
-     * Simple calculation that doesn't require Markov chain analysis
-     * @param {number} enhancingLevel - Effective enhancing level (includes tea bonus)
-     * @param {number} itemLevel - Item level being enhanced
-     * @param {number} speedBonus - Speed bonus % (for action time calculation)
-     * @returns {number} Per-action time in seconds
-     */
-    function calculatePerActionTime(enhancingLevel, itemLevel, speedBonus = 0) {
-        const baseActionTime = 12; // seconds
-        let speedMultiplier;
-
-        if (enhancingLevel > itemLevel) {
-            // Above item level: Get speed bonus from level advantage + equipment + house
-            // Note: speedBonus already includes house level bonus (1% per level)
-            speedMultiplier = 1 + (enhancingLevel - itemLevel + speedBonus) / 100;
-        } else {
-            // Below item level: Only equipment + house speed bonus
-            // Note: speedBonus already includes house level bonus (1% per level)
-            speedMultiplier = 1 + speedBonus / 100;
-        }
-
-        return Math.max(MIN_ACTION_TIME_SECONDS, baseActionTime / speedMultiplier);
-    }
-
-    /**
-     * Calculate enhancement statistics using Markov Chain matrix inversion
-     * @param {Object} params - Enhancement parameters
-     * @param {number} params.enhancingLevel - Effective enhancing level (includes tea bonus)
-     * @param {number} params.houseLevel - Observatory house room level (used for speed calculation only)
-     * @param {number} params.toolBonus - Tool success bonus % (already includes equipment + house success bonus from config)
-     * @param {number} params.speedBonus - Speed bonus % (for action time calculation)
-     * @param {number} params.itemLevel - Item level being enhanced
-     * @param {number} params.targetLevel - Target enhancement level (1-20)
-     * @param {number} params.startLevel - Starting enhancement level (0-19, default 0)
-     * @param {number} params.protectFrom - Start using protection items at this level (0 = never)
-     * @param {boolean} params.blessedTea - Whether Blessed Tea is active (1% double jump)
-     * @param {number} params.guzzlingBonus - Drink concentration multiplier (1.0 = no bonus, scales blessed tea)
-     * @returns {Object} Enhancement statistics
-     */
-    function calculateEnhancement(params) {
-        const {
-            enhancingLevel,
-            _houseLevel,
-            toolBonus,
-            speedBonus = 0,
-            itemLevel,
-            targetLevel,
-            startLevel = 0,
-            protectFrom = 0,
-            blessedTea = false,
-            guzzlingBonus = 1.0,
-        } = params;
-
-        // Validate inputs
-        if (targetLevel < 1 || targetLevel > 20) {
-            throw new Error('Target level must be between 1 and 20');
-        }
-        if (protectFrom < 0 || protectFrom > targetLevel) {
-            throw new Error('Protection level must be between 0 and target level');
-        }
-
-        // Calculate success rate multiplier
-        const successMultiplier = calculateSuccessMultiplier({
-            enhancingLevel,
-            toolBonus,
-            itemLevel,
-        });
-
-        // Build Markov Chain transition matrix (20×20)
-        const markov = math.zeros(20, 20);
-
-        for (let i = 0; i < targetLevel; i++) {
-            const baseSuccessRate = BASE_SUCCESS_RATES[i] / 100.0;
-            const successChance = baseSuccessRate * successMultiplier;
-
-            // Where do we go on failure?
-            // Protection only applies when protectFrom > 0 AND we're at or above that level
-            const failureDestination = protectFrom > 0 && i >= protectFrom ? i - 1 : 0;
-
-            if (blessedTea) {
-                // Blessed Tea: 1% base chance to jump +2, scaled by guzzling bonus
-                // Remaining success chance goes to +1 (after accounting for skip chance)
-                const skipChance = successChance * 0.01 * guzzlingBonus;
-                const remainingSuccess = successChance * (1 - 0.01 * guzzlingBonus);
-
-                markov.set([i, i + 2], skipChance);
-                markov.set([i, i + 1], remainingSuccess);
-                markov.set([i, failureDestination], 1 - successChance);
-            } else {
-                // Normal: Success goes to +1, failure goes to destination
-                markov.set([i, i + 1], successChance);
-                markov.set([i, failureDestination], 1.0 - successChance);
-            }
-        }
-
-        // Absorbing state at target level
-        markov.set([targetLevel, targetLevel], 1.0);
-
-        // Extract transient matrix Q (all states before target)
-        const Q = markov.subset(math.index(math.range(0, targetLevel), math.range(0, targetLevel)));
-
-        // Fundamental matrix: M = (I - Q)^-1
-        const I = math.identity(targetLevel);
-        const M = math.inv(math.subtract(I, Q));
-
-        // Expected attempts from startLevel to target
-        // Sum all elements in startLevel row of M from startLevel to targetLevel
-        let attempts = 0;
-        for (let i = startLevel; i < targetLevel; i++) {
-            attempts += M.get([startLevel, i]);
-        }
-
-        // Expected protection item uses
-        let protects = 0;
-        if (protectFrom > 0 && protectFrom < targetLevel) {
-            for (let i = protectFrom; i < targetLevel; i++) {
-                const timesAtLevel = M.get([startLevel, i]);
-                const failureChance = markov.get([i, i - 1]);
-                protects += timesAtLevel * failureChance;
-            }
-        }
-
-        // Action time calculation
-        const baseActionTime = 12; // seconds
-        let speedMultiplier;
-
-        if (enhancingLevel > itemLevel) {
-            // Above item level: Get speed bonus from level advantage + equipment + house
-            // Note: speedBonus already includes house level bonus (1% per level)
-            speedMultiplier = 1 + (enhancingLevel - itemLevel + speedBonus) / 100;
-        } else {
-            // Below item level: Only equipment + house speed bonus
-            // Note: speedBonus already includes house level bonus (1% per level)
-            speedMultiplier = 1 + speedBonus / 100;
-        }
-
-        const perActionTime = Math.max(MIN_ACTION_TIME_SECONDS, baseActionTime / speedMultiplier);
-        const totalTime = perActionTime * attempts;
-
-        return {
-            attempts: attempts, // Keep exact decimal value for calculations
-            attemptsRounded: Math.round(attempts), // Rounded for display
-            protectionCount: protects, // Keep decimal precision
-            perActionTime: perActionTime,
-            totalTime: totalTime,
-            successMultiplier: successMultiplier,
-
-            // Detailed success rates for each level
-            successRates: BASE_SUCCESS_RATES.slice(0, targetLevel).map((base, i) => {
-                return {
-                    level: i + 1,
-                    baseRate: base,
-                    actualRate: Math.min(100, base * successMultiplier),
-                };
-            }),
-
-            // Expected number of times each state is visited (from fundamental matrix M)
-            visitCounts: Array.from({ length: targetLevel }, (_, i) => M.get([startLevel, i])),
-        };
-    }
-
-    var enhancementCalculator = /*#__PURE__*/Object.freeze({
-        __proto__: null,
-        BASE_SUCCESS_RATES: BASE_SUCCESS_RATES,
-        calculateEnhancement: calculateEnhancement,
-        calculatePerActionTime: calculatePerActionTime
-    });
-
-    /**
      * Material Calculator Utility
      * Shared calculation logic for material requirements with artisan bonus
      */
@@ -7588,4 +7819,4 @@ self.onmessage = function (e) {
 
     console.log('[Toolasha] Utils library loaded');
 
-})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.webSocketHook, Toolasha.Core.storage, Toolasha.Core.domObserver, Toolasha.Core.marketAPI);
+})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.webSocketHook, Toolasha.Core.storage, Toolasha.Core.marketAPI, Toolasha.Core.domObserver);
