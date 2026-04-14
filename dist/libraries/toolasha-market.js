@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.9.0
+ * Version: 2.9.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -15555,7 +15555,8 @@ self.onmessage = function (e) {
         if (!list.some((e) => e.type === type && e.value === value)) {
             list.push({ type, value });
             cache = list;
-            await storage.setJSON(getStorageKey$2(), list, 'settings');
+            // Fire-and-forget: persist in background so the UI updates instantly
+            storage.setJSON(getStorageKey$2(), list, 'settings');
         }
     }
 
@@ -15571,7 +15572,8 @@ self.onmessage = function (e) {
         if (idx !== -1) {
             list.splice(idx, 1);
             cache = list;
-            await storage.setJSON(getStorageKey$2(), list, 'settings');
+            // Fire-and-forget: persist in background so the UI updates instantly
+            storage.setJSON(getStorageKey$2(), list, 'settings');
         }
     }
 
@@ -17748,6 +17750,8 @@ self.onmessage = function (e) {
                     scales: {
                         x: {
                             type: 'linear',
+                            min: filtered[0].t,
+                            max: filtered[filtered.length - 1].t,
                             ticks: {
                                 color: '#999',
                                 maxTicksLimit: 10,
