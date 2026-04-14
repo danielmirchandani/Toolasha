@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.9.1
+ * Version: 2.9.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -18336,6 +18336,7 @@ self.onmessage = function (e) {
             this.onChangeFn = null;
             this.searchList = [];
             this.searchTimeout = null;
+            this.expandedEntries = new Set();
 
             // Dragging state
             this.isDragging = false;
@@ -18633,8 +18634,76 @@ self.onmessage = function (e) {
                 }, 150);
             });
 
-            // Focus the search input
-            setTimeout(() => searchInput.focus(), 50);
+            // Focus the search input (preventScroll avoids snapping body to top on refresh)
+            setTimeout(() => searchInput.focus({ preventScroll: true }), 50);
+        }
+
+        /**
+         * Get breakdown items for a multi-item exclusion entry.
+         * @param {Object} entry - Search list entry {type, value, name, amount}
+         * @returns {Array<{name, value}>|null} Array of sub-items, or null if not expandable
+         */
+        _getBreakdownItems(entry) {
+            const data = this.networthData;
+            if (!data) return null;
+
+            const ca = data.currentAssets;
+            const fa = data.fixedAssets;
+
+            if (entry.type === 'assetType') {
+                switch (entry.value) {
+                    case 'equipped':
+                        return (ca?.equipped?.breakdown ?? []).map((i) => ({
+                            name: i.name,
+                            value: i.value ?? 0,
+                        }));
+                    case 'listings':
+                        return (ca?.listings?.breakdown ?? []).map((i) => ({
+                            name: i.name,
+                            value: i.value ?? 0,
+                        }));
+                    case 'houses':
+                        return (fa?.houses?.breakdown ?? []).map((i) => ({
+                            name: i.name,
+                            value: i.cost ?? 0,
+                        }));
+                    case 'abilities':
+                        return (fa?.abilities?.breakdown ?? []).map((i) => ({
+                            name: i.name,
+                            value: i.cost ?? 0,
+                        }));
+                    case 'abilityBooks':
+                        return (fa?.abilityBooks?.breakdown ?? []).map((i) => ({
+                            name: `${i.name}${i.count > 1 ? ` x${i.count}` : ''}`,
+                            value: i.value ?? 0,
+                        }));
+                }
+            }
+
+            if (entry.type === 'category') {
+                for (const [, catData] of Object.entries(ca?.inventory?.byCategory ?? {})) {
+                    if (catData.categoryHrid === entry.value) {
+                        return (catData.items ?? []).map((i) => ({
+                            name: `${i.name}${i.count > 1 ? ` x${i.count}` : ''}`,
+                            value: i.value ?? 0,
+                        }));
+                    }
+                }
+            }
+
+            if (entry.type === 'loadout') {
+                const snapshot = loadoutSnapshot.getAllSnapshots().find((s) => s.name === entry.value);
+                if (snapshot) {
+                    return snapshot.equipment.map((eq) => {
+                        const details = dataManager.getItemDetails(eq.itemHrid);
+                        const name = details?.name || eq.itemHrid.replace('/items/', '');
+                        const price = marketAPI.getPrice(eq.itemHrid);
+                        return { name, value: price?.ask ?? 0 };
+                    });
+                }
+            }
+
+            return null;
         }
 
         /**
@@ -18656,6 +18725,12 @@ self.onmessage = function (e) {
 
             for (const entry of filtered) {
                 const alreadyExcluded = isExcluded(entry.type, entry.value);
+                const breakdownItems = this._getBreakdownItems(entry);
+                const entryKey = `${entry.type}:${entry.value}`;
+                const isExpanded = this.expandedEntries.has(entryKey);
+
+                const wrapper = document.createElement('div');
+
                 const row = document.createElement('div');
                 row.style.cssText = `
                 display: flex;
@@ -18676,7 +18751,24 @@ self.onmessage = function (e) {
 
                 const nameSpan = document.createElement('span');
                 nameSpan.style.cssText = `flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`;
-                nameSpan.textContent = entry.name;
+
+                if (breakdownItems && breakdownItems.length > 0) {
+                    const toggle = document.createElement('span');
+                    toggle.textContent = isExpanded ? '▾ ' : '▸ ';
+                    toggle.style.cssText = `cursor: pointer; color: rgba(255,255,255,0.4); font-size: 0.7rem; margin-right: 2px;`;
+                    nameSpan.appendChild(toggle);
+                    nameSpan.style.cursor = 'pointer';
+                    nameSpan.addEventListener('click', () => {
+                        if (this.expandedEntries.has(entryKey)) {
+                            this.expandedEntries.delete(entryKey);
+                        } else {
+                            this.expandedEntries.add(entryKey);
+                        }
+                        this._renderResults(container, query);
+                    });
+                }
+
+                nameSpan.appendChild(document.createTextNode(entry.name));
 
                 const amountSpan = document.createElement('span');
                 amountSpan.style.cssText = `color: rgba(255,255,255,0.5); white-space: nowrap; font-size: 0.78rem;`;
@@ -18708,7 +18800,46 @@ self.onmessage = function (e) {
                 row.appendChild(nameSpan);
                 row.appendChild(amountSpan);
                 row.appendChild(actionBtn);
-                container.appendChild(row);
+                wrapper.appendChild(row);
+
+                // Expanded detail sub-list
+                if (isExpanded && breakdownItems && breakdownItems.length > 0) {
+                    const detail = document.createElement('div');
+                    detail.style.cssText = `
+                    padding: 4px 0 4px 16px;
+                    margin: 0 6px 4px;
+                    border-left: 1px solid rgba(255,255,255,0.08);
+                `;
+
+                    const sorted = [...breakdownItems].sort((a, b) => b.value - a.value);
+
+                    for (const sub of sorted) {
+                        const subRow = document.createElement('div');
+                        subRow.style.cssText = `
+                        display: flex;
+                        justify-content: space-between;
+                        padding: 1px 0;
+                        font-size: 0.75rem;
+                        color: rgba(255,255,255,0.55);
+                        gap: 8px;
+                    `;
+                        const subName = document.createElement('span');
+                        subName.style.cssText = `flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`;
+                        subName.textContent = sub.name;
+
+                        const subVal = document.createElement('span');
+                        subVal.style.cssText = `white-space: nowrap; color: rgba(255,255,255,0.4);`;
+                        subVal.textContent = sub.value > 0 ? formatters_js.networthFormatter(Math.round(sub.value)) : '';
+
+                        subRow.appendChild(subName);
+                        subRow.appendChild(subVal);
+                        detail.appendChild(subRow);
+                    }
+
+                    wrapper.appendChild(detail);
+                }
+
+                container.appendChild(wrapper);
             }
         }
 
