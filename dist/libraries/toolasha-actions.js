@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.11.0
+ * Version: 2.12.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1722,15 +1722,15 @@
      */
 
 
-    const STORAGE_KEY_PREFIX = 'loadout_snapshots';
+    const STORAGE_KEY_PREFIX$1 = 'loadout_snapshots';
 
     /**
      * Get character-scoped storage key.
      * @returns {string}
      */
-    function getStorageKey() {
+    function getStorageKey$1() {
         const charId = dataManager.getCurrentCharacterId() || 'default';
-        return `${STORAGE_KEY_PREFIX}_${charId}`;
+        return `${STORAGE_KEY_PREFIX$1}_${charId}`;
     }
 
     /**
@@ -1807,7 +1807,7 @@
             this.isInitialized = true;
 
             // Load existing snapshots into memory
-            this.snapshots = (await storage.getJSON(getStorageKey(), 'settings', null)) || {};
+            this.snapshots = (await storage.getJSON(getStorageKey$1(), 'settings', null)) || {};
             console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
 
             // Listen for loadouts_updated WebSocket messages
@@ -1838,7 +1838,7 @@
             }
 
             this.snapshots = newSnapshots;
-            storage.setJSON(getStorageKey(), this.snapshots, 'settings');
+            storage.setJSON(getStorageKey$1(), this.snapshots, 'settings');
             console.log(
                 `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
                 Object.values(newSnapshots).map((s) => s.name)
@@ -1939,6 +1939,109 @@
     const loadoutSnapshot = new LoadoutSnapshot();
 
     /**
+     * Scroll Simulator
+     * Manages per-loadout and global default scroll selections for profit/XP simulation.
+     *
+     * Storage: scroll_simulation_${charId} in 'settings' store.
+     * Structure: { '__default__': [buffTypeHrid, ...], 'Loadout Name': [...], ... }
+     *
+     * Priority when resolving scrolls for an action type:
+     *   1. Loadout-specific selection (if a snapshot is active for the skill)
+     *   2. Global default ('__default__')
+     *   3. Empty set (if toggle is off or nothing configured)
+     */
+
+
+    const STORAGE_KEY_PREFIX = 'scroll_simulation';
+    const DEFAULT_KEY = '__default__';
+
+    function getStorageKey() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX}_${charId}`;
+    }
+
+    class ScrollSimulator {
+        constructor() {
+            /** @type {Object.<string, Set<string>>} loadoutName → Set of buffTypeHrids */
+            this.scrollsByLoadout = {};
+            this.initialized = false;
+        }
+
+        async initialize() {
+            if (this.initialized) return;
+            const saved = await storage.getJSON(getStorageKey(), 'settings', {});
+            for (const [name, arr] of Object.entries(saved)) {
+                if (Array.isArray(arr)) {
+                    this.scrollsByLoadout[name] = new Set(arr);
+                }
+            }
+            this.initialized = true;
+        }
+
+        /**
+         * Returns the Set of buffTypeHrids to simulate for the given action type.
+         * Respects the master toggle and loadout priority.
+         * @param {string} actionTypeHrid
+         * @returns {Set<string>}
+         */
+        getScrollSetForActionType(actionTypeHrid) {
+            if (!config.getSetting('simulateScrollEffects')) return new Set();
+            const loadoutName = loadoutSnapshot.getSnapshotInfoForSkill(actionTypeHrid)?.name;
+            if (loadoutName && this.scrollsByLoadout[loadoutName]) {
+                return this.scrollsByLoadout[loadoutName];
+            }
+            return this.scrollsByLoadout[DEFAULT_KEY] ?? new Set();
+        }
+
+        /**
+         * Returns the Set of buffTypeHrids configured for a specific loadout (or the default).
+         * @param {string|null} loadoutName - null for global defaults
+         * @returns {Set<string>}
+         */
+        getScrollsForLoadout(loadoutName) {
+            return this.scrollsByLoadout[loadoutName ?? DEFAULT_KEY] ?? new Set();
+        }
+
+        /**
+         * Save scroll selections for a loadout (or global defaults).
+         * @param {string|null} loadoutName - null for global defaults
+         * @param {string[]} buffTypeHrids
+         */
+        async saveScrollsForLoadout(loadoutName, buffTypeHrids) {
+            const key = loadoutName ?? DEFAULT_KEY;
+            this.scrollsByLoadout[key] = new Set(buffTypeHrids);
+            await this._persist();
+        }
+
+        async _persist() {
+            const toSave = {};
+            for (const [name, set] of Object.entries(this.scrollsByLoadout)) {
+                toSave[name] = [...set];
+            }
+            await storage.setJSON(getStorageKey(), toSave, 'settings');
+        }
+    }
+
+    const scrollSimulator = new ScrollSimulator();
+
+    /**
+     * Scroll Buff Values
+     * Hardcoded buff definitions for Labyrinth scrolls (formerly "Seals").
+     * The game JSON has no consumableDetail for scroll items — values sourced from item descriptions.
+     */
+
+
+    const SCROLL_BUFF_ITEMS = {
+        '/buff_types/efficiency': 'seal_of_efficiency',
+        '/buff_types/gathering': 'seal_of_gathering',
+        '/buff_types/wisdom': 'seal_of_wisdom',
+        '/buff_types/action_speed': 'seal_of_action_speed',
+        '/buff_types/rare_find': 'seal_of_rare_find',
+        '/buff_types/processing': 'seal_of_processing',
+        '/buff_types/gourmet': 'seal_of_gourmet',
+    };
+
+    /**
      * Profit Display Functions
      *
      * Handles displaying profit calculations in action panels for:
@@ -1949,6 +2052,20 @@
 
     const getMissingPriceIndicator = (isMissing) => (isMissing ? ' ⚠' : '');
     const formatMissingLabel = (isMissing, value) => (isMissing ? '-- ⚠' : value);
+
+    let _spriteUrl = null;
+    function scrollSpriteHtml$1(buffTypeHrid, size = 14) {
+        if (_spriteUrl === null) {
+            const el = document.querySelector('use[href*="items_sprite"]');
+            _spriteUrl = el ? el.getAttribute('href').split('#')[0] : '';
+        }
+        const itemSuffix = SCROLL_BUFF_ITEMS[buffTypeHrid];
+        if (!_spriteUrl || !itemSuffix) return '';
+        return (
+            `<svg width="${size}" height="${size}" style="vertical-align:middle;margin-right:3px">` +
+            `<use href="${_spriteUrl}#${itemSuffix}"></use></svg>`
+        );
+    }
 
     const getBonusDropPerHourTotals = (drop, efficiencyMultiplier = 1) => ({
         dropsPerHour: drop.dropsPerHour * efficiencyMultiplier,
@@ -1981,9 +2098,17 @@
             return;
         }
 
+        // Arm scroll simulation before calculations
+        const gatheringActionType = dataManager.getActionDetails(actionHrid)?.type;
+        dataManager.setScrollSimulation(
+            gatheringActionType,
+            scrollSimulator.getScrollSetForActionType(gatheringActionType)
+        );
+
         // Calculate profit
         const profitData = await calculateGatheringProfit(actionHrid);
         if (!profitData) {
+            dataManager.clearScrollSimulation(gatheringActionType);
             console.error('❌ Gathering profit calculation failed for:', actionHrid);
             return;
         }
@@ -2240,7 +2365,7 @@
             const content = document.createElement('div');
             for (const row of rows) {
                 const line = document.createElement('div');
-                line.textContent = row;
+                line.innerHTML = row;
                 content.appendChild(line);
             }
             return uiComponents_js.createCollapsibleSection(null, `${title}: +${total}`, null, content, false, 1);
@@ -2272,7 +2397,10 @@
             effRows.push(`+${profitData.details.achievementEfficiency.toFixed(2)}% Achievement`);
         }
         if (profitData.details.personalEfficiency > 0) {
-            effRows.push(`+${profitData.details.personalEfficiency.toFixed(2)}% Seal of Efficiency`);
+            const icon = dataManager.isBuffBeingSimulated(gatheringActionType, '/buff_types/efficiency')
+                ? scrollSpriteHtml$1('/buff_types/efficiency')
+                : '';
+            effRows.push(`${icon}+${profitData.details.personalEfficiency.toFixed(2)}% Scroll of Efficiency`);
         }
         if (effRows.length > 0) {
             modifierSummaryParts.push(`+${profitData.totalEfficiency.toFixed(2)}% eff`);
@@ -2294,7 +2422,10 @@
                 gatherRows.push(`+${(profitData.details.achievementGathering * 100).toFixed(2)}% Achievement`);
             }
             if (profitData.details.personalGathering > 0) {
-                gatherRows.push(`+${(profitData.details.personalGathering * 100).toFixed(2)}% Seal of Gathering`);
+                const icon = dataManager.isBuffBeingSimulated(gatheringActionType, '/buff_types/gathering')
+                    ? scrollSpriteHtml$1('/buff_types/gathering')
+                    : '';
+                gatherRows.push(`${icon}+${(profitData.details.personalGathering * 100).toFixed(2)}% Scroll of Gathering`);
             }
             const gatherTotal = `${(profitData.gatheringQuantity * 100).toFixed(2)}%`;
             modifierSummaryParts.push(`+${(profitData.gatheringQuantity * 100).toFixed(2)}% gather`);
@@ -2317,7 +2448,10 @@
                 rareRows.push(`+${rareFindBreakdown.achievement.toFixed(2)}% Achievement`);
             }
             if (rareFindBreakdown.personal > 0) {
-                rareRows.push(`+${rareFindBreakdown.personal.toFixed(2)}% Seal of Rare Find`);
+                const icon = dataManager.isBuffBeingSimulated(gatheringActionType, '/buff_types/rare_find')
+                    ? scrollSpriteHtml$1('/buff_types/rare_find')
+                    : '';
+                rareRows.push(`${icon}+${rareFindBreakdown.personal.toFixed(2)}% Scroll of Rare Find`);
             }
             modifierSummaryParts.push(`+${rareFindBonus.toFixed(2)}% rare`);
             modifierSubSections.push(makeModifierSection('Rare Find', `${rareFindBonus.toFixed(2)}%`, rareRows));
@@ -2372,7 +2506,6 @@
         color: #888;
         font-size: 0.85em;
     `;
-        const gatheringActionType = dataManager.getActionDetails(actionHrid)?.type;
         const gatheringSnapshotInfo = gatheringActionType
             ? loadoutSnapshot.getSnapshotInfoForSkill(gatheringActionType)
             : null;
@@ -2507,6 +2640,7 @@
                 }
             });
         }
+        dataManager.clearScrollSimulation(gatheringActionType);
     }
 
     /**
@@ -2520,6 +2654,13 @@
         if (!config.getSetting('actionPanel_showProfitPerHour')) {
             return;
         }
+
+        // Arm scroll simulation before calculation
+        const productionActionType = dataManager.getActionDetails(actionHrid)?.type;
+        dataManager.setScrollSimulation(
+            productionActionType,
+            scrollSimulator.getScrollSetForActionType(productionActionType)
+        );
 
         // Calculate profit
         const profitData = await calculateProductionProfit(actionHrid);
@@ -2837,7 +2978,7 @@
             const content = document.createElement('div');
             for (const row of rows) {
                 const line = document.createElement('div');
-                line.textContent = row;
+                line.innerHTML = row;
                 content.appendChild(line);
             }
             return uiComponents_js.createCollapsibleSection(null, `${title}: +${total}`, null, content, false, 1);
@@ -2869,7 +3010,10 @@
             effRows.push(`+${profitData.achievementEfficiency.toFixed(2)}% Achievement`);
         }
         if (profitData.personalEfficiency > 0) {
-            effRows.push(`+${profitData.personalEfficiency.toFixed(2)}% Seal of Efficiency`);
+            const simSprite = dataManager.isBuffBeingSimulated(productionActionType, '/buff_types/efficiency')
+                ? scrollSpriteHtml$1('/buff_types/efficiency')
+                : '';
+            effRows.push(`${simSprite}+${profitData.personalEfficiency.toFixed(2)}% Scroll of Efficiency`);
         }
         if (effRows.length > 0) {
             modifierSummaryParts.push(`+${profitData.totalEfficiency.toFixed(2)}% eff`);
@@ -2894,7 +3038,10 @@
                 rareRows.push(`+${productionRareFindBreakdown.achievement.toFixed(2)}% Achievement`);
             }
             if (productionRareFindBreakdown.personal > 0) {
-                rareRows.push(`+${productionRareFindBreakdown.personal.toFixed(2)}% Seal of Rare Find`);
+                const simSprite = dataManager.isBuffBeingSimulated(productionActionType, '/buff_types/rare_find')
+                    ? scrollSpriteHtml$1('/buff_types/rare_find')
+                    : '';
+                rareRows.push(`${simSprite}+${productionRareFindBreakdown.personal.toFixed(2)}% Scroll of Rare Find`);
             }
             modifierSummaryParts.push(`+${productionRareFindBonus.toFixed(2)}% rare`);
             modifierSubSections.push(
@@ -2988,7 +3135,6 @@
         color: #888;
         font-size: 0.85em;
     `;
-        const productionActionType = dataManager.getActionDetails(actionHrid)?.type;
         const productionSnapshotInfo = productionActionType
             ? loadoutSnapshot.getSnapshotInfoForSkill(productionActionType)
             : null;
@@ -3121,6 +3267,7 @@
                 }
             });
         }
+        dataManager.clearScrollSimulation(productionActionType);
     }
 
     /**
@@ -7959,6 +8106,20 @@
      */
 
 
+    let _qibSpriteUrl = null;
+    function scrollSpriteHtml(buffTypeHrid, size = 14) {
+        if (_qibSpriteUrl === null) {
+            const el = document.querySelector('use[href*="items_sprite"]');
+            _qibSpriteUrl = el ? el.getAttribute('href').split('#')[0] : '';
+        }
+        const itemSuffix = SCROLL_BUFF_ITEMS[buffTypeHrid];
+        if (!_qibSpriteUrl || !itemSuffix) return '';
+        return (
+            `<svg width="${size}" height="${size}" style="vertical-align:middle;margin-right:3px">` +
+            `<use href="${_qibSpriteUrl}#${itemSuffix}"></use></svg>`
+        );
+    }
+
     /**
      * QuickInputButtons class manages quick input button injection
      */
@@ -8019,6 +8180,7 @@
          * @param {HTMLElement} panel - Action panel element
          */
         injectButtons(panel) {
+            let actionDetails = null;
             try {
                 // Check if already injected
                 if (panel.querySelector('.mwi-collapsible-section')) {
@@ -8056,7 +8218,7 @@
                 }
 
                 const actionName = actionNameElement.textContent.trim();
-                const actionDetails = this.getActionDetailsByName(actionName, gameData);
+                actionDetails = this.getActionDetailsByName(actionName, gameData);
                 if (!actionDetails) {
                     console.warn('[Quick Input Buttons] No action details found for:', actionName);
                     return;
@@ -8065,6 +8227,12 @@
                 // Check if this action has normal XP gain (skip speed section for combat)
                 const experienceGain = actionDetails.experienceGain;
                 const hasNormalXP = experienceGain && experienceGain.skillHrid && experienceGain.value > 0;
+
+                // Arm scroll simulation for this action type
+                dataManager.setScrollSimulation(
+                    actionDetails.type,
+                    scrollSimulator.getScrollSetForActionType(actionDetails.type)
+                );
 
                 // Calculate action duration and efficiency
                 const { actionTime, totalEfficiency, efficiencyBreakdown } = this.calculateActionMetrics(
@@ -8149,9 +8317,17 @@
                             speedLines.push(`  - ${item.name}: +${item.speed.toFixed(2)}%${detailText}`);
                         }
 
-                        // Personal buff (Seal of Action Speed)
+                        // Personal buff (Scroll of Action Speed)
                         if (personalSpeedBonus > 0) {
-                            speedLines.push(`  - Seal of Action Speed: +${formatters_js.formatPercentage(personalSpeedBonus, 1)}`);
+                            const simSprite = dataManager.isBuffBeingSimulated(
+                                actionDetails.type,
+                                '/buff_types/action_speed'
+                            )
+                                ? scrollSpriteHtml('/buff_types/action_speed')
+                                : '';
+                            speedLines.push(
+                                `  - ${simSprite}Scroll of Action Speed: +${formatters_js.formatPercentage(personalSpeedBonus, 1)}`
+                            );
                         }
                     }
 
@@ -8265,7 +8441,10 @@
                         );
                     }
                     if (efficiencyBreakdown.personalEfficiency > 0) {
-                        speedLines.push(`  - Seal: +${efficiencyBreakdown.personalEfficiency.toFixed(2)}%`);
+                        const simSprite = dataManager.isBuffBeingSimulated(actionDetails.type, '/buff_types/efficiency')
+                            ? scrollSpriteHtml('/buff_types/efficiency')
+                            : '';
+                        speedLines.push(`  - ${simSprite}Seal: +${efficiencyBreakdown.personalEfficiency.toFixed(2)}%`);
                     }
 
                     // Total time (dynamic)
@@ -8544,6 +8723,9 @@
                 }
             } catch (error) {
                 console.error('[Toolasha] Error injecting quick input buttons:', error);
+            } finally {
+                // Clear scroll simulation regardless of success/failure
+                if (actionDetails?.type) dataManager.clearScrollSimulation(actionDetails.type);
             }
         }
 
@@ -9083,9 +9265,12 @@
                         lines.push(`    • Achievement: +${xpData.breakdown.achievementWisdom.toFixed(2)}%`);
                     }
 
-                    // Personal buff (Seal of Wisdom)
+                    // Personal buff (Scroll of Wisdom)
                     if (xpData.breakdown.personalWisdom > 0) {
-                        lines.push(`    • Seal of Wisdom: +${xpData.breakdown.personalWisdom.toFixed(2)}%`);
+                        const simSprite = dataManager.isBuffBeingSimulated(actionDetails.type, '/buff_types/wisdom')
+                            ? scrollSpriteHtml('/buff_types/wisdom')
+                            : '';
+                        lines.push(`    • ${simSprite}Scroll of Wisdom: +${xpData.breakdown.personalWisdom.toFixed(2)}%`);
                     }
                 }
 

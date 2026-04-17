@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.11.0
+ * Version: 2.12.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -8439,12 +8439,14 @@ self.onmessage = function (e) {
                 }
             }
 
-            // Extract quantity (3rd cell) - format: "filled / total"
+            // Extract quantity (3rd cell) - format: "+7 0 / 1" or "0 / 1" (enhancement level may prefix)
             let filledQuantity = null;
             let orderQuantity = null;
             const quantityCell = row.children[2];
             if (quantityCell) {
-                const text = quantityCell.textContent.trim();
+                let text = quantityCell.textContent.trim();
+                // Strip leading enhancement level prefix (e.g., "+7" from "+70 / 1")
+                text = text.replace(/^\+\d+\s*/, '');
                 const match = text.match(/(\d+)\s*\/\s*(\d+)/);
                 if (match) {
                     filledQuantity = Number(match[1]);
@@ -8462,14 +8464,17 @@ self.onmessage = function (e) {
                         : priceNode.textContent;
                 text = String(text).trim();
 
-                // Handle K/M suffixes (e.g., "340K" = 340000, "1.5M" = 1500000)
+                // Handle K/M/B suffixes (e.g., "340K" = 340000, "1.5M" = 1500000, "24B" = 24000000000)
                 let multiplier = 1;
-                if (text.toUpperCase().includes('K')) {
-                    multiplier = 1000;
-                    text = text.replace(/K/gi, '');
+                if (text.toUpperCase().includes('B')) {
+                    multiplier = 1000000000;
+                    text = text.replace(/B/gi, '');
                 } else if (text.toUpperCase().includes('M')) {
                     multiplier = 1000000;
                     text = text.replace(/M/gi, '');
+                } else if (text.toUpperCase().includes('K')) {
+                    multiplier = 1000;
+                    text = text.replace(/K/gi, '');
                 }
 
                 // Parse number handling both locale formats:
@@ -8689,14 +8694,8 @@ self.onmessage = function (e) {
                 return createStyledCell('N/A', config.COLOR_TEXT_SECONDARY, { fontSize: '0.9em' });
             }
 
-            // Find matching order book for this enhancement level
-            let orderBook = orderBookData.orderBooks.find((ob) => ob.enhancementLevel === enhancementLevel);
-
-            // For non-enhanceable items (enh level 0), orderBook won't have enhancementLevel field
-            // Just use the first (and only) orderBook entry
-            if (!orderBook && enhancementLevel === 0 && orderBookData.orderBooks.length > 0) {
-                orderBook = orderBookData.orderBooks[0];
-            }
+            // Order books are indexed by enhancement level (same as createTopOrderPriceCell)
+            const orderBook = orderBookData.orderBooks[enhancementLevel] ?? null;
 
             if (!orderBook) {
                 return createStyledCell('N/A', config.COLOR_TEXT_SECONDARY, { fontSize: '0.9em' });
@@ -19723,7 +19722,7 @@ self.onmessage = function (e) {
             };
 
             const coinHTML = coinItem
-                ? `<div style="margin-top: 4px; font-size: 0.85rem;">Coin x${formatters_js.formatKMB(coinItem.count)}: ${formatters_js.networthFormatter(Math.round(coinItem.value))}</div>`
+                ? `<div style="margin-top: 4px; font-size: 0.85rem;">Coin: ${formatters_js.networthFormatter(Math.round(coinItem.value))}</div>`
                 : '';
 
             // Insert coin at the right position based on value (sorted descending with categories)

@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.11.0
+ * Version: 2.12.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1082,10 +1082,10 @@
                 },
                 autoAllButton_excludeSeals: {
                     id: 'autoAllButton_excludeSeals',
-                    label: 'Auto-click "All": Skip Seal of... items',
+                    label: 'Auto-click "All": Skip Scroll of... items',
                     type: 'checkbox',
                     default: true,
-                    help: 'When enabled, Seal of... items from the Labyrinth are not auto-opened',
+                    help: 'When enabled, Scroll of... items from the Labyrinth are not auto-opened',
                 },
             },
         },
@@ -1147,6 +1147,14 @@
             title: 'Skills',
             icon: '📚',
             settings: {
+                simulateScrollEffects: {
+                    id: 'simulateScrollEffects',
+                    label: 'Skills: Simulate missing scroll effects in calculations',
+                    type: 'checkboxWithButton',
+                    buttonLabel: 'Defaults...',
+                    default: false,
+                    help: 'When enabled, profit/XP/speed calculations show hypothetical results as if selected scrolls were active. Configure default scrolls with the button; override per-loadout from the Loadouts panel.',
+                },
                 xpTracker: {
                     id: 'xpTracker',
                     label: 'Left sidebar: Show XP/hr rate on skill bars',
@@ -1242,6 +1250,13 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Shows ask/bid market prices on tradeable items in the Labyrinth Shop tab',
+                },
+                combatBattleCounter: {
+                    id: 'combatBattleCounter',
+                    label: 'Show battle/wave counter in current action panel during combat',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Displays "Battle #N" for regular zones or "Wave N" for dungeons in the top-left action panel',
                 },
                 combatSummary: {
                     id: 'combatSummary',
@@ -3112,6 +3127,22 @@
     };
 
     /**
+     * Scroll Buff Values
+     * Hardcoded buff definitions for Labyrinth scrolls (formerly "Seals").
+     * The game JSON has no consumableDetail for scroll items — values sourced from item descriptions.
+     */
+
+    const SCROLL_BUFF_VALUES = {
+        '/buff_types/efficiency': 0.14,
+        '/buff_types/gathering': 0.18,
+        '/buff_types/wisdom': 0.2,
+        '/buff_types/action_speed': 0.15,
+        '/buff_types/rare_find': 0.6,
+        '/buff_types/processing': 0.2,
+        '/buff_types/gourmet': 0.16,
+    };
+
+    /**
      * Data Manager Module
      * Central hub for accessing game data
      *
@@ -3158,6 +3189,9 @@
 
             // Personal buffs from seals (personal_buffs_updated WebSocket message)
             this.personalActionTypeBuffsMap = {};
+
+            // Per-action-type scroll simulation (Set of buffTypeHrids to simulate)
+            this.scrollSimulationByActionType = {};
 
             // Retry interval for loading static game data
             this.loadRetryInterval = null;
@@ -3819,19 +3853,65 @@
         }
 
         /**
-         * Get personal buff flat boost for an action type and buff type (seal buffs from Labyrinth)
+         * Get personal buff flat boost for an action type and buff type (seal buffs from Labyrinth).
+         * When scroll simulation is armed for this action type, returns max(active, simulated).
          * @param {string} actionTypeHrid - Action type HRID (e.g., "/action_types/foraging")
          * @param {string} buffTypeHrid - Buff type HRID (e.g., "/buff_types/efficiency")
          * @returns {number} Flat boost value (decimal) or 0 if not found
          */
         getPersonalBuffFlatBoost(actionTypeHrid, buffTypeHrid) {
-            const personalBuffs = this.personalActionTypeBuffsMap[actionTypeHrid];
-            if (!Array.isArray(personalBuffs)) {
-                return 0;
+            const activeValue = this._getActivePersonalBuff(actionTypeHrid, buffTypeHrid);
+            const simSet = this.scrollSimulationByActionType[actionTypeHrid];
+            if (simSet?.has(buffTypeHrid)) {
+                return Math.max(activeValue, SCROLL_BUFF_VALUES[buffTypeHrid] ?? 0);
             }
+            return activeValue;
+        }
 
+        /**
+         * @param {string} actionTypeHrid
+         * @param {string} buffTypeHrid
+         * @returns {number}
+         */
+        _getActivePersonalBuff(actionTypeHrid, buffTypeHrid) {
+            const personalBuffs = this.personalActionTypeBuffsMap[actionTypeHrid];
+            if (!Array.isArray(personalBuffs)) return 0;
             const buff = personalBuffs.find((entry) => entry?.typeHrid === buffTypeHrid);
             return buff?.flatBoost || 0;
+        }
+
+        /**
+         * Arm scroll simulation for a specific action type before running calculations.
+         * @param {string} actionTypeHrid
+         * @param {Set<string>} buffTypeSet - Set of buffTypeHrids to simulate
+         */
+        setScrollSimulation(actionTypeHrid, buffTypeSet) {
+            if (buffTypeSet?.size > 0) {
+                this.scrollSimulationByActionType[actionTypeHrid] = buffTypeSet;
+            } else {
+                delete this.scrollSimulationByActionType[actionTypeHrid];
+            }
+        }
+
+        /**
+         * Disarm scroll simulation for a specific action type after calculations are done.
+         * @param {string} actionTypeHrid
+         */
+        clearScrollSimulation(actionTypeHrid) {
+            delete this.scrollSimulationByActionType[actionTypeHrid];
+        }
+
+        /**
+         * Returns true when a scroll buff is being simulated (simulated value > active value).
+         * Used by display code to decide whether to show the scroll sprite on a buff row.
+         * @param {string} actionTypeHrid
+         * @param {string} buffTypeHrid
+         * @returns {boolean}
+         */
+        isBuffBeingSimulated(actionTypeHrid, buffTypeHrid) {
+            const simSet = this.scrollSimulationByActionType[actionTypeHrid];
+            if (!simSet?.has(buffTypeHrid)) return false;
+            return (SCROLL_BUFF_VALUES[buffTypeHrid] ?? 0) > this._getActivePersonalBuff(actionTypeHrid, buffTypeHrid);
         }
 
         /**

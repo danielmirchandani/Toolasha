@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.11.0
+ * Version: 2.12.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -704,7 +704,7 @@
                 },
                 {
                     label: 'Milkonomy',
-                    url: 'https://milkonomy.pages.dev/#/dashboard',
+                    url: 'https://hyhfish.github.io/milkonomy/#/dashboard',
                 },
                 {
                     label: "Socko's Combat Tracker",
@@ -13075,6 +13075,719 @@ ${hideRules}
     var settingsCSS = "/* Toolasha Settings UI Styles\n * Modern, compact design\n */\n\n/* CSS Variables */\n:root {\n    --toolasha-accent: #5b8def;\n    --toolasha-accent-hover: #7aa3f3;\n    --toolasha-accent-dim: rgba(91, 141, 239, 0.15);\n    --toolasha-secondary: #8A2BE2;\n    --toolasha-text: rgba(255, 255, 255, 0.9);\n    --toolasha-text-dim: rgba(255, 255, 255, 0.5);\n    --toolasha-bg: rgba(20, 25, 35, 0.6);\n    --toolasha-border: rgba(91, 141, 239, 0.2);\n    --toolasha-toggle-off: rgba(100, 100, 120, 0.4);\n    --toolasha-toggle-on: var(--toolasha-accent);\n}\n\n/* Settings Card Container */\n.toolasha-settings-card {\n    display: flex;\n    flex-direction: column;\n    padding: 12px 16px;\n    font-size: 12px;\n    line-height: 1.3;\n    color: var(--toolasha-text);\n    position: relative;\n    gap: 6px;\n}\n\n/* Top gradient line */\n.toolasha-settings-card::before {\n    display: none;\n}\n\n/* Collapsible Settings Groups */\n.toolasha-settings-group {\n    margin-bottom: 8px;\n}\n\n.toolasha-settings-group-header {\n    cursor: pointer;\n    user-select: none;\n    margin: 10px 0 4px 0;\n    color: var(--toolasha-accent);\n    font-weight: 600;\n    font-size: 13px;\n    display: flex;\n    align-items: center;\n    gap: 6px;\n    border-bottom: 1px solid var(--toolasha-border);\n    padding-bottom: 3px;\n    text-transform: uppercase;\n    letter-spacing: 0.5px;\n    transition: color 0.2s ease;\n}\n\n.toolasha-settings-group-header:hover {\n    color: var(--toolasha-accent-hover);\n}\n\n.toolasha-settings-group-header .collapse-icon {\n    font-size: 10px;\n    transition: transform 0.2s ease;\n}\n\n.toolasha-settings-group.collapsed .collapse-icon {\n    transform: rotate(-90deg);\n}\n\n.toolasha-settings-group-content {\n    max-height: 5000px;\n    overflow: hidden;\n    transition: max-height 0.3s ease-out;\n}\n\n.toolasha-settings-group.collapsed .toolasha-settings-group-content {\n    max-height: 0;\n}\n\n/* Section Headers */\n.toolasha-settings-card h3 {\n    margin: 10px 0 4px 0;\n    color: var(--toolasha-accent);\n    font-weight: 600;\n    font-size: 13px;\n    display: flex;\n    align-items: center;\n    gap: 6px;\n    border-bottom: 1px solid var(--toolasha-border);\n    padding-bottom: 3px;\n    text-transform: uppercase;\n    letter-spacing: 0.5px;\n}\n\n.toolasha-settings-card h3:first-child {\n    margin-top: 0;\n}\n\n.toolasha-settings-card h3 .icon {\n    font-size: 14px;\n}\n\n/* Individual Setting Row */\n.toolasha-setting {\n    display: flex;\n    align-items: center;\n    justify-content: space-between;\n    gap: 10px;\n    margin: 0;\n    padding: 6px 8px;\n    background: var(--toolasha-bg);\n    border: 1px solid var(--toolasha-border);\n    border-radius: 4px;\n    min-height: unset;\n    transition: all 0.2s ease;\n}\n\n.toolasha-setting:hover {\n    background: rgba(30, 35, 45, 0.7);\n    border-color: var(--toolasha-accent);\n}\n\n.toolasha-setting.disabled {\n    /* Visual darkening removed - dependencies still functional but not visually indicated */\n    pointer-events: none;\n}\n\n.toolasha-setting.not-implemented .toolasha-setting-label {\n    color: #ff6b6b;\n}\n\n.toolasha-setting.not-implemented .toolasha-setting-help {\n    color: rgba(255, 107, 107, 0.7);\n}\n\n.toolasha-setting-label {\n    text-align: left;\n    flex: 1;\n    margin-right: 10px;\n    line-height: 1.3;\n    font-size: 12px;\n}\n\n.toolasha-setting-help {\n    display: block;\n    font-size: 10px;\n    color: var(--toolasha-text-dim);\n    margin-top: 2px;\n    font-style: italic;\n}\n\n.toolasha-setting-input {\n    flex-shrink: 0;\n}\n\n/* Modern Toggle Switch */\n.toolasha-switch {\n    position: relative;\n    width: 38px;\n    height: 20px;\n    flex-shrink: 0;\n    display: inline-block;\n}\n\n.toolasha-switch input {\n    opacity: 0;\n    width: 0;\n    height: 0;\n    position: absolute;\n}\n\n.toolasha-slider {\n    position: absolute;\n    top: 0;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    background: var(--toolasha-toggle-off);\n    border-radius: 20px;\n    cursor: pointer;\n    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);\n    border: 2px solid transparent;\n}\n\n.toolasha-slider:before {\n    content: \"\";\n    position: absolute;\n    height: 12px;\n    width: 12px;\n    left: 2px;\n    bottom: 2px;\n    background: white;\n    border-radius: 50%;\n    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);\n    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);\n}\n\n.toolasha-switch input:checked + .toolasha-slider {\n    background: var(--toolasha-toggle-on);\n    border-color: var(--toolasha-accent-hover);\n    box-shadow: 0 0 6px var(--toolasha-accent-dim);\n}\n\n.toolasha-switch input:checked + .toolasha-slider:before {\n    transform: translateX(18px);\n}\n\n.toolasha-switch:hover .toolasha-slider {\n    border-color: var(--toolasha-accent);\n}\n\n/* Text Input */\n.toolasha-text-input {\n    padding: 5px 8px;\n    border: 1px solid var(--toolasha-border);\n    border-radius: 3px;\n    background: rgba(0, 0, 0, 0.3);\n    color: var(--toolasha-text);\n    min-width: 100px;\n    font-size: 12px;\n    transition: all 0.2s ease;\n}\n\n.toolasha-text-input:focus {\n    outline: none;\n    border-color: var(--toolasha-accent);\n    box-shadow: 0 0 0 2px var(--toolasha-accent-dim);\n}\n\n/* Number Input */\n.toolasha-number-input {\n    padding: 5px 8px;\n    border: 1px solid var(--toolasha-border);\n    border-radius: 3px;\n    background: rgba(0, 0, 0, 0.3);\n    color: var(--toolasha-text);\n    min-width: 80px;\n    font-size: 12px;\n    transition: all 0.2s ease;\n}\n\n.toolasha-number-input:focus {\n    outline: none;\n    border-color: var(--toolasha-accent);\n    box-shadow: 0 0 0 2px var(--toolasha-accent-dim);\n}\n\n/* Select Dropdown */\n.toolasha-select-input {\n    padding: 5px 8px;\n    border: 1px solid var(--toolasha-border);\n    border-radius: 3px;\n    background: rgba(0, 0, 0, 0.3);\n    color: var(--toolasha-accent);\n    font-weight: 600;\n    min-width: 150px;\n    cursor: pointer;\n    font-size: 12px;\n    -webkit-appearance: none;\n    -moz-appearance: none;\n    appearance: none;\n    background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%207l5%205%205-5z%22%20fill%3D%22%235b8def%22%2F%3E%3C%2Fsvg%3E');\n    background-repeat: no-repeat;\n    background-position: right 6px center;\n    background-size: 14px;\n    padding-right: 28px;\n    transition: all 0.2s ease;\n}\n\n.toolasha-select-input:focus {\n    outline: none;\n    border-color: var(--toolasha-accent);\n    box-shadow: 0 0 0 2px var(--toolasha-accent-dim);\n}\n\n.toolasha-select-input option {\n    background: #1a1a2e;\n    color: var(--toolasha-text);\n    padding: 8px;\n}\n\n/* Utility Buttons Container */\n.toolasha-utility-buttons {\n    display: flex;\n    gap: 8px;\n    margin-top: 12px;\n    padding-top: 10px;\n    border-top: 1px solid var(--toolasha-border);\n    flex-wrap: wrap;\n}\n\n.toolasha-utility-button {\n    background: linear-gradient(135deg, var(--toolasha-secondary), #6A1B9A);\n    border: 1px solid rgba(138, 43, 226, 0.4);\n    color: #ffffff;\n    padding: 6px 12px;\n    border-radius: 4px;\n    font-size: 11px;\n    font-weight: 600;\n    cursor: pointer;\n    transition: all 0.2s ease;\n    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);\n}\n\n.toolasha-utility-button:hover {\n    background: linear-gradient(135deg, #9A4BCF, var(--toolasha-secondary));\n    box-shadow: 0 0 10px rgba(138, 43, 226, 0.3);\n    transform: translateY(-1px);\n}\n\n.toolasha-utility-button:active {\n    transform: translateY(0);\n}\n\n/* Sync button - special styling for prominence */\n.toolasha-sync-button {\n    background: linear-gradient(135deg, #047857, #059669) !important;\n    border: 1px solid rgba(4, 120, 87, 0.4) !important;\n    flex: 1 1 auto; /* Allow it to grow and take more space */\n    min-width: 200px; /* Ensure it's wide enough for the text */\n}\n\n.toolasha-sync-button:hover {\n    background: linear-gradient(135deg, #059669, #10b981) !important;\n    box-shadow: 0 0 10px rgba(16, 185, 129, 0.3) !important;\n}\n\n/* Refresh Notice */\n.toolasha-refresh-notice {\n    background: rgba(255, 152, 0, 0.1);\n    border: 1px solid rgba(255, 152, 0, 0.3);\n    border-radius: 4px;\n    padding: 8px 12px;\n    margin-top: 10px;\n    color: #ffa726;\n    font-size: 11px;\n    display: flex;\n    align-items: center;\n    gap: 8px;\n}\n\n.toolasha-refresh-notice::before {\n    content: \"⚠️\";\n    font-size: 14px;\n}\n\n/* Dependency Indicator */\n.toolasha-setting.has-dependency::before {\n    content: \"↳\";\n    position: absolute;\n    left: -4px;\n    color: var(--toolasha-accent);\n    font-size: 14px;\n    opacity: 0.5;\n}\n\n.toolasha-setting.has-dependency {\n    margin-left: 16px;\n    position: relative;\n}\n\n/* Nested setting collapse icons */\n.setting-collapse-icon {\n    flex-shrink: 0;\n    color: var(--toolasha-accent);\n    opacity: 0.7;\n}\n\n.toolasha-setting.dependents-collapsed .setting-collapse-icon {\n    opacity: 1;\n}\n\n.toolasha-setting-label-container:hover .setting-collapse-icon {\n    opacity: 1;\n}\n\n/* Tab Panel Override (for game's settings panel) */\n.TabPanel_tabPanel__tXMJF#toolasha-settings {\n    display: block !important;\n}\n\n.TabPanel_tabPanel__tXMJF#toolasha-settings.TabPanel_hidden__26UM3 {\n    display: none !important;\n}\n";
 
     /**
+     * Loadout Snapshot
+     *
+     * Listens for `loadouts_updated` WebSocket messages to capture all loadout configurations
+     * (equipment, abilities, consumables, enhancement levels) in real time.
+     *
+     * Stored snapshots are used by profit calculators to apply the correct tool/equipment
+     * bonuses for a skill even when that loadout is not currently equipped.
+     *
+     * Skill matching: the loadout's actionTypeHrid (e.g. "/action_types/brewing") is compared
+     * to the action type of the profit calculation. An "All Skills" loadout (empty actionTypeHrid)
+     * is used as a fallback when no skill-specific snapshot is found.
+     *
+     * Priority: skill default > all skills default > skill non-default > all skills non-default
+     */
+
+
+    const STORAGE_KEY_PREFIX$1 = 'loadout_snapshots';
+
+    /**
+     * Get character-scoped storage key.
+     * @returns {string}
+     */
+    function getStorageKey$1() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX$1}_${charId}`;
+    }
+
+    /**
+     * Parse a wearable hash string into itemLocationHrid, itemHrid, and enhancementLevel.
+     * Format: "characterId::/item_locations/location::/items/item_hrid::enhancementLevel"
+     * Empty string means no item in that slot.
+     * @param {string} itemLocationHrid - The equipment slot key (e.g. "/item_locations/body")
+     * @param {string} wearableHash - The wearable hash value
+     * @returns {{ itemLocationHrid: string, itemHrid: string, enhancementLevel: number }|null}
+     */
+    function parseWearable(itemLocationHrid, wearableHash) {
+        if (!wearableHash) return null;
+
+        const parts = wearableHash.split('::');
+        const itemHrid = parts.find((p) => p.startsWith('/items/'));
+        if (!itemHrid) return null;
+
+        const lastPart = parts[parts.length - 1];
+        const enhancementLevel = !lastPart.startsWith('/') ? parseInt(lastPart, 10) || 0 : 0;
+
+        return { itemLocationHrid, itemHrid, enhancementLevel };
+    }
+
+    /**
+     * Convert a server loadout object into our snapshot format.
+     * @param {Object} loadout - A loadout entry from characterLoadoutMap
+     * @returns {Object} snapshot
+     */
+    function buildSnapshot(loadout) {
+        // Parse equipment from wearableMap
+        const equipment = [];
+        for (const [locationHrid, hash] of Object.entries(loadout.wearableMap || {})) {
+            const parsed = parseWearable(locationHrid, hash);
+            if (parsed) equipment.push(parsed);
+        }
+
+        // Parse drinks
+        const drinks = (loadout.drinkItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse food
+        const food = (loadout.foodItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse abilities
+        const abilities = [];
+        for (const [slot, hrid] of Object.entries(loadout.abilityMap || {})) {
+            if (hrid) abilities.push({ abilityHrid: hrid, slot: parseInt(slot, 10) });
+        }
+
+        return {
+            name: loadout.name,
+            actionTypeHrid: loadout.actionTypeHrid || '',
+            isDefault: !!loadout.isDefault,
+            equipment,
+            abilities,
+            food,
+            drinks,
+            savedAt: Date.now(),
+        };
+    }
+
+    class LoadoutSnapshot {
+        constructor() {
+            this.snapshots = {}; // In-memory cache: { [loadoutName]: snapshot }
+            this.loadoutsUpdatedHandler = null;
+            this.isInitialized = false;
+        }
+
+        async initialize() {
+            if (this.isInitialized) return;
+            this.isInitialized = true;
+
+            // Load existing snapshots into memory
+            this.snapshots = (await storage.getJSON(getStorageKey$1(), 'settings', null)) || {};
+            console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
+
+            // Listen for loadouts_updated WebSocket messages
+            this.loadoutsUpdatedHandler = (data) => this._onLoadoutsUpdated(data);
+            webSocketHook.on('loadouts_updated', this.loadoutsUpdatedHandler);
+        }
+
+        /**
+         * Handle a loadouts_updated WebSocket message.
+         * Replaces all snapshots with the server's current state.
+         * @param {Object} data - The WebSocket message payload
+         */
+        _onLoadoutsUpdated(data) {
+            console.log('[LoadoutSnapshot] loadouts_updated WebSocket message received');
+            const loadoutMap = data.characterLoadoutMap;
+            if (!loadoutMap) {
+                console.log('[LoadoutSnapshot] no characterLoadoutMap in message');
+                return;
+            }
+
+            const newSnapshots = {};
+            for (const [id, loadout] of Object.entries(loadoutMap)) {
+                if (!loadout.name) continue;
+                newSnapshots[id] = buildSnapshot(loadout);
+                console.log(
+                    `[LoadoutSnapshot]   → ${loadout.name} (id=${id}): type=${loadout.actionTypeHrid || 'All Skills'}, default=${loadout.isDefault}`
+                );
+            }
+
+            this.snapshots = newSnapshots;
+            storage.setJSON(getStorageKey$1(), this.snapshots, 'settings');
+            console.log(
+                `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
+                Object.values(newSnapshots).map((s) => s.name)
+            );
+        }
+
+        /**
+         * Find the best snapshot for a given action type.
+         * Priority: skill default > all skills default > skill non-default > all skills non-default
+         * @param {string} actionTypeHrid - e.g. "/action_types/brewing"
+         * @returns {Object|null} snapshot entry or null
+         */
+        _findSnapshot(actionTypeHrid) {
+            if (!config.getSetting('loadoutSnapshot')) return null;
+
+            let skillDefault = null;
+            let allSkillsDefault = null;
+            let skillNonDefault = null;
+            let allSkillsNonDefault = null;
+
+            for (const snapshot of Object.values(this.snapshots)) {
+                if (snapshot.actionTypeHrid === actionTypeHrid) {
+                    if (snapshot.isDefault) {
+                        skillDefault = snapshot;
+                    } else {
+                        skillNonDefault = snapshot;
+                    }
+                } else if (snapshot.actionTypeHrid === '') {
+                    if (snapshot.isDefault) {
+                        allSkillsDefault = snapshot;
+                    } else {
+                        allSkillsNonDefault = snapshot;
+                    }
+                }
+            }
+
+            return skillDefault || allSkillsDefault || skillNonDefault || allSkillsNonDefault || null;
+        }
+
+        /**
+         * Get a Map<itemLocationHrid, item> for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned Map has the same format as dataManager.getEquipment().
+         * @param {string} actionTypeHrid
+         * @returns {Map<string, Object>|null}
+         */
+        getSnapshotForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot || !snapshot.equipment?.length) return null;
+            return new Map(snapshot.equipment.map((e) => [e.itemLocationHrid, e]));
+        }
+
+        /**
+         * Get the drink slots array for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned array has the same format as dataManager.getActionDrinkSlots().
+         * @param {string} actionTypeHrid
+         * @returns {Array<{itemHrid: string}>|null}
+         */
+        getSnapshotDrinksForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            // Filter out empty slots so callers get only actual items
+            const filled = (snapshot.drinks || []).filter((d) => d.itemHrid);
+            return filled.length > 0 ? filled : null;
+        }
+
+        /**
+         * Get all saved loadout snapshots as a flat array.
+         * @returns {Array<Object>} Array of snapshot objects
+         */
+        getAllSnapshots() {
+            return Object.values(this.snapshots);
+        }
+
+        /**
+         * Get the name and default status of the saved loadout being used for a given action type.
+         * Returns an object with name and isDefault, or null if no snapshot exists or feature is disabled.
+         * @param {string} actionTypeHrid
+         * @returns {{ name: string, isDefault: boolean }|null}
+         */
+        getSnapshotInfoForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            return { name: snapshot.name, isDefault: !!snapshot.isDefault };
+        }
+
+        disable() {
+            if (this.loadoutsUpdatedHandler) {
+                webSocketHook.off('loadouts_updated', this.loadoutsUpdatedHandler);
+                this.loadoutsUpdatedHandler = null;
+            }
+
+            this.isInitialized = false;
+        }
+    }
+
+    const loadoutSnapshot = new LoadoutSnapshot();
+
+    /**
+     * Scroll Simulator
+     * Manages per-loadout and global default scroll selections for profit/XP simulation.
+     *
+     * Storage: scroll_simulation_${charId} in 'settings' store.
+     * Structure: { '__default__': [buffTypeHrid, ...], 'Loadout Name': [...], ... }
+     *
+     * Priority when resolving scrolls for an action type:
+     *   1. Loadout-specific selection (if a snapshot is active for the skill)
+     *   2. Global default ('__default__')
+     *   3. Empty set (if toggle is off or nothing configured)
+     */
+
+
+    const STORAGE_KEY_PREFIX = 'scroll_simulation';
+    const DEFAULT_KEY = '__default__';
+
+    function getStorageKey() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX}_${charId}`;
+    }
+
+    class ScrollSimulator {
+        constructor() {
+            /** @type {Object.<string, Set<string>>} loadoutName → Set of buffTypeHrids */
+            this.scrollsByLoadout = {};
+            this.initialized = false;
+        }
+
+        async initialize() {
+            if (this.initialized) return;
+            const saved = await storage.getJSON(getStorageKey(), 'settings', {});
+            for (const [name, arr] of Object.entries(saved)) {
+                if (Array.isArray(arr)) {
+                    this.scrollsByLoadout[name] = new Set(arr);
+                }
+            }
+            this.initialized = true;
+        }
+
+        /**
+         * Returns the Set of buffTypeHrids to simulate for the given action type.
+         * Respects the master toggle and loadout priority.
+         * @param {string} actionTypeHrid
+         * @returns {Set<string>}
+         */
+        getScrollSetForActionType(actionTypeHrid) {
+            if (!config.getSetting('simulateScrollEffects')) return new Set();
+            const loadoutName = loadoutSnapshot.getSnapshotInfoForSkill(actionTypeHrid)?.name;
+            if (loadoutName && this.scrollsByLoadout[loadoutName]) {
+                return this.scrollsByLoadout[loadoutName];
+            }
+            return this.scrollsByLoadout[DEFAULT_KEY] ?? new Set();
+        }
+
+        /**
+         * Returns the Set of buffTypeHrids configured for a specific loadout (or the default).
+         * @param {string|null} loadoutName - null for global defaults
+         * @returns {Set<string>}
+         */
+        getScrollsForLoadout(loadoutName) {
+            return this.scrollsByLoadout[loadoutName ?? DEFAULT_KEY] ?? new Set();
+        }
+
+        /**
+         * Save scroll selections for a loadout (or global defaults).
+         * @param {string|null} loadoutName - null for global defaults
+         * @param {string[]} buffTypeHrids
+         */
+        async saveScrollsForLoadout(loadoutName, buffTypeHrids) {
+            const key = loadoutName ?? DEFAULT_KEY;
+            this.scrollsByLoadout[key] = new Set(buffTypeHrids);
+            await this._persist();
+        }
+
+        async _persist() {
+            const toSave = {};
+            for (const [name, set] of Object.entries(this.scrollsByLoadout)) {
+                toSave[name] = [...set];
+            }
+            await storage.setJSON(getStorageKey(), toSave, 'settings');
+        }
+    }
+
+    const scrollSimulator = new ScrollSimulator();
+
+    /**
+     * Scroll Buff Values
+     * Hardcoded buff definitions for Labyrinth scrolls (formerly "Seals").
+     * The game JSON has no consumableDetail for scroll items — values sourced from item descriptions.
+     */
+
+
+    const SCROLL_BUFF_ITEMS = {
+        '/buff_types/efficiency': 'seal_of_efficiency',
+        '/buff_types/gathering': 'seal_of_gathering',
+        '/buff_types/wisdom': 'seal_of_wisdom',
+        '/buff_types/action_speed': 'seal_of_action_speed',
+        '/buff_types/rare_find': 'seal_of_rare_find',
+        '/buff_types/processing': 'seal_of_processing',
+        '/buff_types/gourmet': 'seal_of_gourmet',
+    };
+
+    const SCROLL_BUFF_LABELS = {
+        '/buff_types/efficiency': 'Scroll of Efficiency (+14%)',
+        '/buff_types/gathering': 'Scroll of Gathering (+18%)',
+        '/buff_types/wisdom': 'Scroll of Wisdom (+20%)',
+        '/buff_types/action_speed': 'Scroll of Action Speed (+15%)',
+        '/buff_types/rare_find': 'Scroll of Rare Find (+60%)',
+        '/buff_types/processing': 'Scroll of Processing (+20%)',
+        '/buff_types/gourmet': 'Scroll of Gourmet (+16%)',
+    };
+
+    /**
+     * Scroll Simulator UI
+     * - Injects "Scroll Simulation" button into the LoadoutsPanel nav buttons row
+     *   (between "View All Loadouts" and "Delete Loadout")
+     * - Opens a popup for selecting which scrolls to simulate for the loadout
+     * - Also exposes openDefaultsPopup() for the settings panel button
+     */
+
+
+    const BUTTON_ID = 'toolasha-scroll-sim-btn';
+    const POPUP_ID = 'toolasha-scroll-sim-popup';
+
+    // Ordered list of scroll buff types to display in the popup
+    const SCROLL_BUFF_ORDER = [
+        '/buff_types/efficiency',
+        '/buff_types/gathering',
+        '/buff_types/wisdom',
+        '/buff_types/action_speed',
+        '/buff_types/rare_find',
+        '/buff_types/processing',
+        '/buff_types/gourmet',
+    ];
+
+    // ─── Loadout name lookup ────────────────────────────────────────
+
+    /**
+     * Try to read the current loadout name from siblings/ancestors of the nav buttons row.
+     * @param {HTMLElement} navButtons
+     * @returns {string|null}
+     */
+    function getLoadoutName(navButtons) {
+        const panel = navButtons.parentElement;
+        if (!panel) return null;
+        const metadata = panel.querySelector('[class*="LoadoutsPanel_metadata"]');
+        if (!metadata) return null;
+        // Structure: "Name" [skill svg] "LoadoutName" [Edit button]
+        // Find the text node after the SVG (skip the "Name" label)
+        let seenSvg = false;
+        for (const child of metadata.childNodes) {
+            if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'svg') {
+                seenSvg = true;
+            } else if (seenSvg && child.nodeType === Node.TEXT_NODE) {
+                const text = child.textContent.trim();
+                if (text) return text;
+            }
+        }
+        return null;
+    }
+
+    // ─── Sprite helper ──────────────────────────────────────────────
+
+    let _spriteUrl = null;
+
+    function getItemsSpriteUrl() {
+        if (_spriteUrl === null) {
+            const el = document.querySelector('use[href*="items_sprite"]');
+            _spriteUrl = el ? el.getAttribute('href').split('#')[0] : '';
+        }
+        return _spriteUrl;
+    }
+
+    function createScrollIcon(buffTypeHrid, size = 16) {
+        const spriteUrl = getItemsSpriteUrl();
+        if (!spriteUrl) return null;
+        const itemSuffix = SCROLL_BUFF_ITEMS[buffTypeHrid];
+        if (!itemSuffix) return null;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', String(size));
+        svg.setAttribute('height', String(size));
+        svg.style.cssText = 'flex-shrink:0; vertical-align:middle;';
+
+        const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        use.setAttribute('href', `${spriteUrl}#${itemSuffix}`);
+        svg.appendChild(use);
+        return svg;
+    }
+
+    // ─── Popup ──────────────────────────────────────────────────────
+
+    class ScrollSimPopup {
+        constructor() {
+            this.container = null;
+            this.loadoutName = null; // null = global defaults
+            this.isDragging = false;
+            this.dragOffset = { x: 0, y: 0 };
+            this.dragMoveHandler = null;
+            this.dragUpHandler = null;
+            this.clickOutsideHandler = null;
+        }
+
+        /**
+         * Open or re-open the popup for the given loadout (null = global defaults).
+         * @param {string|null} loadoutName
+         */
+        open(loadoutName) {
+            this.loadoutName = loadoutName;
+
+            if (this.container) {
+                bringPanelToFront(this.container);
+                this._refreshBody();
+                return;
+            }
+
+            this._build();
+        }
+
+        close() {
+            this._teardown();
+        }
+
+        _build() {
+            this.container = document.createElement('div');
+            this.container.id = POPUP_ID;
+            this.container.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: ${config.Z_FLOATING_PANEL};
+            width: 320px;
+            display: flex;
+            flex-direction: column;
+            background: rgba(10, 10, 20, 0.96);
+            border: 2px solid ${config.COLOR_ACCENT};
+            border-radius: 8px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.8);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #fff;
+            user-select: none;
+            overflow: hidden;
+        `;
+
+            // Header
+            const header = document.createElement('div');
+            header.style.cssText = `
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            cursor: grab;
+            background: rgba(255,255,255,0.04);
+            flex-shrink: 0;
+        `;
+
+            const title = document.createElement('span');
+            title.style.cssText = `font-size: 0.9rem; font-weight: 600; color: ${config.COLOR_ACCENT};`;
+            const contextLabel = this.loadoutName ? this.loadoutName : 'Defaults';
+            title.textContent = `Scroll Simulation — ${contextLabel}`;
+
+            const closeBtn = document.createElement('button');
+            closeBtn.textContent = '×';
+            closeBtn.style.cssText = `
+            background: none; border: none; color: #aaa;
+            font-size: 1.2rem; line-height: 1; cursor: pointer; padding: 0 2px;
+        `;
+            closeBtn.addEventListener('mouseenter', () => (closeBtn.style.color = '#fff'));
+            closeBtn.addEventListener('mouseleave', () => (closeBtn.style.color = '#aaa'));
+            closeBtn.addEventListener('click', () => this.close());
+
+            header.appendChild(title);
+            header.appendChild(closeBtn);
+
+            // Body
+            const body = document.createElement('div');
+            body.id = 'toolasha-scroll-sim-body';
+            body.style.cssText = `flex: 1; overflow-y: auto; padding: 12px 14px;`;
+
+            this.container.appendChild(header);
+            this.container.appendChild(body);
+            document.body.appendChild(this.container);
+            registerFloatingPanel(this.container);
+
+            this._renderBody(body);
+            this._setupDragging(header);
+            this._setupClickOutside();
+        }
+
+        _refreshBody() {
+            const body = this.container?.querySelector('#toolasha-scroll-sim-body');
+            if (!body) return;
+            body.innerHTML = '';
+            this._renderBody(body);
+        }
+
+        _renderBody(body) {
+            const currentScrolls = scrollSimulator.getScrollsForLoadout(this.loadoutName);
+
+            // Note
+            const note = document.createElement('div');
+            note.style.cssText = `
+            font-size: 0.72rem;
+            color: rgba(255,255,255,0.45);
+            margin-bottom: 12px;
+            font-style: italic;
+            line-height: 1.4;
+        `;
+            note.textContent = this.loadoutName
+                ? 'These scrolls override the defaults when this loadout is active for a skill.'
+                : 'Applied when no loadout matches the current skill (or loadout snapshots are disabled).';
+            body.appendChild(note);
+
+            // Scroll rows
+            for (const buffTypeHrid of SCROLL_BUFF_ORDER) {
+                const row = document.createElement('label');
+                row.style.cssText = `
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 6px 0;
+                cursor: pointer;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+            `;
+                row.addEventListener('mouseenter', () => (row.style.background = 'rgba(255,255,255,0.04)'));
+                row.addEventListener('mouseleave', () => (row.style.background = ''));
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = currentScrolls.has(buffTypeHrid);
+                checkbox.style.cssText = 'width:16px; height:16px; flex-shrink:0; cursor:pointer;';
+                checkbox.addEventListener('change', () => this._onToggle());
+
+                const icon = createScrollIcon(buffTypeHrid, 18);
+
+                const label = document.createElement('span');
+                label.style.cssText = `font-size: 0.82rem; color: rgba(255,255,255,0.85);`;
+                label.textContent = SCROLL_BUFF_LABELS[buffTypeHrid];
+
+                row.appendChild(checkbox);
+                if (icon) row.appendChild(icon);
+                row.appendChild(label);
+                body.appendChild(row);
+            }
+        }
+
+        async _onToggle() {
+            const body = this.container?.querySelector('#toolasha-scroll-sim-body');
+            if (!body) return;
+            const checkboxes = body.querySelectorAll('input[type="checkbox"]');
+            const selected = [];
+            checkboxes.forEach((cb, i) => {
+                if (cb.checked) selected.push(SCROLL_BUFF_ORDER[i]);
+            });
+            await scrollSimulator.saveScrollsForLoadout(this.loadoutName, selected);
+        }
+
+        _setupDragging(header) {
+            header.addEventListener('mousedown', (e) => {
+                if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+                bringPanelToFront(this.container);
+                this.isDragging = true;
+                const rect = this.container.getBoundingClientRect();
+                this.container.style.transform = 'none';
+                this.container.style.top = `${rect.top}px`;
+                this.container.style.left = `${rect.left}px`;
+                this.dragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                header.style.cursor = 'grabbing';
+                e.preventDefault();
+            });
+
+            this.dragMoveHandler = (e) => {
+                if (!this.isDragging) return;
+                let x = e.clientX - this.dragOffset.x;
+                let y = e.clientY - this.dragOffset.y;
+                const minVisible = 80;
+                y = Math.max(0, Math.min(y, window.innerHeight - minVisible));
+                x = Math.max(-this.container.offsetWidth + minVisible, Math.min(x, window.innerWidth - minVisible));
+                this.container.style.top = `${y}px`;
+                this.container.style.left = `${x}px`;
+            };
+
+            this.dragUpHandler = () => {
+                if (!this.isDragging) return;
+                this.isDragging = false;
+                header.style.cursor = 'grab';
+            };
+
+            document.addEventListener('mousemove', this.dragMoveHandler);
+            document.addEventListener('mouseup', this.dragUpHandler);
+        }
+
+        _setupClickOutside() {
+            this.clickOutsideHandler = (e) => {
+                if (this.container && !this.container.contains(e.target)) {
+                    this.close();
+                }
+            };
+            document.addEventListener('mousedown', this.clickOutsideHandler);
+        }
+
+        _teardown() {
+            if (this.dragMoveHandler) {
+                document.removeEventListener('mousemove', this.dragMoveHandler);
+                this.dragMoveHandler = null;
+            }
+            if (this.dragUpHandler) {
+                document.removeEventListener('mouseup', this.dragUpHandler);
+                this.dragUpHandler = null;
+            }
+            if (this.clickOutsideHandler) {
+                document.removeEventListener('mousedown', this.clickOutsideHandler);
+                this.clickOutsideHandler = null;
+            }
+            if (this.container) {
+                unregisterFloatingPanel(this.container);
+                this.container.remove();
+                this.container = null;
+            }
+            this.isDragging = false;
+        }
+    }
+
+    const popup = new ScrollSimPopup();
+
+    // ─── Loadout panel button ───────────────────────────────────────
+
+    function injectButton(navButtons) {
+        if (document.getElementById(BUTTON_ID)) return;
+
+        const loadoutName = getLoadoutName(navButtons);
+
+        const button = document.createElement('button');
+        button.id = BUTTON_ID;
+        button.textContent = 'Scroll Simulation';
+        button.className = 'Button_button__1Fe9z';
+        button.style.cssText = `white-space: nowrap;`;
+        button.addEventListener('click', () => popup.open(loadoutName));
+
+        // Insert before the Delete Loadout button (Button_warning class)
+        const deleteBtn = navButtons.querySelector('[class*="Button_warning"]');
+        if (deleteBtn) {
+            navButtons.insertBefore(button, deleteBtn);
+        } else {
+            navButtons.appendChild(button);
+        }
+    }
+
+    // ─── Public API ─────────────────────────────────────────────────
+
+    function initialize() {
+        domObserver.onClass('ScrollSimulatorUI', 'LoadoutsPanel_buttonsContainer', (node) => {
+            const panel = node.closest('[class*="LoadoutsPanel_selectedLoadout"]') || node.parentElement;
+            const navButtons = panel?.querySelector('[class*="LoadoutsPanel_navButtons"]');
+            if (navButtons) injectButton(navButtons);
+        });
+    }
+
+    /**
+     * Open the defaults popup — called from the settings panel button.
+     */
+    function openDefaultsPopup() {
+        popup.open(null);
+    }
+
+    function disable() {
+        document.getElementById(BUTTON_ID)?.remove();
+        popup.close();
+    }
+
+    var scrollSimulatorUI = {
+        name: 'Scroll Simulator UI',
+        initialize,
+        openDefaultsPopup,
+        disable,
+    };
+
+    /**
      * Iron Cow Mode
      * Force-disables and locks all market/profit-related settings for players
      * who have no marketplace access.
@@ -13676,6 +14389,9 @@ ${hideRules}
                 if (e.target.classList.contains('toolasha-custom-price-edit-btn')) {
                     this.openCustomPriceOverridesEditor();
                 }
+                if (e.target.classList.contains('toolasha-scroll-defaults-btn')) {
+                    scrollSimulatorUI.openDefaultsPopup();
+                }
             });
 
             return panel;
@@ -13994,6 +14710,34 @@ ${hideRules}
                 `;
                 }
 
+                case 'checkboxWithButton': {
+                    const checkedCwb = currentSetting?.isTrue ?? settingDef.default ?? false;
+                    const btnLabel = settingDef.buttonLabel ?? 'Configure...';
+                    return `
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <button type="button"
+                            class="toolasha-scroll-defaults-btn"
+                            data-setting-id="${settingId}"
+                            style="
+                                background: #4a7c59;
+                                border: 1px solid #5a8c69;
+                                border-radius: 4px;
+                                padding: 4px 10px;
+                                color: #e0e0e0;
+                                cursor: pointer;
+                                font-size: 12px;
+                                white-space: nowrap;
+                            ">
+                            ${btnLabel}
+                        </button>
+                        <input type="checkbox"
+                            id="${settingId}"
+                            ${checkedCwb ? 'checked' : ''}
+                            style="width:18px; height:18px; cursor:pointer;">
+                    </div>
+                `;
+                }
+
                 default:
                     return `<span style="color: red;">Unknown type: ${type}</span>`;
             }
@@ -14235,11 +14979,12 @@ ${hideRules}
             // Block changes to locked settings while Iron Cow mode is active
             if (ironCowMode.isEnabled() && IRON_COW_SETTINGS.has(settingId)) return;
             const type = input.closest('.toolasha-setting')?.dataset.type || 'checkbox';
+            const isCheckboxType = type === 'checkbox' || type === 'checkboxWithButton';
 
             let value;
 
             // Get value based on type
-            if (type === 'checkbox') {
+            if (isCheckboxType) {
                 value = input.checked;
             } else if (type === 'number' || type === 'slider') {
                 value = parseFloat(input.value) || 0;
@@ -14268,14 +15013,14 @@ ${hideRules}
             if (!this.currentSettings[settingId]) {
                 this.currentSettings[settingId] = {};
             }
-            if (type === 'checkbox') {
+            if (isCheckboxType) {
                 this.currentSettings[settingId].isTrue = value;
             } else {
                 this.currentSettings[settingId].value = value;
             }
 
             // Update config module (for backward compatibility)
-            if (type === 'checkbox') {
+            if (isCheckboxType) {
                 this.config.setSetting(settingId, value);
             } else {
                 this.config.setSettingValue(settingId, value);
@@ -14287,7 +15032,7 @@ ${hideRules}
             }
 
             // Update disabled state for dependent settings
-            if (type === 'checkbox') {
+            if (isCheckboxType) {
                 this.applyDisabledByState();
             }
         }

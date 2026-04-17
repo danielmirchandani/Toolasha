@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 2.11.0
+ * Version: 2.12.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1151,7 +1151,7 @@
      */
 
 
-    const BUTTON_ID = 'toolasha-loadout-export-button';
+    const BUTTON_ID$1 = 'toolasha-loadout-export-button';
 
     /**
      * Build a full export object using DOM-scraped loadout data overlaid on character data
@@ -1184,16 +1184,16 @@
      * Inject the export button into the loadout panel buttons container
      * @param {Element} selectedLoadout
      */
-    function injectButton(selectedLoadout) {
+    function injectButton$1(selectedLoadout) {
         // Guard: don't inject twice
-        if (document.getElementById(BUTTON_ID)) return;
+        if (document.getElementById(BUTTON_ID$1)) return;
 
         // Find the buttons container inside the selected loadout
         const buttonsContainer = selectedLoadout.querySelector('[class*="LoadoutsPanel_buttonsContainer"]');
         if (!buttonsContainer) return;
 
         const button = document.createElement('button');
-        button.id = BUTTON_ID;
+        button.id = BUTTON_ID$1;
         button.textContent = 'Export to Sim';
         button.style.cssText = `
         border-radius: 5px;
@@ -1281,17 +1281,17 @@
     /**
      * Initialize loadout export button
      */
-    function initialize$3() {
+    function initialize$4() {
         domObserver.onClass('LoadoutExportButton-Panel', 'LoadoutsPanel_buttonsContainer', (node) => {
             const selectedLoadout = node.closest('[class*="LoadoutsPanel_selectedLoadout"]');
             if (!selectedLoadout) return;
-            injectButton(selectedLoadout);
+            injectButton$1(selectedLoadout);
         });
     }
 
     var loadoutExportButton = {
         name: 'Loadout Export Button',
-        initialize: initialize$3,
+        initialize: initialize$4,
     };
 
     /**
@@ -1404,7 +1404,7 @@
 
     let unregisterHandler = null;
 
-    function initialize$2() {
+    function initialize$3() {
         if (!config.getSetting('loadoutEnhancementDisplay')) return;
 
         unregisterHandler = domObserver.register(
@@ -1437,7 +1437,7 @@
 
     var loadoutEnhancementDisplay = {
         name: 'Loadout Enhancement Display',
-        initialize: initialize$2,
+        initialize: initialize$3,
         cleanup: cleanup$1,
     };
 
@@ -1449,15 +1449,15 @@
 
 
     const CSS_PREFIX = 'mwi-loadout';
-    const STORAGE_KEY_PREFIX$2 = 'loadout_sortOrder';
+    const STORAGE_KEY_PREFIX$3 = 'loadout_sortOrder';
 
     /**
      * Get character-scoped storage key for loadout sort order.
      * @returns {string}
      */
-    function getStorageKey$2() {
+    function getStorageKey$3() {
         const charId = dataManager.getCurrentCharacterId() || 'default';
-        return `${STORAGE_KEY_PREFIX$2}_${charId}`;
+        return `${STORAGE_KEY_PREFIX$3}_${charId}`;
     }
 
     class LoadoutSort {
@@ -1521,7 +1521,7 @@
          * @param {HTMLElement} containerEl
          */
         async _applyStoredOrder(containerEl) {
-            const savedOrder = await storage.getJSON(getStorageKey$2(), 'settings', null);
+            const savedOrder = await storage.getJSON(getStorageKey$3(), 'settings', null);
             if (!savedOrder || !Array.isArray(savedOrder) || savedOrder.length === 0) return;
 
             const loadoutEls = Array.from(containerEl.querySelectorAll('[class*="LoadoutsPanel_characterLoadout"]'));
@@ -1660,7 +1660,7 @@
         _saveOrder(containerEl) {
             const loadoutEls = Array.from(containerEl.querySelectorAll('[class*="LoadoutsPanel_characterLoadout"]'));
             const order = loadoutEls.map((el) => this._buildIdentifier(el));
-            storage.setJSON(getStorageKey$2(), order, 'settings');
+            storage.setJSON(getStorageKey$3(), order, 'settings');
         }
 
         disable() {
@@ -1706,15 +1706,15 @@
      */
 
 
-    const STORAGE_KEY_PREFIX$1 = 'loadout_snapshots';
+    const STORAGE_KEY_PREFIX$2 = 'loadout_snapshots';
 
     /**
      * Get character-scoped storage key.
      * @returns {string}
      */
-    function getStorageKey$1() {
+    function getStorageKey$2() {
         const charId = dataManager.getCurrentCharacterId() || 'default';
-        return `${STORAGE_KEY_PREFIX$1}_${charId}`;
+        return `${STORAGE_KEY_PREFIX$2}_${charId}`;
     }
 
     /**
@@ -1791,7 +1791,7 @@
             this.isInitialized = true;
 
             // Load existing snapshots into memory
-            this.snapshots = (await storage.getJSON(getStorageKey$1(), 'settings', null)) || {};
+            this.snapshots = (await storage.getJSON(getStorageKey$2(), 'settings', null)) || {};
             console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
 
             // Listen for loadouts_updated WebSocket messages
@@ -1822,7 +1822,7 @@
             }
 
             this.snapshots = newSnapshots;
-            storage.setJSON(getStorageKey$1(), this.snapshots, 'settings');
+            storage.setJSON(getStorageKey$2(), this.snapshots, 'settings');
             console.log(
                 `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
                 Object.values(newSnapshots).map((s) => s.name)
@@ -1921,6 +1921,540 @@
     }
 
     const loadoutSnapshot = new LoadoutSnapshot();
+
+    /**
+     * Scroll Simulator
+     * Manages per-loadout and global default scroll selections for profit/XP simulation.
+     *
+     * Storage: scroll_simulation_${charId} in 'settings' store.
+     * Structure: { '__default__': [buffTypeHrid, ...], 'Loadout Name': [...], ... }
+     *
+     * Priority when resolving scrolls for an action type:
+     *   1. Loadout-specific selection (if a snapshot is active for the skill)
+     *   2. Global default ('__default__')
+     *   3. Empty set (if toggle is off or nothing configured)
+     */
+
+
+    const STORAGE_KEY_PREFIX$1 = 'scroll_simulation';
+    const DEFAULT_KEY = '__default__';
+
+    function getStorageKey$1() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX$1}_${charId}`;
+    }
+
+    class ScrollSimulator {
+        constructor() {
+            /** @type {Object.<string, Set<string>>} loadoutName → Set of buffTypeHrids */
+            this.scrollsByLoadout = {};
+            this.initialized = false;
+        }
+
+        async initialize() {
+            if (this.initialized) return;
+            const saved = await storage.getJSON(getStorageKey$1(), 'settings', {});
+            for (const [name, arr] of Object.entries(saved)) {
+                if (Array.isArray(arr)) {
+                    this.scrollsByLoadout[name] = new Set(arr);
+                }
+            }
+            this.initialized = true;
+        }
+
+        /**
+         * Returns the Set of buffTypeHrids to simulate for the given action type.
+         * Respects the master toggle and loadout priority.
+         * @param {string} actionTypeHrid
+         * @returns {Set<string>}
+         */
+        getScrollSetForActionType(actionTypeHrid) {
+            if (!config.getSetting('simulateScrollEffects')) return new Set();
+            const loadoutName = loadoutSnapshot.getSnapshotInfoForSkill(actionTypeHrid)?.name;
+            if (loadoutName && this.scrollsByLoadout[loadoutName]) {
+                return this.scrollsByLoadout[loadoutName];
+            }
+            return this.scrollsByLoadout[DEFAULT_KEY] ?? new Set();
+        }
+
+        /**
+         * Returns the Set of buffTypeHrids configured for a specific loadout (or the default).
+         * @param {string|null} loadoutName - null for global defaults
+         * @returns {Set<string>}
+         */
+        getScrollsForLoadout(loadoutName) {
+            return this.scrollsByLoadout[loadoutName ?? DEFAULT_KEY] ?? new Set();
+        }
+
+        /**
+         * Save scroll selections for a loadout (or global defaults).
+         * @param {string|null} loadoutName - null for global defaults
+         * @param {string[]} buffTypeHrids
+         */
+        async saveScrollsForLoadout(loadoutName, buffTypeHrids) {
+            const key = loadoutName ?? DEFAULT_KEY;
+            this.scrollsByLoadout[key] = new Set(buffTypeHrids);
+            await this._persist();
+        }
+
+        async _persist() {
+            const toSave = {};
+            for (const [name, set] of Object.entries(this.scrollsByLoadout)) {
+                toSave[name] = [...set];
+            }
+            await storage.setJSON(getStorageKey$1(), toSave, 'settings');
+        }
+    }
+
+    const scrollSimulator = new ScrollSimulator();
+
+    /**
+     * Floating Panel Z-Index Manager
+     * Manages bring-to-front ordering for persistent floating panels.
+     * All panels are capped below config.Z_FLOATING_PANEL + 99 (1199)
+     * so they never cross the game's MUI modal layer (~1300).
+     */
+
+
+    const panels = new Set();
+
+    /**
+     * Register a floating panel element for z-index management
+     * @param {HTMLElement} el - The panel element
+     */
+    function registerFloatingPanel(el) {
+        panels.add(el);
+    }
+
+    /**
+     * Unregister a floating panel element
+     * @param {HTMLElement} el - The panel element
+     */
+    function unregisterFloatingPanel(el) {
+        panels.delete(el);
+    }
+
+    /**
+     * Bring a panel to the front among all registered panels,
+     * without exceeding config.Z_FLOATING_PANEL + 99.
+     * @param {HTMLElement} el - The panel to bring forward
+     */
+    function bringPanelToFront(el) {
+        const base = config.Z_FLOATING_PANEL;
+        const cap = base + 99;
+
+        let maxZ = base;
+        for (const p of panels) {
+            const z = parseInt(p.style.zIndex) || base;
+            if (z > maxZ) maxZ = z;
+        }
+
+        const next = maxZ + 1;
+        if (next > cap) {
+            // Overflow — reassign all from base upward, put el last
+            let i = base;
+            for (const p of panels) {
+                if (p !== el) p.style.zIndex = String(i++);
+            }
+            el.style.zIndex = String(i);
+        } else {
+            el.style.zIndex = String(next);
+        }
+    }
+
+    /**
+     * Scroll Buff Values
+     * Hardcoded buff definitions for Labyrinth scrolls (formerly "Seals").
+     * The game JSON has no consumableDetail for scroll items — values sourced from item descriptions.
+     */
+
+
+    const SCROLL_BUFF_ITEMS = {
+        '/buff_types/efficiency': 'seal_of_efficiency',
+        '/buff_types/gathering': 'seal_of_gathering',
+        '/buff_types/wisdom': 'seal_of_wisdom',
+        '/buff_types/action_speed': 'seal_of_action_speed',
+        '/buff_types/rare_find': 'seal_of_rare_find',
+        '/buff_types/processing': 'seal_of_processing',
+        '/buff_types/gourmet': 'seal_of_gourmet',
+    };
+
+    const SCROLL_BUFF_LABELS = {
+        '/buff_types/efficiency': 'Scroll of Efficiency (+14%)',
+        '/buff_types/gathering': 'Scroll of Gathering (+18%)',
+        '/buff_types/wisdom': 'Scroll of Wisdom (+20%)',
+        '/buff_types/action_speed': 'Scroll of Action Speed (+15%)',
+        '/buff_types/rare_find': 'Scroll of Rare Find (+60%)',
+        '/buff_types/processing': 'Scroll of Processing (+20%)',
+        '/buff_types/gourmet': 'Scroll of Gourmet (+16%)',
+    };
+
+    /**
+     * Scroll Simulator UI
+     * - Injects "Scroll Simulation" button into the LoadoutsPanel nav buttons row
+     *   (between "View All Loadouts" and "Delete Loadout")
+     * - Opens a popup for selecting which scrolls to simulate for the loadout
+     * - Also exposes openDefaultsPopup() for the settings panel button
+     */
+
+
+    const BUTTON_ID = 'toolasha-scroll-sim-btn';
+    const POPUP_ID = 'toolasha-scroll-sim-popup';
+
+    // Ordered list of scroll buff types to display in the popup
+    const SCROLL_BUFF_ORDER = [
+        '/buff_types/efficiency',
+        '/buff_types/gathering',
+        '/buff_types/wisdom',
+        '/buff_types/action_speed',
+        '/buff_types/rare_find',
+        '/buff_types/processing',
+        '/buff_types/gourmet',
+    ];
+
+    // ─── Loadout name lookup ────────────────────────────────────────
+
+    /**
+     * Try to read the current loadout name from siblings/ancestors of the nav buttons row.
+     * @param {HTMLElement} navButtons
+     * @returns {string|null}
+     */
+    function getLoadoutName(navButtons) {
+        const panel = navButtons.parentElement;
+        if (!panel) return null;
+        const metadata = panel.querySelector('[class*="LoadoutsPanel_metadata"]');
+        if (!metadata) return null;
+        // Structure: "Name" [skill svg] "LoadoutName" [Edit button]
+        // Find the text node after the SVG (skip the "Name" label)
+        let seenSvg = false;
+        for (const child of metadata.childNodes) {
+            if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'svg') {
+                seenSvg = true;
+            } else if (seenSvg && child.nodeType === Node.TEXT_NODE) {
+                const text = child.textContent.trim();
+                if (text) return text;
+            }
+        }
+        return null;
+    }
+
+    // ─── Sprite helper ──────────────────────────────────────────────
+
+    let _spriteUrl = null;
+
+    function getItemsSpriteUrl() {
+        if (_spriteUrl === null) {
+            const el = document.querySelector('use[href*="items_sprite"]');
+            _spriteUrl = el ? el.getAttribute('href').split('#')[0] : '';
+        }
+        return _spriteUrl;
+    }
+
+    function createScrollIcon(buffTypeHrid, size = 16) {
+        const spriteUrl = getItemsSpriteUrl();
+        if (!spriteUrl) return null;
+        const itemSuffix = SCROLL_BUFF_ITEMS[buffTypeHrid];
+        if (!itemSuffix) return null;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', String(size));
+        svg.setAttribute('height', String(size));
+        svg.style.cssText = 'flex-shrink:0; vertical-align:middle;';
+
+        const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        use.setAttribute('href', `${spriteUrl}#${itemSuffix}`);
+        svg.appendChild(use);
+        return svg;
+    }
+
+    // ─── Popup ──────────────────────────────────────────────────────
+
+    class ScrollSimPopup {
+        constructor() {
+            this.container = null;
+            this.loadoutName = null; // null = global defaults
+            this.isDragging = false;
+            this.dragOffset = { x: 0, y: 0 };
+            this.dragMoveHandler = null;
+            this.dragUpHandler = null;
+            this.clickOutsideHandler = null;
+        }
+
+        /**
+         * Open or re-open the popup for the given loadout (null = global defaults).
+         * @param {string|null} loadoutName
+         */
+        open(loadoutName) {
+            this.loadoutName = loadoutName;
+
+            if (this.container) {
+                bringPanelToFront(this.container);
+                this._refreshBody();
+                return;
+            }
+
+            this._build();
+        }
+
+        close() {
+            this._teardown();
+        }
+
+        _build() {
+            this.container = document.createElement('div');
+            this.container.id = POPUP_ID;
+            this.container.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: ${config.Z_FLOATING_PANEL};
+            width: 320px;
+            display: flex;
+            flex-direction: column;
+            background: rgba(10, 10, 20, 0.96);
+            border: 2px solid ${config.COLOR_ACCENT};
+            border-radius: 8px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.8);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #fff;
+            user-select: none;
+            overflow: hidden;
+        `;
+
+            // Header
+            const header = document.createElement('div');
+            header.style.cssText = `
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            cursor: grab;
+            background: rgba(255,255,255,0.04);
+            flex-shrink: 0;
+        `;
+
+            const title = document.createElement('span');
+            title.style.cssText = `font-size: 0.9rem; font-weight: 600; color: ${config.COLOR_ACCENT};`;
+            const contextLabel = this.loadoutName ? this.loadoutName : 'Defaults';
+            title.textContent = `Scroll Simulation — ${contextLabel}`;
+
+            const closeBtn = document.createElement('button');
+            closeBtn.textContent = '×';
+            closeBtn.style.cssText = `
+            background: none; border: none; color: #aaa;
+            font-size: 1.2rem; line-height: 1; cursor: pointer; padding: 0 2px;
+        `;
+            closeBtn.addEventListener('mouseenter', () => (closeBtn.style.color = '#fff'));
+            closeBtn.addEventListener('mouseleave', () => (closeBtn.style.color = '#aaa'));
+            closeBtn.addEventListener('click', () => this.close());
+
+            header.appendChild(title);
+            header.appendChild(closeBtn);
+
+            // Body
+            const body = document.createElement('div');
+            body.id = 'toolasha-scroll-sim-body';
+            body.style.cssText = `flex: 1; overflow-y: auto; padding: 12px 14px;`;
+
+            this.container.appendChild(header);
+            this.container.appendChild(body);
+            document.body.appendChild(this.container);
+            registerFloatingPanel(this.container);
+
+            this._renderBody(body);
+            this._setupDragging(header);
+            this._setupClickOutside();
+        }
+
+        _refreshBody() {
+            const body = this.container?.querySelector('#toolasha-scroll-sim-body');
+            if (!body) return;
+            body.innerHTML = '';
+            this._renderBody(body);
+        }
+
+        _renderBody(body) {
+            const currentScrolls = scrollSimulator.getScrollsForLoadout(this.loadoutName);
+
+            // Note
+            const note = document.createElement('div');
+            note.style.cssText = `
+            font-size: 0.72rem;
+            color: rgba(255,255,255,0.45);
+            margin-bottom: 12px;
+            font-style: italic;
+            line-height: 1.4;
+        `;
+            note.textContent = this.loadoutName
+                ? 'These scrolls override the defaults when this loadout is active for a skill.'
+                : 'Applied when no loadout matches the current skill (or loadout snapshots are disabled).';
+            body.appendChild(note);
+
+            // Scroll rows
+            for (const buffTypeHrid of SCROLL_BUFF_ORDER) {
+                const row = document.createElement('label');
+                row.style.cssText = `
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 6px 0;
+                cursor: pointer;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+            `;
+                row.addEventListener('mouseenter', () => (row.style.background = 'rgba(255,255,255,0.04)'));
+                row.addEventListener('mouseleave', () => (row.style.background = ''));
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = currentScrolls.has(buffTypeHrid);
+                checkbox.style.cssText = 'width:16px; height:16px; flex-shrink:0; cursor:pointer;';
+                checkbox.addEventListener('change', () => this._onToggle());
+
+                const icon = createScrollIcon(buffTypeHrid, 18);
+
+                const label = document.createElement('span');
+                label.style.cssText = `font-size: 0.82rem; color: rgba(255,255,255,0.85);`;
+                label.textContent = SCROLL_BUFF_LABELS[buffTypeHrid];
+
+                row.appendChild(checkbox);
+                if (icon) row.appendChild(icon);
+                row.appendChild(label);
+                body.appendChild(row);
+            }
+        }
+
+        async _onToggle() {
+            const body = this.container?.querySelector('#toolasha-scroll-sim-body');
+            if (!body) return;
+            const checkboxes = body.querySelectorAll('input[type="checkbox"]');
+            const selected = [];
+            checkboxes.forEach((cb, i) => {
+                if (cb.checked) selected.push(SCROLL_BUFF_ORDER[i]);
+            });
+            await scrollSimulator.saveScrollsForLoadout(this.loadoutName, selected);
+        }
+
+        _setupDragging(header) {
+            header.addEventListener('mousedown', (e) => {
+                if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+                bringPanelToFront(this.container);
+                this.isDragging = true;
+                const rect = this.container.getBoundingClientRect();
+                this.container.style.transform = 'none';
+                this.container.style.top = `${rect.top}px`;
+                this.container.style.left = `${rect.left}px`;
+                this.dragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                header.style.cursor = 'grabbing';
+                e.preventDefault();
+            });
+
+            this.dragMoveHandler = (e) => {
+                if (!this.isDragging) return;
+                let x = e.clientX - this.dragOffset.x;
+                let y = e.clientY - this.dragOffset.y;
+                const minVisible = 80;
+                y = Math.max(0, Math.min(y, window.innerHeight - minVisible));
+                x = Math.max(-this.container.offsetWidth + minVisible, Math.min(x, window.innerWidth - minVisible));
+                this.container.style.top = `${y}px`;
+                this.container.style.left = `${x}px`;
+            };
+
+            this.dragUpHandler = () => {
+                if (!this.isDragging) return;
+                this.isDragging = false;
+                header.style.cursor = 'grab';
+            };
+
+            document.addEventListener('mousemove', this.dragMoveHandler);
+            document.addEventListener('mouseup', this.dragUpHandler);
+        }
+
+        _setupClickOutside() {
+            this.clickOutsideHandler = (e) => {
+                if (this.container && !this.container.contains(e.target)) {
+                    this.close();
+                }
+            };
+            document.addEventListener('mousedown', this.clickOutsideHandler);
+        }
+
+        _teardown() {
+            if (this.dragMoveHandler) {
+                document.removeEventListener('mousemove', this.dragMoveHandler);
+                this.dragMoveHandler = null;
+            }
+            if (this.dragUpHandler) {
+                document.removeEventListener('mouseup', this.dragUpHandler);
+                this.dragUpHandler = null;
+            }
+            if (this.clickOutsideHandler) {
+                document.removeEventListener('mousedown', this.clickOutsideHandler);
+                this.clickOutsideHandler = null;
+            }
+            if (this.container) {
+                unregisterFloatingPanel(this.container);
+                this.container.remove();
+                this.container = null;
+            }
+            this.isDragging = false;
+        }
+    }
+
+    const popup = new ScrollSimPopup();
+
+    // ─── Loadout panel button ───────────────────────────────────────
+
+    function injectButton(navButtons) {
+        if (document.getElementById(BUTTON_ID)) return;
+
+        const loadoutName = getLoadoutName(navButtons);
+
+        const button = document.createElement('button');
+        button.id = BUTTON_ID;
+        button.textContent = 'Scroll Simulation';
+        button.className = 'Button_button__1Fe9z';
+        button.style.cssText = `white-space: nowrap;`;
+        button.addEventListener('click', () => popup.open(loadoutName));
+
+        // Insert before the Delete Loadout button (Button_warning class)
+        const deleteBtn = navButtons.querySelector('[class*="Button_warning"]');
+        if (deleteBtn) {
+            navButtons.insertBefore(button, deleteBtn);
+        } else {
+            navButtons.appendChild(button);
+        }
+    }
+
+    // ─── Public API ─────────────────────────────────────────────────
+
+    function initialize$2() {
+        domObserver.onClass('ScrollSimulatorUI', 'LoadoutsPanel_buttonsContainer', (node) => {
+            const panel = node.closest('[class*="LoadoutsPanel_selectedLoadout"]') || node.parentElement;
+            const navButtons = panel?.querySelector('[class*="LoadoutsPanel_navButtons"]');
+            if (navButtons) injectButton(navButtons);
+        });
+    }
+
+    /**
+     * Open the defaults popup — called from the settings panel button.
+     */
+    function openDefaultsPopup() {
+        popup.open(null);
+    }
+
+    function disable$1() {
+        document.getElementById(BUTTON_ID)?.remove();
+        popup.close();
+    }
+
+    var scrollSimulatorUI = {
+        name: 'Scroll Simulator UI',
+        initialize: initialize$2,
+        openDefaultsPopup,
+        disable: disable$1,
+    };
 
     /**
      * Dungeon Tracker Storage
@@ -5695,60 +6229,6 @@
     }
 
     /**
-     * Floating Panel Z-Index Manager
-     * Manages bring-to-front ordering for persistent floating panels.
-     * All panels are capped below config.Z_FLOATING_PANEL + 99 (1199)
-     * so they never cross the game's MUI modal layer (~1300).
-     */
-
-
-    const panels = new Set();
-
-    /**
-     * Register a floating panel element for z-index management
-     * @param {HTMLElement} el - The panel element
-     */
-    function registerFloatingPanel(el) {
-        panels.add(el);
-    }
-
-    /**
-     * Unregister a floating panel element
-     * @param {HTMLElement} el - The panel element
-     */
-    function unregisterFloatingPanel(el) {
-        panels.delete(el);
-    }
-
-    /**
-     * Bring a panel to the front among all registered panels,
-     * without exceeding config.Z_FLOATING_PANEL + 99.
-     * @param {HTMLElement} el - The panel to bring forward
-     */
-    function bringPanelToFront(el) {
-        const base = config.Z_FLOATING_PANEL;
-        const cap = base + 99;
-
-        let maxZ = base;
-        for (const p of panels) {
-            const z = parseInt(p.style.zIndex) || base;
-            if (z > maxZ) maxZ = z;
-        }
-
-        const next = maxZ + 1;
-        if (next > cap) {
-            // Overflow — reassign all from base upward, put el last
-            let i = base;
-            for (const p of panels) {
-                if (p !== el) p.style.zIndex = String(i++);
-            }
-            el.style.zIndex = String(i);
-        } else {
-            el.style.zIndex = String(next);
-        }
-    }
-
-    /**
      * Dungeon Tracker UI Interactions
      * Handles all user interactions: dragging, toggles, button clicks
      */
@@ -7314,6 +7794,101 @@
     }
 
     const combatSummary = new CombatSummary();
+
+    /**
+     * Combat Battle Counter
+     * Injects a battle/wave counter next to the action name in the top-left header panel.
+     * - Regular zones: "Battle #N" — from battleId in new_battle message
+     * - Dungeons: "Wave N · Battle #N" — wave from wave index, battle from battleId
+     *
+     * Target: Header_actionName (inline with zone name, e.g. "Chimerical Den · Wave 5")
+     * domObserver watches Header_actionName so the span is re-injected whenever
+     * React replaces that element between dungeon waves.
+     */
+
+
+    const COUNTER_ID = 'mwi-battle-counter';
+    const ACTION_NAME_SELECTOR = '[class*="Header_actionName"]';
+    const CURRENT_ACTION_SELECTOR = '[class*="Header_currentAction"]';
+
+    class CombatBattleCounter {
+        constructor() {
+            this.initialized = false;
+            this.newBattleHandler = null;
+            this.unregisterObserver = null;
+            this.battleId = 0;
+            this.currentWave = 0;
+            this.isDungeon = false;
+        }
+
+        initialize() {
+            if (this.initialized) return;
+            if (!config.getSetting('combatBattleCounter')) return;
+
+            this.newBattleHandler = (data) => this._onNewBattle(data);
+            webSocketHook.on('new_battle', this.newBattleHandler);
+
+            this.unregisterObserver = domObserver.onClass('CombatBattleCounter', 'Header_actionName', () =>
+                this._injectOrUpdate()
+            );
+
+            this.initialized = true;
+        }
+
+        _isInDungeon() {
+            const actions = dataManager.getCurrentActions();
+            if (!actions || actions.length === 0) return false;
+            const active = actions[0];
+            if (!active.actionHrid?.startsWith('/actions/combat/') || active.isDone) return false;
+            return dataManager.getActionDetails(active.actionHrid)?.combatZoneInfo?.isDungeon === true;
+        }
+
+        _onNewBattle(data) {
+            this.battleId = data.battleId;
+            if (this._isInDungeon()) {
+                this.isDungeon = true;
+                this.currentWave = data.wave ?? 0;
+            } else {
+                this.isDungeon = false;
+            }
+            this._injectOrUpdate();
+        }
+
+        _injectOrUpdate() {
+            const currentAction = document.querySelector(CURRENT_ACTION_SELECTOR);
+            const nameRow = currentAction?.querySelector(ACTION_NAME_SELECTOR);
+            if (!currentAction || !nameRow) return;
+
+            let el = document.getElementById(COUNTER_ID);
+            if (!el || !el.isConnected) {
+                el = document.createElement('span');
+                el.id = COUNTER_ID;
+                el.style.cssText = 'color: rgba(255,255,255,0.6); margin-left: 6px; white-space: nowrap;';
+                nameRow.appendChild(el);
+            }
+
+            if (this.isDungeon) {
+                el.textContent = `· Wave ${this.currentWave} · Battle #${this.battleId}`;
+            } else if (this.battleId > 0) {
+                el.textContent = `· Battle #${this.battleId}`;
+            }
+        }
+
+        disable() {
+            if (this.newBattleHandler) {
+                webSocketHook.off('new_battle', this.newBattleHandler);
+                this.newBattleHandler = null;
+            }
+            if (this.unregisterObserver) {
+                this.unregisterObserver();
+                this.unregisterObserver = null;
+            }
+            document.getElementById(COUNTER_ID)?.remove();
+            this.initialized = false;
+        }
+    }
+
+    const combatBattleCounter = new CombatBattleCounter();
 
     /**
      * Labyrinth Tracker
@@ -15532,10 +16107,13 @@ self.onmessage = function (e) {
         loadoutEnhancementDisplay,
         loadoutSort: loadoutSort$1,
         loadoutSnapshot,
+        scrollSimulator,
+        scrollSimulatorUI,
         dungeonTracker,
         dungeonTrackerUI,
         dungeonTrackerChatAnnotations,
         combatSummary,
+        combatBattleCounter,
         labyrinthTracker,
         labyrinthBestLevel,
         labyrinthShopPrices,
