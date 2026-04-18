@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.13.2
+ * Version: 2.13.3
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -7112,6 +7112,8 @@ self.onmessage = function (e) {
                     for (const listing of data.myMarketListings) {
                         this.recordListing(listing);
                     }
+                    // Reconcile: any previously-active listing absent from this snapshot is no longer active
+                    this._reconcileActiveListings(data.myMarketListings);
                 }
             };
 
@@ -7132,6 +7134,8 @@ self.onmessage = function (e) {
                         // Active listings - record them but don't set status (let history viewer handle it)
                         this.recordListing(listing);
                     }
+                    // Reconcile: any previously-active listing absent from this snapshot is no longer active
+                    this._reconcileActiveListings(data.myMarketListings);
                 }
 
                 // Handle endMarketListings (confusing name - contains both new AND ending listings)
@@ -7276,6 +7280,26 @@ self.onmessage = function (e) {
                 dataManager.off('market_listings_updated', updateHandler);
                 dataManager.off('market_item_order_books_updated', orderBookHandler);
             };
+        }
+
+        /**
+         * Reconcile knownListings against a full snapshot of currently active listings.
+         * Any entry with status 'active' or 'unknown' that is absent from the snapshot
+         * is downgraded to 'unknown' — it's no longer active but we don't know why.
+         * @param {Array} activeListings - Current active listings from the game snapshot
+         */
+        _reconcileActiveListings(activeListings) {
+            const activeIds = new Set(activeListings.map((l) => l.id));
+            let changed = false;
+            for (const known of this.knownListings) {
+                if (known.status === 'active' && !activeIds.has(known.id)) {
+                    known.status = 'unknown';
+                    changed = true;
+                }
+            }
+            if (changed) {
+                this.saveHistoricalData();
+            }
         }
 
         /**
