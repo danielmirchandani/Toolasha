@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.13.1
+ * Version: 2.13.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -6875,10 +6875,6 @@
                 }
             }
 
-            // Realistic time: min of queued actions and expected attempts
-            const realisticActions =
-                queuedActions === Infinity ? expectedAttempts : Math.min(queuedActions, expectedAttempts);
-            const realisticTime = realisticActions * perActionTime;
             const materialTime = materialLimit !== null ? materialLimit * perActionTime : null;
 
             // Apply CSS overrides for non-combat display
@@ -6933,12 +6929,12 @@
 
             this.appendStatsToActionName(actionNameElement, statsToAppend.join(' · '));
 
-            // Line 2: Time estimate (always show for enhancing since expectedAttempts gives a realistic time)
-            if (realisticActions > 0 && realisticTime > 0 && isFinite(realisticTime)) {
-                const timeStr = formatters_js.timeReadable(realisticTime);
+            // Line 2: Time estimate — always material-based for enhancing (stable, not volatile)
+            if (materialTime !== null && materialTime > 0 && isFinite(materialTime)) {
+                const timeStr = formatters_js.timeReadable(materialTime);
 
                 const completionTime = new Date();
-                completionTime.setSeconds(completionTime.getSeconds() + realisticTime);
+                completionTime.setSeconds(completionTime.getSeconds() + materialTime);
 
                 const now = new Date();
                 const isToday = completionTime.toDateString() === now.toDateString();
@@ -6962,12 +6958,7 @@
                     });
                 }
 
-                const materialSuffix =
-                    materialTime !== null && materialLimit > 0
-                        ? ` · 🧱 ${formatters_js.timeReadable(materialTime)} (${formatters_js.formatWithSeparator(materialLimit)} actions)`
-                        : '';
-
-                this.displayElement.innerHTML = `<span style="display: inline-block; margin-right: 0.25em;">⏱</span> ${timeStr} → ${clockTime}${materialSuffix}`;
+                this.displayElement.innerHTML = `🧱 ${timeStr} → ${clockTime} (${formatters_js.formatWithSeparator(materialLimit)} actions)`;
             } else {
                 this.displayElement.innerHTML = '';
             }
