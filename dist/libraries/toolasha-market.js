@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.13.3
+ * Version: 2.14.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -19437,6 +19437,7 @@ self.onmessage = function (e) {
                 'mwi-current-assets-details',
                 'mwi-equipment-breakdown',
                 'mwi-inventory-breakdown',
+                'mwi-listings-breakdown',
                 'mwi-fixed-assets-details',
                 'mwi-houses-breakdown',
                 'mwi-abilities-details',

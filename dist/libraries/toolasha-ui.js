@@ -1,11 +1,11 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.13.3
+ * Version: 2.14.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (config, dataManager, domObserver, formatters_js, timerRegistry_js, domObserverHelpers_js, storage, marketAPI, efficiency_js, webSocketHook, reactInput_js, actionPanelHelper_js, expectedValueCalculator, bonusRevenueCalculator_js, marketData_js, profitConstants_js, profitHelpers_js, profitCalculator, selectors_js, cleanupRegistry_js, settingsSchema_js, settingsStorage, materialCalculator_js, enhancementCalculator_js, enhancementConfig_js) {
+(function (config, dataManager, domObserver, formatters_js, timerRegistry_js, domObserverHelpers_js, dom_js, storage, marketAPI, efficiency_js, webSocketHook, reactInput_js, actionPanelHelper_js, expectedValueCalculator, bonusRevenueCalculator_js, marketData_js, profitConstants_js, profitHelpers_js, profitCalculator, selectors_js, cleanupRegistry_js, settingsSchema_js, settingsStorage, materialCalculator_js, enhancementCalculator_js, enhancementConfig_js) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -772,6 +772,32 @@
     }
 
     const externalLinks = new ExternalLinks();
+
+    /**
+     * Hide Labyrinth Badge
+     * Hides the notification badge on the Labyrinth navigation bar item
+     */
+
+
+    const STYLE_ID$1 = 'mwi-hide-labyrinth-badge';
+    const CSS$1 = `
+    [class*="NavigationBar_nav__"]:has(svg[aria-label="navigationBar.labyrinth"]) [class*="NavigationBar_badge"] {
+        display: none !important;
+    }
+`;
+
+    const hideLabyrinthBadge = {
+        initialize() {
+            if (!config.getSetting('hideLabyrinthBadge')) {
+                return;
+            }
+            dom_js.addStyles(CSS$1, STYLE_ID$1);
+        },
+
+        disable() {
+            dom_js.removeStyles(STYLE_ID$1);
+        },
+    };
 
     /**
      * Item Navigation Utilities
@@ -4562,6 +4588,290 @@ ${hideRules}
             if (instance) instance.disable();
         },
     };
+
+    /**
+     * Chat History Extender
+     * Preserves chat messages that the game evicts from the live buffer,
+     * keeping them visible in a history section above the live messages.
+     * Based on the original script by SilkyPanda.
+     */
+
+
+    const STYLE_ID = 'mwi-chat-history-extender-css';
+    const CSS = `
+    .mwi-history-buffer {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        background-color: rgba(0, 0, 0, 0.45);
+        border-bottom: 2px dashed #555;
+        margin-bottom: 5px;
+    }
+    .mwi-history-buffer > div { opacity: 0.9; position: relative; }
+    .mwi-history-buffer > div:hover { opacity: 1; background-color: rgba(255, 255, 255, 0.05); }
+    .mwi-interactive { cursor: pointer; }
+`;
+
+    /**
+     * Read React props off a DOM node via the __reactProps$ key.
+     * @param {Element} domNode
+     * @returns {object|null}
+     */
+    function getReactProps(domNode) {
+        if (!domNode) return null;
+        const key = Object.keys(domNode).find((k) => k.startsWith('__reactProps'));
+        return key ? domNode[key] : null;
+    }
+
+    /**
+     * Manages the history buffer for a single chat tab container.
+     */
+    class ChatTabHandler {
+        /**
+         * @param {Element} containerEl - The ChatHistory_chatHistory element
+         * @param {Map} interactionCache - Shared cache of UID → React handlers
+         * @param {() => number} getMaxHistory - Returns current max history setting
+         */
+        constructor(containerEl, interactionCache, getMaxHistory) {
+            this.container = containerEl;
+            this.interactionCache = interactionCache;
+            this.getMaxHistory = getMaxHistory;
+
+            this.bufferEl = document.createElement('div');
+            this.bufferEl.className = 'mwi-history-buffer';
+            this.container.insertBefore(this.bufferEl, this.container.firstChild);
+
+            const events = ['click', 'contextmenu', 'dblclick', 'mousedown', 'mouseup', 'mouseover', 'mouseout'];
+            events.forEach((evt) => this.bufferEl.addEventListener(evt, this._handleEmulatedEvent.bind(this), true));
+
+            this.observer = new MutationObserver(this._onMutation.bind(this));
+            this.observer.observe(this.container, { childList: true });
+        }
+
+        /**
+         * Hydrate a live message node by caching its React event handlers before the game removes it.
+         * @param {Element} messageNode
+         */
+        hydrateMessage(messageNode) {
+            if (messageNode.dataset.mwiHydrated) return;
+
+            const eventsOfInterest = [
+                'onClick',
+                'onContextMenu',
+                'onDoubleClick',
+                'onMouseEnter',
+                'onMouseLeave',
+                'onMouseOver',
+                'onMouseOut',
+                'onMouseDown',
+                'onMouseUp',
+            ];
+
+            [messageNode, ...messageNode.querySelectorAll('*')].forEach((el) => {
+                const props = getReactProps(el);
+                if (!props) return;
+
+                const handlers = {};
+                let hasHandler = false;
+
+                eventsOfInterest.forEach((evtName) => {
+                    if (typeof props[evtName] === 'function') {
+                        handlers[evtName] = props[evtName];
+                        hasHandler = true;
+                    }
+                });
+
+                if (typeof props.goToMarketplaceHandler === 'function') {
+                    handlers.onClick = (e) => props.goToMarketplaceHandler(e, true);
+                    hasHandler = true;
+                }
+
+                if (hasHandler) {
+                    const uid = Date.now().toString(36) + Math.random().toString(36).substring(2);
+                    el.setAttribute('data-mwi-uid', uid);
+                    el.classList.add('mwi-interactive');
+                    this.interactionCache.set(uid, handlers);
+                }
+            });
+
+            messageNode.dataset.mwiHydrated = 'true';
+        }
+
+        /**
+         * Re-emit a React synthetic event for history buffer interactions.
+         * @param {Event} e
+         */
+        _handleEmulatedEvent(e) {
+            const targetEl = e.target.closest('[data-mwi-uid]');
+            if (!targetEl) return;
+
+            const uid = targetEl.getAttribute('data-mwi-uid');
+            const handlers = this.interactionCache.get(uid);
+            if (!handlers) return;
+
+            const eventMap = {
+                click: 'onClick',
+                contextmenu: 'onContextMenu',
+                dblclick: 'onDoubleClick',
+                mousedown: 'onMouseDown',
+                mouseup: 'onMouseUp',
+                mouseover: 'onMouseOver',
+                mouseout: 'onMouseOut',
+            };
+
+            let reactEventName = eventMap[e.type];
+
+            if (e.type === 'mouseover') {
+                reactEventName = handlers.onMouseEnter ? 'onMouseEnter' : 'onMouseOver';
+            }
+            if (e.type === 'mouseout') {
+                reactEventName = handlers.onMouseLeave ? 'onMouseLeave' : 'onMouseOut';
+            }
+
+            const handler = handlers[reactEventName];
+            if (typeof handler !== 'function') return;
+
+            const fakeEvent = {
+                ...e,
+                nativeEvent: e,
+                target: e.target,
+                currentTarget: targetEl,
+                preventDefault: () => e.preventDefault(),
+                stopPropagation: () => e.stopPropagation(),
+                persist: () => {},
+                isDefaultPrevented: () => e.defaultPrevented,
+                isPropagationStopped: () => e.cancelBubble,
+                type: e.type,
+            };
+
+            if (e.clientX !== undefined) {
+                fakeEvent.clientX = e.clientX;
+                fakeEvent.clientY = e.clientY;
+            }
+
+            try {
+                handler(fakeEvent);
+            } catch (err) {
+                console.error('[ChatHistoryExtender] Handler failed:', err);
+            }
+        }
+
+        /**
+         * Handle mutations on the chat container.
+         * @param {MutationRecord[]} mutations
+         */
+        _onMutation(mutations) {
+            const isAtBottom = this.container.scrollHeight - this.container.scrollTop - this.container.clientHeight < 50;
+            const maxHistory = this.getMaxHistory();
+
+            mutations.forEach((mut) => {
+                mut.addedNodes.forEach((node) => {
+                    if (node.nodeType === 1 && node.className?.includes('ChatMessage_chatMessage')) {
+                        this.hydrateMessage(node);
+                    }
+                });
+
+                mut.removedNodes.forEach((node) => {
+                    if (
+                        node.nodeType === 1 &&
+                        node.className?.includes('ChatMessage_chatMessage') &&
+                        node !== this.bufferEl
+                    ) {
+                        const clone = node.cloneNode(true);
+                        this.bufferEl.appendChild(clone);
+
+                        while (this.bufferEl.childElementCount > maxHistory) {
+                            const oldNode = this.bufferEl.firstChild;
+                            oldNode.querySelectorAll('[data-mwi-uid]').forEach((u) => {
+                                this.interactionCache.delete(u.getAttribute('data-mwi-uid'));
+                            });
+                            if (oldNode.hasAttribute('data-mwi-uid')) {
+                                this.interactionCache.delete(oldNode.getAttribute('data-mwi-uid'));
+                            }
+                            oldNode.remove();
+                        }
+                    }
+                });
+
+                if (this.container.firstChild !== this.bufferEl) {
+                    this.container.prepend(this.bufferEl);
+                }
+            });
+
+            if (isAtBottom) {
+                this.container.scrollTop = this.container.scrollHeight;
+            }
+        }
+
+        /**
+         * Disconnect the observer and remove the buffer element.
+         */
+        destroy() {
+            this.observer.disconnect();
+            this.bufferEl.querySelectorAll('[data-mwi-uid]').forEach((el) => {
+                this.interactionCache.delete(el.getAttribute('data-mwi-uid'));
+            });
+            this.bufferEl.remove();
+        }
+    }
+
+    class ChatHistoryExtender {
+        constructor() {
+            this.isInitialized = false;
+            this.unregisterHandlers = [];
+            this.timerRegistry = timerRegistry_js.createTimerRegistry();
+            this.interactionCache = new Map();
+            this.tabHandlers = new WeakMap();
+        }
+
+        initialize() {
+            if (this.isInitialized) return;
+            if (!config.getSetting('chatHistoryExtender')) return;
+
+            this.isInitialized = true;
+            dom_js.addStyles(CSS, STYLE_ID);
+
+            const getMaxHistory = () => {
+                const raw = parseInt(config.getSettingValue('chatHistoryExtender_maxHistory'));
+                return isFinite(raw) && raw > 0 ? raw : 150;
+            };
+
+            const attachHandler = (containerEl) => {
+                if (this.tabHandlers.has(containerEl)) return;
+                const handler = new ChatTabHandler(containerEl, this.interactionCache, getMaxHistory);
+                this.tabHandlers.set(containerEl, handler);
+                containerEl.querySelectorAll('[class*="ChatMessage_chatMessage"]').forEach((msg) => {
+                    handler.hydrateMessage(msg);
+                });
+            };
+
+            // Watch for new chat tab containers
+            const unregister = domObserver.onClass('ChatHistoryExtender', 'ChatHistory_chatHistory', attachHandler);
+            this.unregisterHandlers.push(unregister);
+
+            // Attach to any already-open containers
+            document.querySelectorAll('[class*="ChatHistory_chatHistory"]').forEach(attachHandler);
+
+            // Periodic cache cleanup to prevent unbounded memory growth
+            const cleanupInterval = setInterval(() => {
+                if (this.interactionCache.size > 8000) {
+                    this.interactionCache.clear();
+                }
+            }, 600000);
+            this.timerRegistry.registerInterval(cleanupInterval);
+        }
+
+        disable() {
+            this.unregisterHandlers.forEach((unregister) => unregister());
+            this.unregisterHandlers = [];
+            this.timerRegistry.clearAll();
+            this.interactionCache.clear();
+            dom_js.removeStyles(STYLE_ID);
+            this.isInitialized = false;
+        }
+    }
+
+    const chatHistoryExtender = new ChatHistoryExtender();
 
     /**
      * Gathering Profit Calculator
@@ -16641,9 +16951,7 @@ ${hideRules}
                 e.stopPropagation();
                 this.pendingActionCount = this._extractRequiredCount(actionMenu, itemHrid, itemName);
                 navigateToItem(itemHrid);
-                if (this.pendingActionCount !== null) {
-                    this._fillActionCountAfterNavigation();
-                }
+                this._fillActionCountAfterNavigation();
             });
 
             actionMenu.appendChild(btn);
@@ -16786,7 +17094,8 @@ ${hideRules}
                         const have = parseFloat(haveText.replace(/,/g, ''));
                         const need = parseFloat(needMatch[1].replace(/,/g, ''));
                         if (!isNaN(have) && !isNaN(need) && need > 0) {
-                            return Math.ceil(need - have);
+                            const missing = Math.ceil(need - have);
+                            return missing > 0 ? missing : null;
                         }
                     }
                 }
@@ -16828,16 +17137,20 @@ ${hideRules}
         }
 
         /**
-         * Poll for the action count input after navigation and fill it with pendingActionCount.
+         * Poll for the action count input after navigation, fill it with pendingActionCount if set,
+         * and always focus it.
          */
         _fillActionCountAfterNavigation() {
             let retries = 0;
             const tryFill = () => {
                 const container = document.querySelector('[class*="maxActionCountInput"]');
                 const input = container?.querySelector('input');
-                if (input && this.pendingActionCount !== null) {
-                    reactInput_js.setReactInputValue(input, this.pendingActionCount, { focus: false });
-                    this.pendingActionCount = null;
+                if (input) {
+                    if (this.pendingActionCount !== null) {
+                        reactInput_js.setReactInputValue(input, this.pendingActionCount, { focus: false });
+                        this.pendingActionCount = null;
+                    }
+                    input.focus();
                     return;
                 }
                 if (++retries < 15) {
@@ -24615,6 +24928,7 @@ ${hideRules}
         alchemyItemDimming,
         skillExperiencePercentage,
         externalLinks,
+        hideLabyrinthBadge,
         altClickNavigation,
         collectionNavigation: collectionNavigation$1,
         collectionFilters,
@@ -24622,6 +24936,7 @@ ${hideRules}
         mentionTracker,
         popOutChat,
         chatBlockList: chatBlockList$1,
+        chatHistoryExtender,
         taskProfitDisplay,
         taskRerollTracker,
         taskSorter,
@@ -24648,4 +24963,4 @@ ${hideRules}
 
     console.log('[Toolasha] UI library loaded');
 
-})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Utils.formatters, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Core.storage, Toolasha.Core.marketAPI, Toolasha.Utils.efficiency, Toolasha.Core.webSocketHook, Toolasha.Utils.reactInput, Toolasha.Utils.actionPanelHelper, Toolasha.Market.expectedValueCalculator, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.profitConstants, Toolasha.Utils.profitHelpers, Toolasha.Market.profitCalculator, Toolasha.Utils.selectors, Toolasha.Utils.cleanupRegistry, Toolasha.Core, Toolasha.Core.settingsStorage, Toolasha.Utils.materialCalculator, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.enhancementConfig);
+})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Utils.formatters, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Utils.dom, Toolasha.Core.storage, Toolasha.Core.marketAPI, Toolasha.Utils.efficiency, Toolasha.Core.webSocketHook, Toolasha.Utils.reactInput, Toolasha.Utils.actionPanelHelper, Toolasha.Market.expectedValueCalculator, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.profitConstants, Toolasha.Utils.profitHelpers, Toolasha.Market.profitCalculator, Toolasha.Utils.selectors, Toolasha.Utils.cleanupRegistry, Toolasha.Core, Toolasha.Core.settingsStorage, Toolasha.Utils.materialCalculator, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.enhancementConfig);

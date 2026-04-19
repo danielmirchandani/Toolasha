@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.13.3
+ * Version: 2.14.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -497,6 +497,19 @@
                     default: true,
                     help: 'Adds a button to the chat panel to open chat in a separate browser window with multi-channel split view',
                 },
+                chatHistoryExtender: {
+                    id: 'chatHistoryExtender',
+                    label: 'Chat: Extend chat history',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Preserves messages that the game removes from the live buffer, keeping them visible above the live chat',
+                },
+                chatHistoryExtender_maxHistory: {
+                    id: 'chatHistoryExtender_maxHistory',
+                    label: 'Chat: Max messages to retain per tab',
+                    type: 'text',
+                    default: '150',
+                },
                 altClickNavigation: {
                     id: 'altClickNavigation',
                     label: 'Alt+click items to navigate to crafting/gathering or dictionary',
@@ -541,6 +554,18 @@
                     label: 'Action panel: Quick input buttons (hours, count presets, Max)',
                     type: 'checkbox',
                     default: true,
+                },
+                actionPanel_quickInputs_countPresets: {
+                    id: 'actionPanel_quickInputs_countPresets',
+                    label: 'Action panel: Custom count presets (comma-separated, e.g. 100,1000,1000000)',
+                    type: 'text',
+                    default: '',
+                },
+                actionPanel_quickInputs_hourPresets: {
+                    id: 'actionPanel_quickInputs_hourPresets',
+                    label: 'Action panel: Custom hour presets (comma-separated, e.g. 0.5,1,24,168,720)',
+                    type: 'text',
+                    default: '',
                 },
                 actionPanel_foragingTotal: {
                     id: 'actionPanel_foragingTotal',
@@ -1456,6 +1481,12 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Adds quick links to Combat Sim, Market Tracker, Enhancelator, and Milkonomy',
+                },
+                hideLabyrinthBadge: {
+                    id: 'hideLabyrinthBadge',
+                    label: 'Left sidebar: Hide Labyrinth ping badge',
+                    type: 'checkbox',
+                    default: false,
                 },
                 expPercentage: {
                     id: 'expPercentage',

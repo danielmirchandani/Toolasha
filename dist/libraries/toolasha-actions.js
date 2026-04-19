@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.13.3
+ * Version: 2.14.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -6825,6 +6825,7 @@
             // Determine queue count
             let queuedActions;
             let materialLimit = null;
+            let limitingItemHrid = null;
 
             if (action.hasMaxCount) {
                 queuedActions = action.maxCount - action.currentCount;
@@ -6836,6 +6837,10 @@
                 if (limitResult) {
                     materialLimit = limitResult.maxActions;
                     queuedActions = materialLimit;
+                    // Extract item HRID from limitType (e.g. "material:/items/foo" → "/items/foo")
+                    if (limitResult.limitType?.startsWith('material:')) {
+                        limitingItemHrid = limitResult.limitType.slice('material:'.length);
+                    }
                 } else {
                     queuedActions = Infinity;
                 }
@@ -6869,6 +6874,7 @@
                             if (maxAttemptsFromProtection < queuedActions) {
                                 queuedActions = maxAttemptsFromProtection;
                                 materialLimit = maxAttemptsFromProtection;
+                                limitingItemHrid = protectionItemHrid;
                             }
                         }
                     }
@@ -6958,7 +6964,9 @@
                     });
                 }
 
-                this.displayElement.innerHTML = `🧱 ${timeStr} → ${clockTime} (${formatters_js.formatWithSeparator(materialLimit)} actions)`;
+                const itemIconHtml = this.getItemIconHtml(limitingItemHrid);
+                const matsLabel = itemIconHtml ? `${itemIconHtml}:` : 'Mats:';
+                this.displayElement.innerHTML = `<span style="display: inline-block; margin-right: 0.25em;">⏱</span> ${matsLabel} ${timeStr} → ${clockTime} (${formatters_js.formatWithSeparator(materialLimit)} actions)`;
             } else {
                 this.displayElement.innerHTML = '';
             }
@@ -7234,6 +7242,23 @@
         /**
          * Build inventory lookup maps for fast material queries
          * @param {Array} inventory - Character inventory items
+        /**
+         * Build an inline SVG icon HTML string for an item HRID.
+         * Returns an empty string if the sprite URL cannot be found or no HRID given.
+         * @param {string|null} itemHrid - e.g. "/items/mirror_of_protection"
+         * @returns {string} HTML string with an inline <svg> element, or ''
+         */
+        getItemIconHtml(itemHrid) {
+            if (!itemHrid) return '';
+            const spriteEl = document.querySelector('use[href*="items_sprite"]');
+            if (!spriteEl) return '';
+            const spriteUrl = spriteEl.getAttribute('href')?.split('#')[0];
+            if (!spriteUrl) return '';
+            const symbolId = itemHrid.replace('/items/', '');
+            return `<svg width="16" height="16" style="vertical-align: middle; margin: 0 1px;"><use href="${spriteUrl}#${symbolId}"></use></svg>`;
+        }
+
+        /**
          * @returns {Object} Lookup maps by HRID and enhancement
          */
         buildInventoryLookup(inventory) {
@@ -8148,6 +8173,48 @@
         }
 
         /**
+         * Format an hours value into a compact combined label e.g. "1mo2w3d4h30m"
+         * @param {number} totalHours
+         * @returns {string}
+         */
+        _formatHoursLabel(totalHours) {
+            const months = Math.floor(totalHours / 720);
+            let rem = totalHours % 720;
+            const weeks = Math.floor(rem / 168);
+            rem %= 168;
+            const days = Math.floor(rem / 24);
+            rem %= 24;
+            const hours = Math.floor(rem);
+            const mins = Math.round((rem - hours) * 60);
+
+            let result = '';
+            if (months) result += `${months}mo`;
+            if (weeks) result += `${weeks}w`;
+            if (days) result += `${days}d`;
+            if (hours) result += `${hours}h`;
+            if (mins) result += `${mins}m`;
+            return result || '0h';
+        }
+
+        /**
+         * Parse a comma-separated preset string into a sorted array of positive numbers.
+         * Returns defaults if the string is blank or yields no valid values.
+         * Capped at 8 entries to avoid UI overflow.
+         * @param {string} raw - Comma-separated string from settings
+         * @param {number[]} defaults - Fallback values
+         * @returns {number[]}
+         */
+        _parsePresets(raw, defaults) {
+            if (!raw || !raw.trim()) return defaults;
+            const parsed = raw
+                .split(',')
+                .map((s) => parseFloat(s.trim()))
+                .filter((n) => isFinite(n) && n > 0);
+            if (parsed.length === 0) return defaults;
+            return [...new Set(parsed)].sort((a, b) => a - b).slice(0, 8);
+        }
+
+        /**
          * Start observing for action panels using centralized observer
          */
         startObserving() {
@@ -8619,8 +8686,12 @@
                     // FIRST ROW: Time-based buttons (hours)
                     queueContent.appendChild(document.createTextNode('Do '));
 
-                    this.presetHours.forEach((hours) => {
-                        const button = this.createButton(hours === 0.5 ? '0.5' : hours.toString(), () => {
+                    const activePresetHours = this._parsePresets(
+                        config.getSettingValue('actionPanel_quickInputs_hourPresets', ''),
+                        [0.5, 1, 2, 3, 4, 5, 6, 10, 12, 24]
+                    );
+                    activePresetHours.forEach((hours) => {
+                        const button = this.createButton(this._formatHoursLabel(hours), () => {
                             // How many actions fit in X hours?
                             // With efficiency, queued actions complete more quickly
                             // Time (seconds) = hours × 3600
@@ -8635,7 +8706,7 @@
                         queueContent.appendChild(button);
                     });
 
-                    queueContent.appendChild(document.createTextNode(' hours'));
+                    queueContent.appendChild(document.createTextNode(' '));
                     queueContent.appendChild(document.createElement('div')); // Line break
 
                     // SECOND ROW: Count-based buttons (times)
@@ -8678,8 +8749,12 @@
 
                     queueContent.appendChild(document.createTextNode('Do '));
 
-                    this.presetValues.forEach((value) => {
-                        const button = this.createButton(value.toLocaleString(), () => {
+                    const activePresetValues = this._parsePresets(
+                        config.getSettingValue('actionPanel_quickInputs_countPresets', ''),
+                        [10, 100, 1000]
+                    );
+                    activePresetValues.forEach((value) => {
+                        const button = this.createButton(formatters_js.formatKMB(value), () => {
                             if (this.addMode) {
                                 const current = parseInt(numberInput.value) || 0;
                                 this.setInputValue(numberInput, current + value);
