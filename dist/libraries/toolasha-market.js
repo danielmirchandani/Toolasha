@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.15.0
+ * Version: 2.16.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -7225,7 +7225,8 @@ self.onmessage = function (e) {
                             orderBooks.forEach((orderBook, enhancementLevel) => {
                                 if (!orderBook) return; // Skip empty slots in sparse array
                                 const topAsk = orderBook.asks?.[0]?.price ?? null;
-                                const topBid = orderBook.bids?.[0]?.price ?? null;
+                                const bids = orderBook.bids;
+                                const topBid = bids?.length > 0 ? bids[bids.length - 1].price : null;
 
                                 // Only update if we have at least one price
                                 if (topAsk !== null || topBid !== null) {
@@ -7238,7 +7239,8 @@ self.onmessage = function (e) {
                                 if (!orderBook) continue;
                                 const enhancementLevel = parseInt(level, 10);
                                 const topAsk = orderBook.asks?.[0]?.price ?? null;
-                                const topBid = orderBook.bids?.[0]?.price ?? null;
+                                const bids = orderBook.bids;
+                                const topBid = bids?.length > 0 ? bids[bids.length - 1].price : null;
 
                                 if (topAsk !== null || topBid !== null) {
                                     marketAPI.updatePrice(itemHrid, enhancementLevel, topAsk, topBid);
@@ -8652,7 +8654,9 @@ self.onmessage = function (e) {
                     if (orderBook) {
                         const topOrders = isSell ? orderBook.asks : orderBook.bids;
                         if (topOrders && topOrders.length > 0) {
-                            topOrderPrice = topOrders[0].price;
+                            // Asks are sorted ascending (lowest = best ask = index 0)
+                            // Bids are sorted ascending (highest = best bid = last index)
+                            topOrderPrice = isSell ? topOrders[0].price : topOrders[topOrders.length - 1].price;
                         }
                     }
                 }
@@ -8725,7 +8729,7 @@ self.onmessage = function (e) {
                 return createStyledCell('N/A', config.COLOR_TEXT_SECONDARY, { fontSize: '0.9em' });
             }
 
-            // Get top order (first in array)
+            // Get top order — asks sorted ascending (best = index 0), bids sorted ascending (best = last index)
             const topOrders = isSell ? orderBook.asks : orderBook.bids;
 
             if (!topOrders || topOrders.length === 0) {
@@ -8733,7 +8737,7 @@ self.onmessage = function (e) {
                 return createStyledCell('None', '#00FF00', { fontSize: '0.9em' }); // Green = you're the only one
             }
 
-            const topOrder = topOrders[0];
+            const topOrder = isSell ? topOrders[0] : topOrders[topOrders.length - 1];
             const topListingId = topOrder.listingId;
 
             // Estimate timestamp using existing logic
