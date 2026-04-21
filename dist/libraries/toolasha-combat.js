@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 2.17.0
+ * Version: 2.17.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -11141,10 +11141,11 @@
             }
             html += '</div>';
 
-            // XP/hr by skill — aggregate across all player keys
+            // XP/hr by skill — show for first player (self) only
+            const selfPlayerKey = Object.keys(simResult.experienceGained)[0];
             const xpTotals = {};
-            for (const playerXP of Object.values(simResult.experienceGained)) {
-                for (const [skill, amount] of Object.entries(playerXP)) {
+            if (selfPlayerKey && simResult.experienceGained[selfPlayerKey]) {
+                for (const [skill, amount] of Object.entries(simResult.experienceGained[selfPlayerKey])) {
                     xpTotals[skill] = (xpTotals[skill] || 0) + amount;
                 }
             }
