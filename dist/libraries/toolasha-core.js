@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.16.0
+ * Version: 2.17.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1315,6 +1315,13 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Displays encounters/hour, revenue, experience rates when returning from combat',
+                },
+                combatSim: {
+                    id: 'combatSim',
+                    label: 'Combat Simulator',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Simulate combat encounters to estimate XP/hr, deaths, and consumable usage',
                 },
                 combatStats: {
                     id: 'combatStats',

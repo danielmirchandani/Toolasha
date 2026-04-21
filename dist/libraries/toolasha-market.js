@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.16.0
+ * Version: 2.17.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -4982,8 +4982,9 @@ self.onmessage = function (e) {
                 for (const action of gatheringData.soloActions) {
                     const itemsPerHourStr = action.itemsPerHour ? Math.round(action.itemsPerHour) : '?';
                     const profitStr = action.profitPerHour ? formatters_js.formatKMB(Math.round(action.profitPerHour)) : '?';
+                    const profitDayStr = action.profitPerHour ? formatters_js.formatKMB(Math.round(action.profitPerHour * 24)) : '?';
 
-                    html += `<div style="margin-left: 8px;">• ${action.actionName}: ${itemsPerHourStr} items/hr | ${profitStr} gold/hr</div>`;
+                    html += `<div style="margin-left: 8px;">• ${action.actionName}: ${itemsPerHourStr} items/hr | ${profitStr}/hr (${profitDayStr}/day)</div>`;
                 }
 
                 html += '</div>';
