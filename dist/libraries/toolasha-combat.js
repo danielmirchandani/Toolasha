@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 2.17.1
+ * Version: 2.17.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -10279,6 +10279,7 @@
         const players = [];
         const playerNames = [];
         const missingMembers = [];
+        let selfHrid = null;
         let slotIndex = 1;
 
         for (const member of Object.values(characterData.partyInfo.partySlotMap)) {
@@ -10289,6 +10290,7 @@
                 const selfDTO = buildPlayerDTO();
                 if (selfDTO) {
                     selfDTO.hrid = 'player' + slotIndex;
+                    selfHrid = selfDTO.hrid;
                     players.push(selfDTO);
                     playerNames.push(characterData.character.name || 'Player ' + slotIndex);
                 }
@@ -10335,7 +10337,10 @@
             }
         }
 
-        return { players, playerNames, missingMembers };
+        // Build playerInfo: hrid → name mapping in player order, for tab rendering
+        const playerInfo = players.map((p, i) => ({ hrid: p.hrid, name: playerNames[i] }));
+
+        return { players, playerInfo, selfHrid: selfHrid || players[0]?.hrid || 'player1', missingMembers };
     }
 
     /**
@@ -10408,15 +10413,15 @@
     }
 
     /**
-     * Calculate expected drops from simulation results.
+     * Calculate expected drops from simulation results for a specific player.
      * Uses deterministic expected-value math (no RNG rolls).
      * @param {Object} simResult - SimResult from the engine
      * @param {Object} gameData - Game data maps
+     * @param {string} [playerHrid='player1'] - Which player's drop multipliers to use
      * @returns {Map<string, number>} itemHrid → expected total drop count
      */
-    function calculateExpectedDrops(simResult, gameData) {
+    function calculateExpectedDrops(simResult, gameData, playerHrid = 'player1') {
         const combatMonsterDetailMap = gameData.combatMonsterDetailMap;
-        const playerHrid = 'player1';
         const dropRateMultiplier = simResult.dropRateMultiplier[playerHrid] || 1;
         const rareFindMultiplier = simResult.rareFindMultiplier?.[playerHrid] || 1;
         const combatDropQuantity = simResult.combatDropQuantity?.[playerHrid] || 0;
@@ -10808,6 +10813,11 @@
             this.isDragging = false;
             this.dragOffset = { x: 0, y: 0 };
             this.elapsedTimer = null;
+            this._activePlayerTab = 'player1';
+            this._playerInfo = [];
+            this._lastSimResult = null;
+            this._lastSimHours = null;
+            this._lastGameData = null;
         }
 
         /**
@@ -11004,11 +11014,14 @@
                 return;
             }
 
-            const { players: playerDTOs, playerNames: _playerNames, missingMembers } = await buildAllPlayerDTOs();
+            const { players: playerDTOs, playerInfo, selfHrid, missingMembers } = await buildAllPlayerDTOs();
             if (!playerDTOs.length) {
                 this._setStatus('No character data available.');
                 return;
             }
+
+            this._playerInfo = playerInfo;
+            this._activePlayerTab = selfHrid;
 
             const communityBuffs = getCommunityBuffs();
 
@@ -11054,6 +11067,9 @@
                 this.elapsedTimer = null;
                 const totalElapsed = ((Date.now() - simStartTime) / 1000).toFixed(1);
 
+                this._lastSimResult = simResult;
+                this._lastSimHours = hours;
+                this._lastGameData = gameData;
                 this._displayResults(simResult, hours, gameData);
                 const modeLabels = {
                     conservative: 'Buy: Ask / Sell: Bid',
@@ -11094,6 +11110,10 @@
             const container = this.panel.querySelector('#mwi-csim-results');
             if (!container) return;
 
+            const activeTab = this._activePlayerTab;
+            const playerInfo = this._playerInfo;
+            const numberOfPlayers = simResult.numberOfPlayers || 1;
+
             const sectionStyle = 'margin-bottom:12px;';
             const headingStyle = `color:${ACCENT}; font-weight:700; font-size:12px; margin-bottom:6px; border-bottom:1px solid #222; padding-bottom:4px;`;
             const rowStyle = 'display:flex; justify-content:space-between; padding:2px 0; font-size:12px;';
@@ -11102,14 +11122,27 @@
 
             let html = '';
 
-            // Overview: encounters/hr and deaths/hr
-            const encountersPerHr = simResult.encounters / hours;
-            let totalDeaths = 0;
-            for (const [hrid, count] of Object.entries(simResult.deaths)) {
-                // Only count player deaths (hrids starting with 'player'), not monster kills
-                if (typeof count === 'number' && hrid.startsWith('player')) totalDeaths += count;
+            // Player tabs (only shown for party sims)
+            if (numberOfPlayers > 1) {
+                html += `<div style="display:flex; gap:4px; margin-bottom:10px; flex-wrap:wrap;">`;
+                for (const { hrid, name } of playerInfo) {
+                    const isActive = hrid === activeTab;
+                    const tabStyle = isActive
+                        ? `background:${ACCENT_BG}; border:1px solid ${ACCENT_BORDER}; color:${ACCENT}; font-weight:700;`
+                        : 'background:rgba(255,255,255,0.04); border:1px solid #333; color:#aaa;';
+                    html += `<button data-tab="${hrid}" style="
+                    ${tabStyle}
+                    padding:3px 10px; border-radius:5px; font-size:12px; cursor:pointer;
+                    font-family:inherit; transition:all 0.1s;
+                ">${name}</button>`;
+                }
+                html += '</div>';
             }
-            const deathsPerHr = totalDeaths / hours;
+
+            // Overview: encounters/hr (party-wide) + deaths/hr (per active player)
+            const encountersPerHr = simResult.encounters / hours;
+            const playerDeaths = simResult.deaths?.[activeTab] || 0;
+            const deathsPerHr = playerDeaths / hours;
 
             html += `<div style="${sectionStyle}">`;
             html += `<div style="${headingStyle}">Overview</div>`;
@@ -11142,10 +11175,10 @@
             html += '</div>';
 
             // XP/hr by skill — show for first player (self) only
-            const selfPlayerKey = Object.keys(simResult.experienceGained)[0];
+            // XP/hr by skill — per active tab player
             const xpTotals = {};
-            if (selfPlayerKey && simResult.experienceGained[selfPlayerKey]) {
-                for (const [skill, amount] of Object.entries(simResult.experienceGained[selfPlayerKey])) {
+            if (simResult.experienceGained[activeTab]) {
+                for (const [skill, amount] of Object.entries(simResult.experienceGained[activeTab])) {
                     xpTotals[skill] = (xpTotals[skill] || 0) + amount;
                 }
             }
@@ -11165,12 +11198,11 @@
                 html += '</div>';
             }
 
-            // Consumable costs — aggregate across all player keys
+            // Consumable costs — per active tab player
             const consumableTotals = {};
-            for (const playerConsumables of Object.values(simResult.consumablesUsed)) {
-                for (const [itemHrid, count] of Object.entries(playerConsumables)) {
-                    consumableTotals[itemHrid] = (consumableTotals[itemHrid] || 0) + count;
-                }
+            const selfConsumables = simResult.consumablesUsed?.[activeTab] || {};
+            for (const [itemHrid, count] of Object.entries(selfConsumables)) {
+                consumableTotals[itemHrid] = (consumableTotals[itemHrid] || 0) + count;
             }
 
             // Track totals for net profit calculation
@@ -11181,7 +11213,7 @@
 
             // Drops — calculated from kill counts × drop tables × multipliers
             if (gameData) {
-                const dropMap = calculateExpectedDrops(simResult, gameData);
+                const dropMap = calculateExpectedDrops(simResult, gameData, activeTab);
 
                 // Pre-compute gold values for sorting
                 const dropData = [...dropMap.entries()]
@@ -11337,6 +11369,14 @@
 
             container.innerHTML = html;
             container.style.display = 'block';
+
+            // Tab click handler — re-render with new active player
+            container.querySelectorAll('[data-tab]').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    this._activePlayerTab = btn.dataset.tab;
+                    this._displayResults(this._lastSimResult, this._lastSimHours, this._lastGameData);
+                });
+            });
         }
 
         /**
