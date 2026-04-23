@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.18.2
+ * Version: 2.19.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -4512,12 +4512,21 @@
         }
 
         /**
+         * Get character-scoped storage key for pinned actions.
+         * @returns {string}
+         */
+        _getPinnedStorageKey() {
+            const charId = dataManager.getCurrentCharacterId() || 'default';
+            return `pinnedActions_${charId}`;
+        }
+
+        /**
          * Initialize - load pinned actions from storage
          */
         async initialize() {
             if (this.initialized) return;
 
-            const pinnedData = await storage.getJSON('pinnedActions', 'settings', []);
+            const pinnedData = await storage.getJSON(this._getPinnedStorageKey(), 'settings', []);
             this.pinnedActions = new Set(pinnedData);
             this.sortMode = await storage.get('actionSortMode', 'settings', 'default');
             this.initialized = true;
@@ -4537,6 +4546,11 @@
             this.pinnedActions.clear();
             this.cachedStats = {};
             this.initialized = false;
+
+            // Reload pinned actions for the new character
+            const pinnedData = await storage.getJSON(this._getPinnedStorageKey(), 'settings', []);
+            this.pinnedActions = new Set(pinnedData);
+            this.initialized = true;
         }
 
         /**
@@ -4631,7 +4645,7 @@
             }
 
             // Save to storage
-            await storage.setJSON('pinnedActions', Array.from(this.pinnedActions), 'settings', true);
+            await storage.setJSON(this._getPinnedStorageKey(), Array.from(this.pinnedActions), 'settings', true);
 
             return this.pinnedActions.has(actionHrid);
         }
@@ -6328,6 +6342,7 @@
 
             if (!action) {
                 this.displayElement.innerHTML = '';
+                this.clearAppendedStats(actionNameElement);
                 this.scheduleUpdateRetry();
                 // Reconnect observer
                 this.reconnectActionNameObserver(actionNameElement);
@@ -6336,6 +6351,8 @@
 
             const actionDetails = dataManager.getActionDetails(action.actionHrid);
             if (!actionDetails) {
+                this.displayElement.innerHTML = '';
+                this.clearAppendedStats(actionNameElement);
                 // Reconnect observer
                 this.reconnectActionNameObserver(actionNameElement);
                 return;

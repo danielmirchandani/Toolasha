@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.18.2
+ * Version: 2.19.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -760,7 +760,7 @@
                 },
                 dungeonTokenTooltips: {
                     id: 'dungeonTokenTooltips',
-                    label: 'Dungeon tokens: Show shop items and costs',
+                    label: 'Currency tooltips: Show shop values for tokens, seals, and cowbells',
                     type: 'checkbox',
                     default: true,
                 },
