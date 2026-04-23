@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 2.19.0
+ * Version: 2.19.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -10438,46 +10438,69 @@
 
         const totalDropMap = new Map();
 
-        // Get all monster kills (filter out player deaths)
-        const monsters = Object.keys(simResult.deaths).filter((hrid) => !hrid.startsWith('player'));
+        if (simResult.isDungeon) {
+            // Dungeons: only completion rewards, no per-monster drops
+            if (simResult.dungeonsCompleted > 0) {
+                const zoneHrid = simResult.zoneName;
+                const actionDetailMap = gameData.actionDetailMap || {};
+                const actionDetail = actionDetailMap[zoneHrid];
+                const rewardDropTable = actionDetail?.combatZoneInfo?.dungeonInfo?.rewardDropTable;
 
-        for (const monsterHrid of monsters) {
-            const monsterData = combatMonsterDetailMap[monsterHrid];
-            if (!monsterData) continue;
+                if (rewardDropTable) {
+                    for (const drop of rewardDropTable) {
+                        const baseRate = drop.dropRate + (drop.dropRatePerDifficultyTier ?? 0) * difficultyTier;
+                        const adjustedRate = Math.min(1.0, Math.max(0, baseRate));
+                        if (adjustedRate <= 0) continue;
 
-            const killCount = simResult.deaths[monsterHrid];
+                        const avgCount = (drop.minCount + drop.maxCount) / 2;
+                        const expected = simResult.dungeonsCompleted * adjustedRate * avgCount;
 
-            // Regular drops
-            if (monsterData.dropTable) {
-                for (const drop of monsterData.dropTable) {
-                    if (drop.minDifficultyTier > difficultyTier) continue;
-
-                    const tierMultiplier = 1.0 + 0.1 * difficultyTier;
-                    const baseRate = drop.dropRate + (drop.dropRatePerDifficultyTier ?? 0) * difficultyTier;
-                    const adjustedRate = Math.min(1.0, tierMultiplier * baseRate * dropRateMultiplier);
-                    if (adjustedRate <= 0) continue;
-
-                    const avgCount = (drop.minCount + drop.maxCount) / 2;
-                    const expected =
-                        (killCount * adjustedRate * avgCount * (1 + debuffOnLevelGap) * (1 + combatDropQuantity)) /
-                        numberOfPlayers;
-
-                    totalDropMap.set(drop.itemHrid, (totalDropMap.get(drop.itemHrid) || 0) + expected);
+                        totalDropMap.set(drop.itemHrid, (totalDropMap.get(drop.itemHrid) || 0) + expected);
+                    }
                 }
             }
+        } else {
+            // Regular zones: per-monster drops from kill counts
+            const monsters = Object.keys(simResult.deaths).filter((hrid) => !hrid.startsWith('player'));
 
-            // Rare drops
-            if (monsterData.rareDropTable) {
-                for (const drop of monsterData.rareDropTable) {
-                    if (drop.minDifficultyTier > difficultyTier) continue;
+            for (const monsterHrid of monsters) {
+                const monsterData = combatMonsterDetailMap[monsterHrid];
+                if (!monsterData) continue;
 
-                    const adjustedRate = drop.dropRate * rareFindMultiplier;
-                    const avgCount = (drop.minCount + (drop.maxCount ?? drop.minCount)) / 2;
-                    const expected =
-                        (killCount * adjustedRate * avgCount * (1 + debuffOnLevelGap) * (1 + combatDropQuantity)) /
-                        numberOfPlayers;
+                const killCount = simResult.deaths[monsterHrid];
 
-                    totalDropMap.set(drop.itemHrid, (totalDropMap.get(drop.itemHrid) || 0) + expected);
+                // Regular drops
+                if (monsterData.dropTable) {
+                    for (const drop of monsterData.dropTable) {
+                        if (drop.minDifficultyTier > difficultyTier) continue;
+
+                        const tierMultiplier = 1.0 + 0.1 * difficultyTier;
+                        const baseRate = drop.dropRate + (drop.dropRatePerDifficultyTier ?? 0) * difficultyTier;
+                        const adjustedRate = Math.min(1.0, tierMultiplier * baseRate * dropRateMultiplier);
+                        if (adjustedRate <= 0) continue;
+
+                        const avgCount = (drop.minCount + drop.maxCount) / 2;
+                        const expected =
+                            (killCount * adjustedRate * avgCount * (1 + debuffOnLevelGap) * (1 + combatDropQuantity)) /
+                            numberOfPlayers;
+
+                        totalDropMap.set(drop.itemHrid, (totalDropMap.get(drop.itemHrid) || 0) + expected);
+                    }
+                }
+
+                // Rare drops
+                if (monsterData.rareDropTable) {
+                    for (const drop of monsterData.rareDropTable) {
+                        if (drop.minDifficultyTier > difficultyTier) continue;
+
+                        const adjustedRate = drop.dropRate * rareFindMultiplier;
+                        const avgCount = (drop.minCount + (drop.maxCount ?? drop.minCount)) / 2;
+                        const expected =
+                            (killCount * adjustedRate * avgCount * (1 + debuffOnLevelGap) * (1 + combatDropQuantity)) /
+                            numberOfPlayers;
+
+                        totalDropMap.set(drop.itemHrid, (totalDropMap.get(drop.itemHrid) || 0) + expected);
+                    }
                 }
             }
         }
@@ -10943,7 +10966,6 @@
             <select id="mwi-csim-zone" style="${selectStyle}"></select>
             <label style="color:#888; font-size:12px;">Tier</label>
             <select id="mwi-csim-tier" style="${selectStyle} flex:0; width:64px; min-width:64px;">
-                ${Array.from({ length: 11 }, (_, i) => `<option value="${i}">${i}</option>`).join('')}
             </select>
             <label style="color:#888; font-size:12px;">Hours</label>
             <input id="mwi-csim-hours" type="number" min="1" max="10000" value="100" style="${inputStyle}">
@@ -11038,6 +11060,9 @@
                 .addEventListener('click', () => this._switchTab('configure'));
             this.panel.querySelector('#mwi-csim-tab-results').addEventListener('click', () => this._switchTab('results'));
 
+            // Zone change → update tier dropdown
+            this.panel.querySelector('#mwi-csim-zone').addEventListener('change', () => this._updateTierDropdown());
+
             this.populateZones();
         }
 
@@ -11062,11 +11087,39 @@
             const current = getCurrentCombatZone();
             if (current) {
                 zoneSelect.value = current.zoneHrid;
+            }
+
+            this._updateTierDropdown();
+
+            // Restore current tier after dropdown is rebuilt
+            if (current) {
                 const tierSelect = this.panel.querySelector('#mwi-csim-tier');
                 if (tierSelect) {
                     tierSelect.value = String(current.difficultyTier);
                 }
             }
+        }
+
+        /**
+         * Update the tier dropdown based on the currently selected zone.
+         * Regular zones: T0-T5, Dungeons: T0-T2.
+         * @private
+         */
+        _updateTierDropdown() {
+            const zoneSelect = this.panel?.querySelector('#mwi-csim-zone');
+            const tierSelect = this.panel?.querySelector('#mwi-csim-tier');
+            if (!zoneSelect || !tierSelect) return;
+
+            const selectedHrid = zoneSelect.value;
+            const zones = getCombatZones();
+            const zone = zones.find((z) => z.hrid === selectedHrid);
+            const maxTier = zone?.isDungeon ? 2 : 5;
+
+            const currentTier = parseInt(tierSelect.value) || 0;
+            tierSelect.innerHTML = Array.from({ length: maxTier + 1 }, (_, i) => `<option value="${i}">${i}</option>`).join(
+                ''
+            );
+            tierSelect.value = String(Math.min(currentTier, maxTier));
         }
 
         /**
