@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.20.0
+ * Version: 2.20.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -10847,30 +10847,43 @@ ${hideRules}
                         const hrid = quest?.actionHrid || quest?.monsterHrid || '';
                         if (!hrid || !this.protectedHrids.has(hrid)) return;
 
-                        // Check if confirmation is active (second click within window)
+                        // Phase 2: confirmation window is open — allow the reroll through
                         if (card.dataset.mwiRerollConfirmed === '1') {
                             card.dataset.mwiRerollConfirmed = '';
                             this._clearWarning(card);
                             return;
                         }
 
-                        // First click — block and show warning
+                        // Always block during any protection state (lockdown or waiting for confirm)
                         e.preventDefault();
                         e.stopPropagation();
                         e.stopImmediatePropagation();
 
-                        card.dataset.mwiRerollConfirmed = '1';
-                        this._showWarning(card);
+                        // Phase 1: lockdown active — absorb click silently
+                        if (card.dataset.mwiRerollLocked === '1') return;
 
-                        // Auto-clear after 3 seconds
+                        // Initial click — start 3s lockdown
+                        card.dataset.mwiRerollLocked = '1';
+                        this._showWarning(card, 'Protected task! Unlocks in 3s...');
+
+                        // Clear any existing timers for this card
                         const existingTimer = this.confirmTimers.get(card);
                         if (existingTimer) clearTimeout(existingTimer);
 
-                        const timer = setTimeout(() => {
-                            card.dataset.mwiRerollConfirmed = '';
-                            this._clearWarning(card);
+                        // After 3s lockdown → open confirmation window
+                        const lockdownTimer = setTimeout(() => {
+                            card.dataset.mwiRerollLocked = '';
+                            card.dataset.mwiRerollConfirmed = '1';
+                            this._showWarning(card, 'Click reroll now to confirm.');
+
+                            // Auto-clear confirmation after another 3s
+                            const confirmTimer = setTimeout(() => {
+                                card.dataset.mwiRerollConfirmed = '';
+                                this._clearWarning(card);
+                            }, 3000);
+                            this.confirmTimers.set(card, confirmTimer);
                         }, 3000);
-                        this.confirmTimers.set(card, timer);
+                        this.confirmTimers.set(card, lockdownTimer);
                     },
                     true // Capturing phase — runs before React's delegation on root
                 );
@@ -10880,9 +10893,10 @@ ${hideRules}
         /**
          * Show warning overlay on a task card.
          * @param {HTMLElement} taskCard
+         * @param {string} [message='Protected task! Unlocks in 3s...']
          * @private
          */
-        _showWarning(taskCard) {
+        _showWarning(taskCard, message = 'Protected task! Unlocks in 3s...') {
             this._clearWarning(taskCard);
 
             const warning = document.createElement('div');
@@ -10903,7 +10917,7 @@ ${hideRules}
             pointer-events: none;
             animation: mwi-blink 0.5s ease-in-out 2;
         `;
-            warning.textContent = 'Protected task! Click again to confirm.';
+            warning.textContent = message;
 
             // Ensure task card has relative positioning for absolute child
             const currentPos = getComputedStyle(taskCard).position;
