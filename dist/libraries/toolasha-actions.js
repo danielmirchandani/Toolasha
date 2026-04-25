@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.20.1
+ * Version: 2.21.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -6863,7 +6863,11 @@
                 }
 
                 // Also check protection item availability if protection is active
-                if (protectFrom > 0 && expectedProtections > 0) {
+                if (
+                    protectFrom > 0 &&
+                    expectedProtections > 0 &&
+                    config.getSetting('actionPanel_enhanceMatLimitProtections')
+                ) {
                     let protectionItemHrid = null;
 
                     // Extract from secondaryItemHash

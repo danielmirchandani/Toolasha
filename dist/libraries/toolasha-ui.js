@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.20.1
+ * Version: 2.21.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -796,6 +796,246 @@
 
         disable() {
             dom_js.removeStyles(STYLE_ID$1);
+        },
+    };
+
+    /**
+     * Tab Reorder
+     * Allows users to drag-and-drop reorder the character panel tabs
+     * (Inventory, Toolasha, Equipment, Houses, Abilities, Loadout).
+     *
+     * Uses CSS `order` on flex items — does not move DOM nodes, so React
+     * re-renders and click→panel mapping are unaffected.
+     */
+
+
+    const STORAGE_KEY_PREFIX$3 = 'tabOrder';
+
+    /**
+     * Get character-scoped storage key.
+     * @returns {string}
+     */
+    function getStorageKey$3() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX$3}_${charId}`;
+    }
+
+    /**
+     * Find the character panel tab list by looking for the one containing "Inventory".
+     * @returns {HTMLElement|null}
+     */
+    function findCharacterTabList() {
+        const allTabLists = document.querySelectorAll('[role="tablist"]');
+        for (const tl of allTabLists) {
+            for (const tab of tl.querySelectorAll('[role="tab"]')) {
+                if (tab.textContent.trim() === 'Inventory') return tl;
+            }
+        }
+        return null;
+    }
+
+    class TabReorder {
+        constructor() {
+            this.isInitialized = false;
+            this.savedOrder = null;
+            this.unregisterHandlers = [];
+            this._dragLabel = null;
+        }
+
+        async initialize() {
+            if (this.isInitialized) return;
+            if (!config.getSetting('tabReorder')) return;
+
+            this.isInitialized = true;
+
+            // Load saved order
+            this.savedOrder = await storage.getJSON(getStorageKey$3(), 'settings', null);
+
+            // Apply to existing tabs
+            this._applyOrder();
+
+            // Re-apply whenever React re-renders the tab container
+            const unregister = domObserver.onClass('TabReorder', 'TabsComponent_tabsContainer', () => {
+                // Small delay to let Toolasha tab injection happen first
+                setTimeout(() => this._applyOrder(), 50);
+            });
+            this.unregisterHandlers.push(unregister);
+        }
+
+        /**
+         * Apply saved order and wire drag-and-drop on all character panel tabs.
+         * @private
+         */
+        _applyOrder() {
+            const tabList = findCharacterTabList();
+            if (!tabList) return;
+
+            const tabs = [...tabList.querySelectorAll('[role="tab"]')];
+            if (tabs.length === 0) return;
+
+            if (this.savedOrder) {
+                for (const tab of tabs) {
+                    const label = tab.textContent.trim();
+                    const idx = this.savedOrder.indexOf(label);
+                    tab.style.order = idx >= 0 ? idx : this.savedOrder.length;
+                }
+            }
+
+            // Wire drag-and-drop on tabs not yet wired
+            for (const tab of tabs) {
+                if (tab.dataset.mwiTabReorder) continue;
+                tab.dataset.mwiTabReorder = '1';
+                this._wireDragDrop(tab);
+            }
+        }
+
+        /**
+         * Wire native HTML5 drag-and-drop on a tab button.
+         * @param {HTMLElement} tab
+         * @private
+         */
+        _wireDragDrop(tab) {
+            tab.setAttribute('draggable', 'true');
+            tab.style.cursor = 'grab';
+
+            tab.addEventListener('dragstart', (e) => {
+                this._dragLabel = tab.textContent.trim();
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', this._dragLabel);
+                tab.style.opacity = '0.4';
+            });
+
+            tab.addEventListener('dragend', () => {
+                tab.style.opacity = '';
+                this._dragLabel = null;
+                // Clean all drop indicators
+                const tabList = findCharacterTabList();
+                if (tabList) {
+                    for (const t of tabList.querySelectorAll('[role="tab"]')) {
+                        t.style.removeProperty('border-left');
+                        t.style.removeProperty('border-right');
+                    }
+                }
+            });
+
+            tab.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+
+                // Show drop indicator
+                const rect = tab.getBoundingClientRect();
+                const midX = rect.left + rect.width / 2;
+                const isLeft = e.clientX < midX;
+
+                // Clear all indicators first
+                const tabList = tab.closest('[role="tablist"]');
+                if (tabList) {
+                    for (const t of tabList.querySelectorAll('[role="tab"]')) {
+                        t.style.removeProperty('border-left');
+                        t.style.removeProperty('border-right');
+                    }
+                }
+
+                if (isLeft) {
+                    tab.style.borderLeft = '2px solid #4a9eff';
+                } else {
+                    tab.style.borderRight = '2px solid #4a9eff';
+                }
+            });
+
+            tab.addEventListener('dragleave', () => {
+                tab.style.removeProperty('border-left');
+                tab.style.removeProperty('border-right');
+            });
+
+            tab.addEventListener('drop', (e) => {
+                e.preventDefault();
+                tab.style.removeProperty('border-left');
+                tab.style.removeProperty('border-right');
+
+                const draggedLabel = e.dataTransfer.getData('text/plain');
+                const targetLabel = tab.textContent.trim();
+                if (!draggedLabel || draggedLabel === targetLabel) return;
+
+                // Determine drop position (before or after target)
+                const rect = tab.getBoundingClientRect();
+                const midX = rect.left + rect.width / 2;
+                const dropBefore = e.clientX < midX;
+
+                // Build current visual order
+                const tabList = tab.closest('[role="tablist"]');
+                if (!tabList) return;
+
+                const tabs = [...tabList.querySelectorAll('[role="tab"]')];
+                const currentOrder = tabs
+                    .map((t) => ({ label: t.textContent.trim(), order: parseInt(t.style.order) || 0 }))
+                    .sort((a, b) => a.order - b.order)
+                    .map((t) => t.label);
+
+                // Remove dragged from current position
+                const newOrder = currentOrder.filter((l) => l !== draggedLabel);
+
+                // Insert at new position
+                const targetIdx = newOrder.indexOf(targetLabel);
+                if (targetIdx < 0) return;
+
+                if (dropBefore) {
+                    newOrder.splice(targetIdx, 0, draggedLabel);
+                } else {
+                    newOrder.splice(targetIdx + 1, 0, draggedLabel);
+                }
+
+                // Save and apply
+                this.savedOrder = newOrder;
+                this._saveOrder(newOrder);
+                this._applyOrder();
+            });
+        }
+
+        /**
+         * Persist the tab order to storage.
+         * @param {Array<string>} order - Ordered array of tab labels
+         * @private
+         */
+        async _saveOrder(order) {
+            await storage.setJSON(getStorageKey$3(), order, 'settings', true);
+        }
+
+        disable() {
+            for (const unregister of this.unregisterHandlers) {
+                unregister();
+            }
+            this.unregisterHandlers = [];
+
+            // Remove all CSS order and draggable attributes
+            const tabList = findCharacterTabList();
+            if (tabList) {
+                for (const tab of tabList.querySelectorAll('[role="tab"]')) {
+                    tab.style.removeProperty('order');
+                    tab.removeAttribute('draggable');
+                    tab.style.removeProperty('cursor');
+                    tab.style.removeProperty('border-left');
+                    tab.style.removeProperty('border-right');
+                    delete tab.dataset.mwiTabReorder;
+                }
+            }
+
+            this.isInitialized = false;
+        }
+    }
+
+    const tabReorder = new TabReorder();
+
+    var tabReorder$1 = {
+        name: 'Tab Reorder',
+        initialize: async () => {
+            await tabReorder.initialize();
+        },
+        cleanup: () => {
+            tabReorder.disable();
+        },
+        disable: () => {
+            tabReorder.disable();
         },
     };
 
@@ -2250,8 +2490,12 @@ ${hideRules}
         _applySorting(catsEl) {
             const tiles = Array.from(catsEl.querySelectorAll('.Collection_collectionContainer__3ZlUO'));
 
-            // Always clear time badges so they disappear when switching modes
-            catsEl.querySelectorAll('.toolasha-cf.time-to-tier').forEach((el) => el.remove());
+            // Always clear time badges and margin overrides so they disappear when switching modes
+            catsEl.querySelectorAll('.toolasha-cf.time-to-tier').forEach((el) => {
+                el.parentElement?.style.removeProperty('margin-bottom');
+                el.parentElement?.style.removeProperty('overflow');
+                el.remove();
+            });
 
             if (this.sortMode === 'default') {
                 tiles.forEach((el) => el.style.removeProperty('order'));
@@ -2289,11 +2533,30 @@ ${hideRules}
             if (this.sortMode === 'time-to-next-tier') {
                 scored.forEach(({ el, score }) => {
                     if (score === Infinity) return;
-                    const circleEl = el.querySelector('[class*="Collection_collection"]');
-                    if (!circleEl) return;
-                    circleEl.insertAdjacentHTML(
-                        'afterend',
-                        `<span class="toolasha-cf time-to-tier" style="font-size:10px;color:#aaa;display:block;text-align:center;line-height:1.4;">${formatters_js.timeReadable(score * 3600)}</span>`
+                    el.style.marginBottom = '16px';
+                    el.style.overflow = 'visible';
+
+                    // Compact time format that fits tile width
+                    const totalSec = score * 3600;
+                    let timeStr;
+                    if (totalSec >= 86400) {
+                        const d = Math.floor(totalSec / 86400);
+                        const h = Math.floor((totalSec % 86400) / 3600);
+                        timeStr = d + 'd ' + h + 'h';
+                    } else if (totalSec >= 3600) {
+                        const h = Math.floor(totalSec / 3600);
+                        const m = Math.floor((totalSec % 3600) / 60);
+                        timeStr = h + 'h ' + m + 'm';
+                    } else {
+                        const m = Math.floor(totalSec / 60);
+                        timeStr = m + 'm';
+                    }
+
+                    el.insertAdjacentHTML(
+                        'beforeend',
+                        '<span class="toolasha-cf time-to-tier" style="position:absolute;bottom:-14px;left:0;right:0;font-size:9px;color:#aaa;text-align:center;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+                            timeStr +
+                            '</span>'
                     );
                 });
             }
@@ -2313,11 +2576,31 @@ ${hideRules}
             this.itemActionCache = {};
             const actionDetailMap = dataManager.getInitClientData()?.actionDetailMap ?? {};
             for (const actionDetails of Object.values(actionDetailMap)) {
-                if (!actionDetails.outputItems?.length) continue;
-                const itemHrid = actionDetails.outputItems[0].itemHrid;
-                const itemId = itemHrid?.split('/').pop();
-                if (itemId && !(itemId in this.itemActionCache)) {
-                    this.itemActionCache[itemId] = actionDetails;
+                // Production actions use outputItems
+                if (actionDetails.outputItems?.length) {
+                    for (const output of actionDetails.outputItems) {
+                        const itemId = output.itemHrid?.split('/').pop();
+                        if (itemId && !(itemId in this.itemActionCache)) {
+                            this.itemActionCache[itemId] = {
+                                actionDetails,
+                                outputIndex: actionDetails.outputItems.indexOf(output),
+                                source: 'outputItems',
+                            };
+                        }
+                    }
+                }
+                // Gathering actions use dropTable
+                if (actionDetails.dropTable?.length) {
+                    for (const drop of actionDetails.dropTable) {
+                        const itemId = drop.itemHrid?.split('/').pop();
+                        if (itemId && !(itemId in this.itemActionCache)) {
+                            this.itemActionCache[itemId] = {
+                                actionDetails,
+                                outputIndex: actionDetails.dropTable.indexOf(drop),
+                                source: 'dropTable',
+                            };
+                        }
+                    }
                 }
             }
         }
@@ -2331,20 +2614,30 @@ ${hideRules}
          */
         _getEffectiveItemsPerHour(itemId) {
             this._buildItemActionCache();
-            const actionDetails = this.itemActionCache[itemId];
-            if (!actionDetails) return 0;
+            const cached = this.itemActionCache[itemId];
+            if (!cached) return 0;
+
+            const { actionDetails, outputIndex, source } = cached;
 
             // Production actions consume input items; gathering actions do not
             const isProduction = !!actionDetails.inputItems?.length;
 
             try {
                 const ctx = efficiency_js.getActionEfficiencyContext(actionDetails, { isProduction });
-                const outputCount = actionDetails.outputItems[0].count ?? 1;
+
+                let outputCount;
+                if (source === 'dropTable') {
+                    const drop = actionDetails.dropTable[outputIndex];
+                    outputCount = (drop.count ?? 1) * (drop.dropRate ?? 1);
+                } else {
+                    outputCount = actionDetails.outputItems[outputIndex].count ?? 1;
+                }
+
                 // totalGathering is 0 for production actions (efficiency.js zeroes it out)
                 const rate = (3600 / ctx.actionTime) * ctx.efficiencyMultiplier * (1 + ctx.totalGathering) * outputCount;
                 return rate;
             } catch (err) {
-                console.warn(`[CollectionFilters] _getEffectiveItemsPerHour error for ${itemId}:`, err);
+                console.warn('[CollectionFilters] _getEffectiveItemsPerHour error for ' + itemId + ':', err);
                 return 0;
             }
         }
@@ -11004,12 +11297,43 @@ ${hideRules}
             const gameData = dataManager.getInitClientData();
             if (!gameData) return;
 
-            // Build list of all possible task targets (actions + monsters)
+            // Build list of all possible task targets (actions + monsters + zones)
             const items = [];
+            const zoneMonsters = {}; // zoneHrid → [monsterHrid, ...]
 
             // Actions (gathering, production, etc.)
             for (const [hrid, action] of Object.entries(gameData.actionDetailMap || {})) {
-                if (action.type === '/action_types/combat') continue; // Combat uses monsters, not actions
+                if (action.type === '/action_types/combat') {
+                    // Build zone → monster mapping
+                    const monsterHrids = new Set();
+                    const fightInfo = action.combatZoneInfo?.fightInfo;
+                    if (fightInfo) {
+                        for (const spawn of fightInfo.randomSpawnInfo?.spawns || []) {
+                            if (spawn.combatMonsterHrid) monsterHrids.add(spawn.combatMonsterHrid);
+                        }
+                        for (const spawn of fightInfo.bossSpawns || []) {
+                            if (spawn.combatMonsterHrid) monsterHrids.add(spawn.combatMonsterHrid);
+                        }
+                    }
+                    const dungeonInfo = action.combatZoneInfo?.dungeonInfo;
+                    if (dungeonInfo) {
+                        for (const wave of Object.values(dungeonInfo.fixedSpawnsMap || {})) {
+                            for (const spawn of wave) {
+                                if (spawn.combatMonsterHrid) monsterHrids.add(spawn.combatMonsterHrid);
+                            }
+                        }
+                        for (const spawnInfo of Object.values(dungeonInfo.randomSpawnInfoMap || {})) {
+                            for (const spawn of spawnInfo.spawns || []) {
+                                if (spawn.combatMonsterHrid) monsterHrids.add(spawn.combatMonsterHrid);
+                            }
+                        }
+                    }
+                    if (monsterHrids.size > 1) {
+                        zoneMonsters[hrid] = [...monsterHrids];
+                        items.push({ hrid, name: action.name, type: 'zone', isZone: true });
+                    }
+                    continue;
+                }
                 items.push({ hrid, name: action.name, type: action.type?.split('/').pop() || 'other' });
             }
 
@@ -11064,7 +11388,7 @@ ${hideRules}
             searchDiv.style.cssText = 'padding: 8px 14px; flex-shrink: 0;';
             const searchInput = document.createElement('input');
             searchInput.type = 'search';
-            searchInput.placeholder = 'Search actions, monsters...';
+            searchInput.placeholder = 'Search actions, monsters, zones...';
             searchInput.style.cssText = `
             width: 100%;
             padding: 6px 10px;
@@ -11086,7 +11410,13 @@ ${hideRules}
                 const lower = query.toLowerCase();
                 const filtered = query
                     ? items.filter((i) => i.name.toLowerCase().includes(lower))
-                    : items.filter((i) => this.protectedHrids.has(i.hrid)); // Show only protected when no search
+                    : items.filter((i) => {
+                          if (i.isZone) {
+                              // Show zone if any of its monsters are protected
+                              return zoneMonsters[i.hrid]?.some((m) => this.protectedHrids.has(m));
+                          }
+                          return this.protectedHrids.has(i.hrid);
+                      });
 
                 let html = '';
                 if (!query && filtered.length === 0) {
@@ -11095,15 +11425,28 @@ ${hideRules}
                 }
 
                 for (const item of filtered.slice(0, 50)) {
-                    const isProtected = this.protectedHrids.has(item.hrid);
-                    const checkmark = isProtected ? '✓' : '';
-                    const checkColor = isProtected ? '#4caf50' : '#444';
-                    const nameColor = isProtected ? '#e0e0e0' : '#aaa';
-                    const typeLabel = item.type.charAt(0).toUpperCase() + item.type.slice(1);
+                    let checkmark, checkColor, nameColor, typeLabel;
 
-                    html += `<div data-hrid="${item.hrid}" style="
+                    if (item.isZone) {
+                        const monsters = zoneMonsters[item.hrid] || [];
+                        const protectedCount = monsters.filter((m) => this.protectedHrids.has(m)).length;
+                        const allProtected = protectedCount === monsters.length;
+                        checkmark = allProtected ? '✓' : protectedCount > 0 ? '~' : '';
+                        checkColor = protectedCount > 0 ? '#4a9eff' : '#444';
+                        nameColor = protectedCount > 0 ? '#e0e0e0' : '#aaa';
+                        typeLabel = 'Zone (' + monsters.length + ')';
+                    } else {
+                        const isProtected = this.protectedHrids.has(item.hrid);
+                        checkmark = isProtected ? '✓' : '';
+                        checkColor = isProtected ? '#4caf50' : '#444';
+                        nameColor = isProtected ? '#e0e0e0' : '#aaa';
+                        typeLabel = item.type.charAt(0).toUpperCase() + item.type.slice(1);
+                    }
+
+                    const borderColor = item.isZone ? '#2a2a4e' : '#1a1a2e';
+                    html += `<div data-hrid="${item.hrid}" ${item.isZone ? 'data-zone="1"' : ''} style="
                     display:flex; align-items:center; gap:8px; padding:5px 4px;
-                    cursor:pointer; border-bottom:1px solid #1a1a2e;
+                    cursor:pointer; border-bottom:1px solid ${borderColor};
                     transition: background 0.1s;
                 " onmouseover="this.style.background='rgba(255,255,255,0.04)'"
                    onmouseout="this.style.background=''">
@@ -11122,7 +11465,22 @@ ${hideRules}
                 // Wire click handlers
                 listContainer.querySelectorAll('[data-hrid]').forEach((row) => {
                     row.addEventListener('click', async () => {
-                        await this.toggleProtected(row.dataset.hrid);
+                        if (row.dataset.zone === '1') {
+                            // Zone click — toggle all monsters in zone
+                            const monsters = zoneMonsters[row.dataset.hrid] || [];
+                            const allProtected = monsters.every((m) => this.protectedHrids.has(m));
+                            for (const m of monsters) {
+                                if (allProtected) {
+                                    this.protectedHrids.delete(m);
+                                } else {
+                                    this.protectedHrids.add(m);
+                                }
+                            }
+                            await this._save();
+                            this._processAllCards();
+                        } else {
+                            await this.toggleProtected(row.dataset.hrid);
+                        }
                         renderList(searchInput.value.trim());
                     });
                 });
@@ -26092,6 +26450,7 @@ ${hideRules}
         skillExperiencePercentage,
         externalLinks,
         hideLabyrinthBadge,
+        tabReorder: tabReorder$1,
         altClickNavigation,
         collectionNavigation: collectionNavigation$1,
         collectionFilters,

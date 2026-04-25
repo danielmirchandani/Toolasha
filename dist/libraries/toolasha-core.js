@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.20.1
+ * Version: 2.21.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -578,6 +578,13 @@
                     label: 'Queued actions: Show total time and completion time',
                     type: 'checkbox',
                     default: true,
+                },
+                actionPanel_enhanceMatLimitProtections: {
+                    id: 'actionPanel_enhanceMatLimitProtections',
+                    label: 'Enhancement material limit: Include protection items',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'When enabled, protection item availability is factored into the material limit estimate. Disable to see material limit based only on enhancement materials.',
                 },
                 actionQueue_valueMode: {
                     id: 'actionQueue_valueMode',
@@ -1527,6 +1534,13 @@
                     label: 'Left sidebar: Hide Labyrinth ping badge',
                     type: 'checkbox',
                     default: false,
+                },
+                tabReorder: {
+                    id: 'tabReorder',
+                    label: 'Character panel: Drag-and-drop tab reordering',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Drag tabs to rearrange the order of Inventory, Toolasha, Equipment, Houses, Abilities, and Loadout. Order persists through refresh.',
                 },
                 expPercentage: {
                     id: 'expPercentage',
