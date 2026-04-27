@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.22.1
+ * Version: 2.22.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2096,7 +2096,7 @@
      */
     async function displayGatheringProfit(panel, actionHrid, dropTableSelector) {
         // Check global hide setting
-        if (!config.getSetting('actionPanel_showProfitPerHour')) {
+        if (!config.getSetting('actionPanel_showProfitDetail')) {
             return;
         }
 
@@ -2653,7 +2653,7 @@
      */
     async function displayProductionProfit(panel, actionHrid, dropTableSelector) {
         // Check global hide setting
-        if (!config.getSetting('actionPanel_showProfitPerHour')) {
+        if (!config.getSetting('actionPanel_showProfitDetail')) {
             return;
         }
 
@@ -8799,7 +8799,7 @@
                 } // End hasNormalXP check - queueContent only created for non-combat
 
                 // Insert sections into DOM
-                const hideActionStats = !config.getSetting('actionPanel_showProfitPerHour');
+                const hideActionStats = !config.getSetting('actionPanel_showProfitDetail');
                 if (queueContent) {
                     // Non-combat: Insert queueContent first
                     inputContainer.insertAdjacentElement('afterend', queueContent);
@@ -11789,7 +11789,7 @@
         }
 
         // Update text content
-        const badgeSpan = tab.querySelector('.TabsComponent_badge__1Du26');
+        const badgeSpan = tab.querySelector('[class*="TabsComponent_badge"]');
         if (badgeSpan) {
             // Title case: capitalize first letter of each word
             const titleCaseName = material.itemName
@@ -12772,7 +12772,7 @@
      * @param {Object} material - Material object with updated counts
      */
     function updateTabBadge(tab, material) {
-        const badgeSpan = tab.querySelector('.TabsComponent_badge__1Du26');
+        const badgeSpan = tab.querySelector('[class*="TabsComponent_badge"]');
         if (!badgeSpan) {
             return;
         }
@@ -18089,7 +18089,7 @@
             this.removeDisplay();
 
             // Check global hide setting
-            if (!config.getSetting('actionPanel_showProfitPerHour')) {
+            if (!config.getSetting('actionPanel_showProfitDetail')) {
                 return;
             }
 

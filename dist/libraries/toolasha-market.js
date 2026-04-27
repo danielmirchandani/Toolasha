@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.22.1
+ * Version: 2.22.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -7227,7 +7227,7 @@ self.onmessage = function (e) {
                                 if (!orderBook) return; // Skip empty slots in sparse array
                                 const topAsk = orderBook.asks?.[0]?.price ?? null;
                                 const bids = orderBook.bids;
-                                const topBid = bids?.length > 0 ? bids[bids.length - 1].price : null;
+                                const topBid = bids?.length > 0 ? bids[0].price : null;
 
                                 // Only update if we have at least one price
                                 if (topAsk !== null || topBid !== null) {
@@ -7241,7 +7241,7 @@ self.onmessage = function (e) {
                                 const enhancementLevel = parseInt(level, 10);
                                 const topAsk = orderBook.asks?.[0]?.price ?? null;
                                 const bids = orderBook.bids;
-                                const topBid = bids?.length > 0 ? bids[bids.length - 1].price : null;
+                                const topBid = bids?.length > 0 ? bids[0].price : null;
 
                                 if (topAsk !== null || topBid !== null) {
                                     marketAPI.updatePrice(itemHrid, enhancementLevel, topAsk, topBid);
@@ -13705,7 +13705,7 @@ self.onmessage = function (e) {
 
             // Extract top ask (lowest sell price) and top bid (highest buy price)
             const topAsk = orderBook.asks?.[0]?.price;
-            const topBid = orderBook.bids?.length > 0 ? orderBook.bids[orderBook.bids.length - 1].price : undefined;
+            const topBid = orderBook.bids?.length > 0 ? orderBook.bids[0].price : undefined;
 
             // Validate prices exist and are positive
             if (!topAsk || topAsk <= 0 || !topBid || topBid <= 0) {

@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.22.1
+ * Version: 2.22.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -13258,7 +13258,7 @@ ${hideRules}
         }
 
         // Update text content
-        const badgeSpan = tab.querySelector('.TabsComponent_badge__1Du26');
+        const badgeSpan = tab.querySelector('[class*="TabsComponent_badge"]');
         if (badgeSpan) {
             // Title case: capitalize first letter of each word
             const titleCaseName = material.itemName
@@ -15056,6 +15056,7 @@ ${hideRules}
         'profitCalc_pricingMode',
         'profitCalc_pricingNaming',
         'actionPanel_showProfitPerHour',
+        'actionPanel_showProfitDetail',
         'actionPanel_foragingTotal',
         'actionPanel_hideNegativeProfit',
         'actionQueue_valueMode',

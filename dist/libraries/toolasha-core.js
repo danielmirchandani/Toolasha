@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.22.1
+ * Version: 2.22.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -613,10 +613,17 @@
                 },
                 actionPanel_showProfitPerHour: {
                     id: 'actionPanel_showProfitPerHour',
-                    label: 'Action panel: Show profit/hr displays',
+                    label: 'Action page: Show profit/hr on tiles',
                     type: 'checkbox',
                     default: true,
-                    help: 'Displays profit/hr on gathering tiles and profitability sections in gathering, production, and alchemy panels',
+                    help: 'Displays profit/hr on each action tile in the action list page',
+                },
+                actionPanel_showProfitDetail: {
+                    id: 'actionPanel_showProfitDetail',
+                    label: 'Action panel: Show profitability detail',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Displays the profitability breakdown section inside gathering, production, and alchemy action panels',
                 },
                 actionPanel_showExpPerHour: {
                     id: 'actionPanel_showExpPerHour',
@@ -5239,6 +5246,17 @@
                         if (className.includes(targetClass)) {
                             callback(node);
                             return; // Only call once per node
+                        }
+                    }
+
+                    // Also check descendants when a container subtree is inserted.
+                    // Only applies when the node has children — leaf nodes are skipped,
+                    // which eliminates the bulk of querySelectorAll cost during React's
+                    // init burst (thousands of individual leaf additions).
+                    if (node.childElementCount > 0) {
+                        for (const targetClass of classArray) {
+                            const matches = node.querySelectorAll(`[class*="${targetClass}"]`);
+                            matches.forEach((match) => callback(match));
                         }
                     }
                 },
