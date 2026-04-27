@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.22.0
+ * Version: 2.22.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -5239,14 +5239,6 @@
                         if (className.includes(targetClass)) {
                             callback(node);
                             return; // Only call once per node
-                        }
-                    }
-
-                    // Also check if node contains matching elements
-                    if (node.querySelector) {
-                        for (const targetClass of classArray) {
-                            const matches = node.querySelectorAll(`[class*="${targetClass}"]`);
-                            matches.forEach((match) => callback(match));
                         }
                     }
                 },
