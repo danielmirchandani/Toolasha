@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.24.0
+ * Version: 2.24.1
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -30298,17 +30298,36 @@ ${hideRules}
      */
 
 
+    let unregisterSettingChange = null;
+
     var queueMonitor = {
         name: 'Queue Monitor',
 
         initialize: () => {
+            // Always init snapshot listener (must survive setting toggles)
             queueSnapshot.initialize();
-            queueMonitorUI.initialize();
+
+            if (config.getSetting('queueMonitor')) {
+                queueMonitorUI.initialize();
+            }
+
+            unregisterSettingChange = config.onSettingChange('queueMonitor', (enabled) => {
+                if (enabled) {
+                    queueMonitorUI.initialize();
+                } else {
+                    queueMonitorUI.disable();
+                }
+            });
         },
 
         disable: () => {
             queueSnapshot.disable();
             queueMonitorUI.disable();
+
+            if (unregisterSettingChange) {
+                unregisterSettingChange();
+                unregisterSettingChange = null;
+            }
         },
     };
 
