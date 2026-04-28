@@ -1,11 +1,11 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.23.0
+ * Version: 2.24.0
  * License: CC-BY-NC-SA-4.0
  */
 
-(function (config, dataManager, domObserver, formatters_js, timerRegistry_js, domObserverHelpers_js, dom_js, storage, marketAPI, efficiency_js, webSocketHook, reactInput_js, actionPanelHelper_js, expectedValueCalculator, bonusRevenueCalculator_js, marketData_js, profitConstants_js, profitHelpers_js, profitCalculator, selectors_js, cleanupRegistry_js, settingsSchema_js, settingsStorage, materialCalculator_js, enhancementCalculator_js, enhancementConfig_js, teaParser_js) {
+(function (config, dataManager, domObserver, formatters_js, timerRegistry_js, domObserverHelpers_js, dom_js, storage, marketAPI, efficiency_js, webSocketHook, reactInput_js, actionPanelHelper_js, expectedValueCalculator, bonusRevenueCalculator_js, marketData_js, profitConstants_js, profitHelpers_js, profitCalculator, selectors_js, profileManager_js, cleanupRegistry_js, settingsSchema_js, settingsStorage, materialCalculator_js, enhancementCalculator_js, enhancementConfig_js, teaParser_js, actionCalculator_js) {
     'use strict';
 
     window.Toolasha = window.Toolasha || {}; window.Toolasha.__buildTarget = "browser";
@@ -4379,6 +4379,25 @@ ${hideRules}
   .pane.drag-over-before.vertical-drop { box-shadow: 0 -3px 0 0 var(--accent); }
   .pane.drag-over-after.vertical-drop  { box-shadow: 0  3px 0 0 var(--accent); }
 
+  /* Filter row */
+  .pane-filter {
+    display: flex; align-items: center; gap: 4px;
+    padding: 4px 10px; background: var(--topbg);
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .pane-filter-preset {
+    background: var(--input-bg); color: var(--text);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 5px;
+    padding: 3px 5px; font-size: 11px; outline: none; cursor: pointer; flex-shrink: 0;
+  }
+  .pane-filter-input {
+    flex: 1; background: var(--input-bg); color: var(--text);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 5px;
+    padding: 3px 6px; font-size: 11px; outline: none;
+  }
+  .pane-filter-input:focus { border-color: var(--accent); }
+  .pane-filter-input.invalid { border-color: #f87171; }
+
   /* Message list */
   .pane-messages {
     flex: 1; overflow-y: auto; padding: 8px 10px;
@@ -4438,6 +4457,32 @@ ${hideRules}
   const SEND  = '${SEND_CHANNEL}';
   const MAX_PER_CHANNEL = 500;
   const STORAGE_KEY = 'mwi-chat-popout-layout';
+
+  const FILTER_PRESETS = [
+    { value: 'none',         label: 'No filter',      regex: null },
+    { value: 'enhanced_buy', label: 'Enhanced Buy',   regex: /\\+\\d+.*Buy\\]/i },
+    { value: 'enhanced_sell',label: 'Enhanced Sell',  regex: /\\+\\d+.*Sell\\]/i },
+    { value: 'buy_only',     label: 'Buy only',       regex: /Buy\\]/i },
+    { value: 'sell_only',    label: 'Sell only',      regex: /Sell\\]/i },
+    { value: 'custom',       label: 'Custom\u2026',   regex: null },
+  ];
+
+  function buildCustomRegex(text) {
+    if (!text) return null;
+    const m = text.match(/^\\/(.+)\\/([gimsuy]*)$/);
+    if (m) {
+      try { return new RegExp(m[1], m[2] || 'i'); } catch { return null; }
+    }
+    const esc = text.replace(/[-.*+?^\x24{}()|\\\\]/g, '\\\\$&').replace(/\\[/g, '\\\\[').replace(/\\]/g, '\\\\]');
+    return new RegExp(esc, 'i');
+  }
+
+  function matchesFilter(paneObj, msg) {
+    if (!paneObj.filterRegex) return true;
+    const parts = [msg.m || ''];
+    if (msg.renderedLinks) parts.push(...msg.renderedLinks);
+    return parts.some(p => paneObj.filterRegex.test(p));
+  }
 
   const relay  = new BroadcastChannel(RELAY);
   const sendCh = new BroadcastChannel(SEND);
@@ -4502,7 +4547,7 @@ ${hideRules}
   resetPingWatchdog();
 
   // ── Pane management ───────────────────────────────────────────
-  function createPane(initialHrid) {
+  function createPane(initialHrid, savedFilterPreset, savedFilterCustom) {
     const id = ++paneIdSeq;
     const hrid = initialHrid || (channels[0]?.hrid || '');
 
@@ -4532,6 +4577,30 @@ ${hideRules}
     header.appendChild(dragHandle);
     header.appendChild(select);
     header.appendChild(closeBtn);
+
+    // Filter row
+    const filterRow = document.createElement('div');
+    filterRow.className = 'pane-filter';
+
+    const filterSelect = document.createElement('select');
+    filterSelect.className = 'pane-filter-preset';
+    FILTER_PRESETS.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.value;
+      opt.textContent = p.label;
+      filterSelect.appendChild(opt);
+    });
+    filterSelect.value = savedFilterPreset || 'none';
+
+    const filterInput = document.createElement('input');
+    filterInput.className = 'pane-filter-input';
+    filterInput.type = 'text';
+    filterInput.placeholder = 'text or /regex/';
+    filterInput.value = savedFilterCustom || '';
+    filterInput.style.display = filterSelect.value === 'custom' ? '' : 'none';
+
+    filterRow.appendChild(filterSelect);
+    filterRow.appendChild(filterInput);
 
     // Messages
     const messages = document.createElement('div');
@@ -4568,6 +4637,7 @@ ${hideRules}
     footer.appendChild(sendBtn);
 
     pane.appendChild(header);
+    pane.appendChild(filterRow);
     pane.appendChild(messages);
     pane.appendChild(footer);
 
@@ -4624,6 +4694,42 @@ ${hideRules}
 
     const paneObj = { id, pane, select, messages, input, channelHrid: hrid };
     panes.push(paneObj);
+
+    // Initialize filter state
+    const initPreset = FILTER_PRESETS.find(p => p.value === (savedFilterPreset || 'none')) || FILTER_PRESETS[0];
+    paneObj.filterPreset = initPreset.value;
+    paneObj.filterCustom = savedFilterCustom || '';
+    paneObj.filterRegex = initPreset.value === 'custom'
+      ? buildCustomRegex(paneObj.filterCustom)
+      : initPreset.regex;
+
+    filterSelect.addEventListener('change', () => {
+      const preset = FILTER_PRESETS.find(p => p.value === filterSelect.value) || FILTER_PRESETS[0];
+      paneObj.filterPreset = preset.value;
+      filterInput.style.display = preset.value === 'custom' ? '' : 'none';
+      paneObj.filterRegex = preset.value === 'custom'
+        ? buildCustomRegex(paneObj.filterCustom)
+        : preset.regex;
+      refilterPane(paneObj);
+      saveLayout();
+    });
+
+    let filterDebounce;
+    filterInput.addEventListener('input', () => {
+      paneObj.filterCustom = filterInput.value;
+      filterInput.classList.remove('invalid');
+      const regex = buildCustomRegex(filterInput.value);
+      if (filterInput.value && !regex) {
+        filterInput.classList.add('invalid');
+        return;
+      }
+      clearTimeout(filterDebounce);
+      filterDebounce = setTimeout(() => {
+        paneObj.filterRegex = regex;
+        refilterPane(paneObj);
+        saveLayout();
+      }, 300);
+    });
 
     select.addEventListener('change', () => {
       paneObj.channelHrid = select.value;
@@ -4722,7 +4828,13 @@ ${hideRules}
     }
   }
 
+  function refilterPane(paneObj) {
+    paneObj.messages.innerHTML = '';
+    (messageBuffer[paneObj.channelHrid] || []).forEach(msg => appendMessage(paneObj, msg));
+  }
+
   function appendMessage(paneObj, msg) {
+    if (!matchesFilter(paneObj, msg)) return;
     const { messages } = paneObj;
     const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
 
@@ -4780,7 +4892,11 @@ ${hideRules}
     try {
       const layout = {
         vertical: verticalToggle.checked,
-        panes: panes.map(p => ({ channelHrid: p.channelHrid })),
+        panes: panes.map(p => ({
+          channelHrid: p.channelHrid,
+          filterPreset: p.filterPreset || 'none',
+          filterCustom: p.filterCustom || '',
+        })),
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
     } catch { /* ignore */ }
@@ -4813,7 +4929,7 @@ ${hideRules}
     }
     const savedPanes = savedLayout.panes || [];
     if (savedPanes.length > 0) {
-      savedPanes.forEach(p => createPane(p.channelHrid));
+      savedPanes.forEach(p => createPane(p.channelHrid, p.filterPreset, p.filterCustom));
     } else {
       createPane(channels[0]?.hrid || '/chat_channel_types/general');
     }
@@ -5933,6 +6049,1282 @@ ${hideRules}
         };
     }
 
+    var WORKER_SCRIPT = "(function () {\n    'use strict';\n\n    /**\n     * Game Data Singleton\n     *\n     * Replaces static JSON imports across the ported combat simulator engine.\n     * Game data maps are set once per simulation run from Toolasha's live data.\n     */\n\n    let _gameData = null;\n\n    /**\n     * Set all game data maps for the simulation.\n     * @param {Object} data - Game data maps from dataManager.getInitClientData()\n     */\n    function setGameData(data) {\n        _gameData = data;\n    }\n\n    /**\n     * Get the current game data maps.\n     * @returns {Object} Game data maps\n     */\n    function getGameData() {\n        return _gameData;\n    }\n\n    class CombatUtilities {\n        static getTarget(enemies) {\n            if (!enemies) {\n                return null;\n            }\n            const target = enemies.find((enemy) => enemy.combatDetails.currentHitpoints > 0);\n\n            return target ?? null;\n        }\n\n        static randomInt(min, max) {\n            if (max < min) {\n                const temp = min;\n                min = max;\n                max = temp;\n            }\n\n            const minCeil = Math.ceil(min);\n            const maxFloor = Math.floor(max);\n\n            if (Math.floor(min) === maxFloor) {\n                return Math.floor((min + max) / 2 + Math.random());\n            }\n\n            const minTail = -1 * (min - minCeil);\n            const maxTail = max - maxFloor;\n\n            const balancedWeight = 2 * minTail + (maxFloor - minCeil);\n            const balancedAverage = (maxFloor + minCeil) / 2;\n            const average = (max + min) / 2;\n            const extraTailWeight = (balancedWeight * (average - balancedAverage)) / (maxFloor + 1 - average);\n            const extraTailChance = Math.abs(extraTailWeight / (extraTailWeight + balancedWeight));\n\n            if (Math.random() < extraTailChance) {\n                if (maxTail > minTail) {\n                    return Math.floor(maxFloor + 1);\n                } else {\n                    return Math.floor(minCeil - 1);\n                }\n            }\n\n            if (maxTail > minTail) {\n                return Math.floor(min + Math.random() * (maxFloor + minTail - min + 1));\n            } else {\n                return Math.floor(minCeil - maxTail + Math.random() * (max - (minCeil - maxTail) + 1));\n            }\n        }\n\n        static processAttack(source, target, abilityEffect = null) {\n            const combatStyle = abilityEffect\n                ? abilityEffect.combatStyleHrid\n                : source.combatDetails.combatStats.combatStyleHrid;\n            const damageType = abilityEffect ? abilityEffect.damageType : source.combatDetails.combatStats.damageType;\n\n            let sourceAccuracyRating = 1;\n            let sourceAutoAttackMaxDamage = 1;\n            let targetEvasionRating = 1;\n\n            switch (combatStyle) {\n                case '/combat_styles/stab':\n                    sourceAccuracyRating = source.combatDetails.stabAccuracyRating;\n                    sourceAutoAttackMaxDamage = source.combatDetails.stabMaxDamage;\n                    targetEvasionRating = target.combatDetails.stabEvasionRating;\n                    break;\n                case '/combat_styles/slash':\n                    sourceAccuracyRating = source.combatDetails.slashAccuracyRating;\n                    sourceAutoAttackMaxDamage = source.combatDetails.slashMaxDamage;\n                    targetEvasionRating = target.combatDetails.slashEvasionRating;\n                    break;\n                case '/combat_styles/smash':\n                    sourceAccuracyRating = source.combatDetails.smashAccuracyRating;\n                    sourceAutoAttackMaxDamage = source.combatDetails.smashMaxDamage;\n                    targetEvasionRating = target.combatDetails.smashEvasionRating;\n                    break;\n                case '/combat_styles/ranged':\n                    sourceAccuracyRating = source.combatDetails.rangedAccuracyRating;\n                    sourceAutoAttackMaxDamage = source.combatDetails.rangedMaxDamage;\n                    targetEvasionRating = target.combatDetails.rangedEvasionRating;\n                    break;\n                case '/combat_styles/magic':\n                    sourceAccuracyRating = source.combatDetails.magicAccuracyRating;\n                    sourceAutoAttackMaxDamage = source.combatDetails.magicMaxDamage;\n                    targetEvasionRating = target.combatDetails.magicEvasionRating;\n                    break;\n                default:\n                    throw new Error('Unknown combat style: ' + combatStyle);\n            }\n\n            let sourceDamageMultiplier = 1;\n            let sourceResistance = 0;\n            let sourcePenetration = 0;\n            let targetResistance = 0;\n            let targetThornPower = 0;\n            let targetPenetration = 0;\n            let thornType;\n\n            switch (damageType) {\n                case '/damage_types/physical':\n                    sourceDamageMultiplier = 1 + source.combatDetails.combatStats.physicalAmplify;\n                    sourceResistance = source.combatDetails.totalArmor;\n                    sourcePenetration = source.combatDetails.combatStats.armorPenetration;\n                    targetResistance = target.combatDetails.totalArmor;\n                    targetThornPower = target.combatDetails.combatStats.physicalThorns;\n                    targetPenetration = target.combatDetails.combatStats.armorPenetration;\n                    thornType = 'physicalThorns';\n                    break;\n                case '/damage_types/water':\n                    sourceDamageMultiplier = 1 + source.combatDetails.combatStats.waterAmplify;\n                    sourceResistance = source.combatDetails.totalWaterResistance;\n                    sourcePenetration = source.combatDetails.combatStats.waterPenetration;\n                    targetResistance = target.combatDetails.totalWaterResistance;\n                    targetThornPower = target.combatDetails.combatStats.elementalThorns;\n                    targetPenetration = target.combatDetails.combatStats.waterPenetration;\n                    thornType = 'elementalThorns';\n                    break;\n                case '/damage_types/nature':\n                    sourceDamageMultiplier = 1 + source.combatDetails.combatStats.natureAmplify;\n                    sourceResistance = source.combatDetails.totalNatureResistance;\n                    sourcePenetration = source.combatDetails.combatStats.naturePenetration;\n                    targetResistance = target.combatDetails.totalNatureResistance;\n                    targetThornPower = target.combatDetails.combatStats.elementalThorns;\n                    targetPenetration = target.combatDetails.combatStats.naturePenetration;\n                    thornType = 'elementalThorns';\n                    break;\n                case '/damage_types/fire':\n                    sourceDamageMultiplier = 1 + source.combatDetails.combatStats.fireAmplify;\n                    sourceResistance = source.combatDetails.totalFireResistance;\n                    sourcePenetration = source.combatDetails.combatStats.firePenetration;\n                    targetResistance = target.combatDetails.totalFireResistance;\n                    targetThornPower = target.combatDetails.combatStats.elementalThorns;\n                    targetPenetration = target.combatDetails.combatStats.firePenetration;\n                    thornType = 'elementalThorns';\n                    break;\n                default:\n                    throw new Error('Unknown damage type: ' + damageType);\n            }\n\n            let hitChance = 1;\n            let critChance = 0;\n            let isCrit = false;\n            const bonusCritChance = source.combatDetails.combatStats.criticalRate;\n            const bonusCritDamage = source.combatDetails.combatStats.criticalDamage;\n\n            if (abilityEffect) {\n                sourceAccuracyRating *= 1 + abilityEffect.bonusAccuracyRatio;\n            }\n\n            if (source.isWeakened) {\n                sourceAccuracyRating = sourceAccuracyRating - source.weakenPercentage * sourceAccuracyRating;\n            }\n\n            hitChance =\n                Math.pow(sourceAccuracyRating, 1.4) /\n                (Math.pow(sourceAccuracyRating, 1.4) + Math.pow(targetEvasionRating, 1.4));\n\n            if (combatStyle === '/combat_styles/ranged') {\n                critChance = 0.3 * hitChance;\n            }\n\n            critChance = critChance + bonusCritChance;\n\n            const baseDamageFlat = abilityEffect ? abilityEffect.damageFlat : 0;\n            const baseDamageRatio = abilityEffect ? abilityEffect.damageRatio : 1;\n\n            const armorDamageRatioFlat = abilityEffect\n                ? abilityEffect.armorDamageRatio * source.combatDetails.totalArmor\n                : 0;\n\n            let sourceMinDamage = sourceDamageMultiplier * (1 + baseDamageFlat + armorDamageRatioFlat);\n            let sourceMaxDamage =\n                sourceDamageMultiplier *\n                (baseDamageRatio * sourceAutoAttackMaxDamage + baseDamageFlat + armorDamageRatioFlat);\n\n            if (Math.random() < critChance) {\n                sourceMaxDamage = sourceMaxDamage * (1 + bonusCritDamage);\n                sourceMinDamage = sourceMaxDamage;\n                isCrit = true;\n            }\n\n            let damageRoll = CombatUtilities.randomInt(sourceMinDamage, sourceMaxDamage);\n            // taskDamage intentionally excluded — trinket slot not exported by reference sims\n            // damageRoll *= 1 + source.combatDetails.combatStats.taskDamage;\n            damageRoll *= 1 + target.combatDetails.combatStats.damageTaken;\n            if (!abilityEffect) {\n                damageRoll += damageRoll * source.combatDetails.combatStats.autoAttackDamage;\n            } else {\n                damageRoll *= 1 + source.combatDetails.combatStats.abilityDamage;\n            }\n\n            let damageDone = 0;\n            let thornDamageDone = 0;\n\n            let didHit = false;\n            if (Math.random() < hitChance) {\n                didHit = true;\n                let penetratedTargetResistance = targetResistance;\n\n                if (sourcePenetration > 0 && targetResistance > 0) {\n                    penetratedTargetResistance = targetResistance / (1 + sourcePenetration);\n                }\n\n                let targetDamageTakenRatio = 100 / (100 + penetratedTargetResistance);\n                if (penetratedTargetResistance < 0) {\n                    targetDamageTakenRatio = (100 - penetratedTargetResistance) / 100;\n                }\n\n                const mitigatedDamage = Math.ceil(targetDamageTakenRatio * damageRoll);\n                damageDone = Math.min(mitigatedDamage, target.combatDetails.currentHitpoints);\n                target.combatDetails.currentHitpoints -= damageDone;\n            }\n\n            if (targetThornPower > 0.0 && targetResistance > -99) {\n                let penetratedSourceResistance = sourceResistance;\n\n                if (sourceResistance > 0) {\n                    penetratedSourceResistance = sourceResistance / (1 + targetPenetration);\n                }\n\n                let sourceDamageTakenRatio = 100.0 / (100 + penetratedSourceResistance);\n                if (penetratedSourceResistance < 0) {\n                    sourceDamageTakenRatio = (100 - penetratedSourceResistance) / 100;\n                }\n\n                const targetTaskDamageMultiplier = 1.0 + target.combatDetails.combatStats.taskDamage;\n                const sourceDamageTakenMultiplier = 1.0 + source.combatDetails.combatStats.damageTaken;\n                const targetDamageMultiplier = targetTaskDamageMultiplier * sourceDamageTakenMultiplier;\n\n                const thornsDamageRoll = CombatUtilities.randomInt(\n                    1,\n                    targetDamageMultiplier *\n                        target.combatDetails.defensiveMaxDamage *\n                        (1.0 + targetResistance / 100.0) *\n                        targetThornPower\n                );\n\n                const mitigatedThornsDamage = Math.ceil(sourceDamageTakenRatio * thornsDamageRoll);\n\n                thornDamageDone = Math.min(mitigatedThornsDamage, source.combatDetails.currentHitpoints);\n                source.combatDetails.currentHitpoints -= thornDamageDone;\n            }\n\n            let retaliationDamageDone = 0;\n            if (target.combatDetails.combatStats.retaliation > 0) {\n                const retaliationHitChance =\n                    Math.pow(target.combatDetails.smashAccuracyRating, 1.4) /\n                    (Math.pow(target.combatDetails.smashAccuracyRating, 1.4) +\n                        Math.pow(source.combatDetails.smashEvasionRating, 1.4));\n\n                if (retaliationHitChance > Math.random()) {\n                    let sourceEffectiveArmor = source.combatDetails.totalArmor;\n                    if (sourceEffectiveArmor > 0) {\n                        sourceEffectiveArmor =\n                            sourceEffectiveArmor / (1.0 + target.combatDetails.combatStats.armorPenetration);\n                    }\n\n                    let sourceDamageTakenRatio = 100.0 / (100.0 + sourceEffectiveArmor);\n                    if (sourceEffectiveArmor < 0) {\n                        sourceDamageTakenRatio = (100.0 - sourceEffectiveArmor) / 100.0;\n                    }\n\n                    const targetTaskDamageMultiplier = 1.0 + target.combatDetails.combatStats.taskDamage;\n                    const sourceDamageTakenMultiplier = 1.0 + source.combatDetails.combatStats.damageTaken;\n                    const retaliationDamageMultiplier = targetTaskDamageMultiplier * sourceDamageTakenMultiplier;\n\n                    let premitigatedDamage = damageRoll;\n                    premitigatedDamage = Math.min(premitigatedDamage, target.combatDetails.defensiveMaxDamage * 5);\n\n                    const retaliationMinDamage =\n                        retaliationDamageMultiplier * target.combatDetails.combatStats.retaliation * premitigatedDamage;\n                    const retaliationMaxDamage =\n                        retaliationDamageMultiplier *\n                        target.combatDetails.combatStats.retaliation *\n                        (target.combatDetails.defensiveMaxDamage + premitigatedDamage);\n\n                    const retaliationDamageRoll = CombatUtilities.randomInt(retaliationMinDamage, retaliationMaxDamage);\n                    const mitigatedRetaliationDamage = Math.ceil(sourceDamageTakenRatio * retaliationDamageRoll);\n                    retaliationDamageDone = Math.min(mitigatedRetaliationDamage, source.combatDetails.currentHitpoints);\n                    source.combatDetails.currentHitpoints -= retaliationDamageDone;\n                }\n            }\n\n            let lifeStealHeal = 0;\n            if (!abilityEffect && didHit && source.combatDetails.combatStats.lifeSteal > 0) {\n                lifeStealHeal = source.addHitpoints(Math.floor(source.combatDetails.combatStats.lifeSteal * damageDone));\n            }\n\n            let hpDrain = 0;\n            if (abilityEffect && didHit && abilityEffect.hpDrainRatio > 0) {\n                const healingAmplify = 1 + source.combatDetails.combatStats.healingAmplify;\n                hpDrain = source.addHitpoints(Math.floor(abilityEffect.hpDrainRatio * damageDone * healingAmplify));\n            }\n\n            let manaLeechMana = 0;\n            if (!abilityEffect && didHit && source.combatDetails.combatStats.manaLeech > 0) {\n                manaLeechMana = source.addManapoints(Math.floor(source.combatDetails.combatStats.manaLeech * damageDone));\n            }\n\n            return {\n                damageDone,\n                didHit,\n                thornDamageDone,\n                thornType,\n                retaliationDamageDone,\n                lifeStealHeal,\n                hpDrain,\n                manaLeechMana,\n                isCrit,\n            };\n        }\n\n        static processHeal(source, abilityEffect, target) {\n            if (abilityEffect.combatStyleHrid !== '/combat_styles/magic') {\n                throw new Error('Heal ability effect not supported for combat style: ' + abilityEffect.combatStyleHrid);\n            }\n\n            const healingAmplify = 1 + source.combatDetails.combatStats.healingAmplify;\n            const magicMaxDamage = source.combatDetails.magicMaxDamage;\n\n            const baseHealFlat = abilityEffect.damageFlat;\n            const baseHealRatio = abilityEffect.damageRatio;\n\n            const minHeal = healingAmplify * (1 + baseHealFlat);\n            const maxHeal = healingAmplify * (baseHealRatio * magicMaxDamage + baseHealFlat);\n\n            const heal = this.randomInt(minHeal, maxHeal);\n            const amountHealed = target.addHitpoints(heal);\n\n            return amountHealed;\n        }\n\n        static processRevive(source, abilityEffect, target) {\n            if (abilityEffect.combatStyleHrid !== '/combat_styles/magic') {\n                throw new Error('Heal ability effect not supported for combat style: ' + abilityEffect.combatStyleHrid);\n            }\n\n            const healingAmplify = 1 + source.combatDetails.combatStats.healingAmplify;\n            const magicMaxDamage = source.combatDetails.magicMaxDamage;\n\n            const baseHealFlat = abilityEffect.damageFlat;\n            const baseHealRatio = abilityEffect.damageRatio;\n\n            const minHeal = healingAmplify * (1 + baseHealFlat);\n            const maxHeal = healingAmplify * (baseHealRatio * magicMaxDamage + baseHealFlat);\n\n            const heal = this.randomInt(minHeal, maxHeal);\n            const amountHealed = target.addHitpoints(heal);\n            target.combatDetails.currentManapoints = target.combatDetails.maxManapoints;\n            target.clearCCs();\n\n            // target.clearBuffs();\n\n            return amountHealed;\n        }\n\n        static processSpendHp(source, abilityEffect) {\n            const currentHp = source.combatDetails.currentHitpoints;\n            const spendHpRatio = abilityEffect.spendHpRatio;\n\n            const spentHp = Math.floor(currentHp * spendHpRatio);\n\n            source.combatDetails.currentHitpoints -= spentHp;\n\n            return spentHp;\n        }\n\n        static calculateTickValue(totalValue, totalTicks, currentTick) {\n            const currentSum = Math.floor((currentTick * totalValue) / totalTicks);\n            const previousSum = Math.floor(((currentTick - 1) * totalValue) / totalTicks);\n\n            return currentSum - previousSum;\n        }\n    }\n\n    class CombatEvent {\n        constructor(type, time) {\n            this.type = type;\n            this.time = time;\n        }\n    }\n\n    class AutoAttackEvent extends CombatEvent {\n        static type = 'autoAttack';\n\n        constructor(time, source) {\n            super(AutoAttackEvent.type, time);\n\n            this.source = source;\n        }\n    }\n\n    class DamageOverTimeEvent extends CombatEvent {\n        static type = 'damageOverTime';\n\n        constructor(time, sourceRef, target, damage, totalTicks, currentTick, combatStyleHrid) {\n            super(DamageOverTimeEvent.type, time);\n\n            // Calling it 'source' would wrongly clear Damage Over Time when the source dies\n            this.sourceRef = sourceRef;\n            this.target = target;\n            this.damage = damage;\n            this.totalTicks = totalTicks;\n            this.currentTick = currentTick;\n            this.combatStyleHrid = combatStyleHrid;\n        }\n    }\n\n    class CheckBuffExpirationEvent extends CombatEvent {\n        static type = 'checkBuffExpiration';\n\n        constructor(time, source) {\n            super(CheckBuffExpirationEvent.type, time);\n\n            this.source = source;\n        }\n    }\n\n    class CombatStartEvent extends CombatEvent {\n        static type = 'combatStart';\n\n        constructor(time) {\n            super(CombatStartEvent.type, time);\n        }\n    }\n\n    class ConsumableTickEvent extends CombatEvent {\n        static type = 'consumableTick';\n\n        constructor(time, source, consumable, totalTicks, currentTick) {\n            super(ConsumableTickEvent.type, time);\n\n            this.source = source;\n            this.consumable = consumable;\n            this.totalTicks = totalTicks;\n            this.currentTick = currentTick;\n        }\n    }\n\n    class CooldownReadyEvent extends CombatEvent {\n        static type = 'cooldownReady';\n\n        constructor(time) {\n            super(CooldownReadyEvent.type, time);\n        }\n    }\n\n    class EnemyRespawnEvent extends CombatEvent {\n        static type = 'enemyRespawn';\n\n        constructor(time) {\n            super(EnemyRespawnEvent.type, time);\n        }\n    }\n\n    /**\n     * Optimized EventQueue with indexed binary heap.\n     *\n     * Two key optimizations over the original:\n     * 1. Secondary Map indexes for O(1) event lookups (replaces toArray() scans)\n     * 2. Custom binary heap with position tracking for O(log n) removal\n     *    (replaces heap-js whose remove() is O(n))\n     */\n\n    /**\n     * Binary min-heap with O(log n) removal via position tracking.\n     * Each element gets a `_heapIndex` property for direct access.\n     */\n    class IndexedMinHeap {\n        constructor() {\n            this.data = [];\n        }\n\n        get size() {\n            return this.data.length;\n        }\n\n        push(event) {\n            event._heapIndex = this.data.length;\n            this.data.push(event);\n            this._siftUp(this.data.length - 1);\n        }\n\n        pop() {\n            if (this.data.length === 0) return undefined;\n            const top = this.data[0];\n            const last = this.data.pop();\n            if (this.data.length > 0) {\n                last._heapIndex = 0;\n                this.data[0] = last;\n                this._siftDown(0);\n            }\n            top._heapIndex = -1;\n            return top;\n        }\n\n        remove(event) {\n            const idx = event._heapIndex;\n            if (idx === undefined || idx < 0 || idx >= this.data.length || this.data[idx] !== event) {\n                return false;\n            }\n\n            if (idx === this.data.length - 1) {\n                this.data.pop();\n                event._heapIndex = -1;\n                return true;\n            }\n\n            const last = this.data.pop();\n            last._heapIndex = idx;\n            this.data[idx] = last;\n            event._heapIndex = -1;\n\n            // Sift in whichever direction is needed\n            this._siftUp(idx);\n            this._siftDown(idx);\n            return true;\n        }\n\n        _siftUp(idx) {\n            const data = this.data;\n            while (idx > 0) {\n                const parent = (idx - 1) >> 1;\n                if (data[idx].time >= data[parent].time) break;\n                // Swap\n                const tmp = data[parent];\n                data[parent] = data[idx];\n                data[idx] = tmp;\n                data[parent]._heapIndex = parent;\n                data[idx]._heapIndex = idx;\n                idx = parent;\n            }\n        }\n\n        _siftDown(idx) {\n            const data = this.data;\n            const len = data.length;\n            while (true) {\n                let smallest = idx;\n                const left = 2 * idx + 1;\n                const right = 2 * idx + 2;\n\n                if (left < len && data[left].time < data[smallest].time) smallest = left;\n                if (right < len && data[right].time < data[smallest].time) smallest = right;\n\n                if (smallest === idx) break;\n\n                const tmp = data[smallest];\n                data[smallest] = data[idx];\n                data[idx] = tmp;\n                data[smallest]._heapIndex = smallest;\n                data[idx]._heapIndex = idx;\n                idx = smallest;\n            }\n        }\n\n        toArray() {\n            return [...this.data];\n        }\n    }\n\n    /**\n     * EventQueue with secondary Map indexes and O(log n) heap removal.\n     */\n    class EventQueue {\n        constructor() {\n            this.minHeap = new IndexedMinHeap();\n\n            /** @type {Map<string, Set<Object>>} type → Set<event> */\n            this.byType = new Map();\n\n            /** @type {Map<Object, Set<Object>>} unit → Set<event> (source) */\n            this.bySource = new Map();\n\n            /** @type {Map<Object, Set<Object>>} unit → Set<event> (target) */\n            this.byTarget = new Map();\n\n            /** @type {Map<string, Set<Object>>} `${type}|${unitRef}` → Set<event> */\n            this.byTypeAndSource = new Map();\n\n            /** @type {Map<string, Set<Object>>} `${type}|${hrid}` → Set<event> */\n            this.byTypeAndHrid = new Map();\n        }\n\n        /**\n         * Add event to the queue and all indexes.\n         * @param {Object} event\n         */\n        addEvent(event) {\n            this.minHeap.push(event);\n            this._addToIndexes(event);\n        }\n\n        /**\n         * Pop the earliest event and remove from indexes.\n         * @returns {Object|undefined}\n         */\n        getNextEvent() {\n            const event = this.minHeap.pop();\n            if (event) {\n                this._removeFromIndexes(event);\n            }\n            return event;\n        }\n\n        /**\n         * Check if any event of the given type exists. O(1).\n         * @param {string} type\n         * @returns {boolean}\n         */\n        containsEventOfType(type) {\n            const set = this.byType.get(type);\n            return set !== undefined && set.size > 0;\n        }\n\n        /**\n         * Check if an event of the given type and hrid exists. O(1).\n         * @param {string} type\n         * @param {string} hrid\n         * @returns {boolean}\n         */\n        containsEventOfTypeAndHrid(type, hrid) {\n            const key = `${type}|${hrid}`;\n            const set = this.byTypeAndHrid.get(key);\n            return set !== undefined && set.size > 0;\n        }\n\n        /**\n         * Get an event matching type + source. O(1).\n         * @param {string} type\n         * @param {Object} source\n         * @returns {Object|null}\n         */\n        getByTypeAndSource(type, source) {\n            const key = this._typeSourceKey(type, source);\n            const set = this.byTypeAndSource.get(key);\n            if (!set || set.size === 0) return null;\n            return set.values().next().value;\n        }\n\n        /**\n         * Clear all events matching type + source. O(k log n).\n         * @param {string} type\n         * @param {Object} source\n         * @returns {boolean} true if any events were cleared\n         */\n        clearByTypeAndSource(type, source) {\n            const key = this._typeSourceKey(type, source);\n            const set = this.byTypeAndSource.get(key);\n            if (!set || set.size === 0) return false;\n\n            const events = [...set];\n            for (const event of events) {\n                this.minHeap.remove(event);\n                this._removeFromIndexes(event);\n            }\n            return true;\n        }\n\n        /**\n         * Clear all events matching type + hrid. O(k log n).\n         * @param {string} type\n         * @param {string} hrid\n         * @returns {boolean}\n         */\n        clearByTypeAndHrid(type, hrid) {\n            const key = `${type}|${hrid}`;\n            const set = this.byTypeAndHrid.get(key);\n            if (!set || set.size === 0) return false;\n\n            const events = [...set];\n            for (const event of events) {\n                this.minHeap.remove(event);\n                this._removeFromIndexes(event);\n            }\n            return true;\n        }\n\n        /**\n         * Clear all events for a unit (as source OR target). O(k log n).\n         * @param {Object} unit\n         */\n        clearEventsForUnit(unit) {\n            const sourceSet = this.bySource.get(unit);\n            const targetSet = this.byTarget.get(unit);\n\n            const toRemove = new Set();\n            if (sourceSet) {\n                for (const event of sourceSet) toRemove.add(event);\n            }\n            if (targetSet) {\n                for (const event of targetSet) toRemove.add(event);\n            }\n\n            for (const event of toRemove) {\n                this.minHeap.remove(event);\n                this._removeFromIndexes(event);\n            }\n        }\n\n        /**\n         * Clear all events of a given type. O(k log n).\n         * @param {string} type\n         */\n        clearEventsOfType(type) {\n            const set = this.byType.get(type);\n            if (!set || set.size === 0) return;\n\n            const events = [...set];\n            for (const event of events) {\n                this.minHeap.remove(event);\n                this._removeFromIndexes(event);\n            }\n        }\n\n        /**\n         * Clear all events and indexes.\n         */\n        clear() {\n            this.minHeap = new IndexedMinHeap();\n            this.byType.clear();\n            this.bySource.clear();\n            this.byTarget.clear();\n            this.byTypeAndSource.clear();\n            this.byTypeAndHrid.clear();\n        }\n\n        /**\n         * Generic clearMatching for complex predicates not covered by indexed methods.\n         * Still O(n) but only used for rare multi-type patterns.\n         * @param {Function} fn - Predicate\n         * @returns {boolean}\n         */\n        clearMatching(fn) {\n            let cleared = false;\n            const heapEvents = this.minHeap.toArray();\n\n            for (const event of heapEvents) {\n                if (fn(event)) {\n                    this.minHeap.remove(event);\n                    this._removeFromIndexes(event);\n                    cleared = true;\n                }\n            }\n            return cleared;\n        }\n\n        /**\n         * Generic getMatching for complex predicates not covered by indexed methods.\n         * Still O(n) but only used for rare multi-type patterns.\n         * @param {Function} fn - Predicate\n         * @returns {Object|null}\n         */\n        getMatching(fn) {\n            const heapEvents = this.minHeap.toArray();\n\n            for (const event of heapEvents) {\n                if (fn(event)) {\n                    return event;\n                }\n            }\n\n            return null;\n        }\n\n        // --- Internal index management ---\n\n        /** @private */\n        _addToIndexes(event) {\n            // byType\n            if (event.type) {\n                if (!this.byType.has(event.type)) this.byType.set(event.type, new Set());\n                this.byType.get(event.type).add(event);\n            }\n\n            // bySource\n            if (event.source) {\n                if (!this.bySource.has(event.source)) this.bySource.set(event.source, new Set());\n                this.bySource.get(event.source).add(event);\n\n                // byTypeAndSource\n                if (event.type) {\n                    const key = this._typeSourceKey(event.type, event.source);\n                    if (!this.byTypeAndSource.has(key)) this.byTypeAndSource.set(key, new Set());\n                    this.byTypeAndSource.get(key).add(event);\n                }\n            }\n\n            // byTarget\n            if (event.target) {\n                if (!this.byTarget.has(event.target)) this.byTarget.set(event.target, new Set());\n                this.byTarget.get(event.target).add(event);\n            }\n\n            // byTypeAndHrid\n            if (event.type && event.hrid) {\n                const key = `${event.type}|${event.hrid}`;\n                if (!this.byTypeAndHrid.has(key)) this.byTypeAndHrid.set(key, new Set());\n                this.byTypeAndHrid.get(key).add(event);\n            }\n        }\n\n        /** @private */\n        _removeFromIndexes(event) {\n            // byType\n            if (event.type) {\n                const set = this.byType.get(event.type);\n                if (set) {\n                    set.delete(event);\n                    if (set.size === 0) this.byType.delete(event.type);\n                }\n            }\n\n            // bySource\n            if (event.source) {\n                const set = this.bySource.get(event.source);\n                if (set) {\n                    set.delete(event);\n                    if (set.size === 0) this.bySource.delete(event.source);\n                }\n\n                // byTypeAndSource\n                if (event.type) {\n                    const key = this._typeSourceKey(event.type, event.source);\n                    const tsSet = this.byTypeAndSource.get(key);\n                    if (tsSet) {\n                        tsSet.delete(event);\n                        if (tsSet.size === 0) this.byTypeAndSource.delete(key);\n                    }\n                }\n            }\n\n            // byTarget\n            if (event.target) {\n                const set = this.byTarget.get(event.target);\n                if (set) {\n                    set.delete(event);\n                    if (set.size === 0) this.byTarget.delete(event.target);\n                }\n            }\n\n            // byTypeAndHrid\n            if (event.type && event.hrid) {\n                const key = `${event.type}|${event.hrid}`;\n                const thSet = this.byTypeAndHrid.get(key);\n                if (thSet) {\n                    thSet.delete(event);\n                    if (thSet.size === 0) this.byTypeAndHrid.delete(key);\n                }\n            }\n        }\n\n        /**\n         * Build composite key for type + source index.\n         * Uses source object identity via a lazy _eqId property.\n         * @private\n         */\n        _typeSourceKey(type, source) {\n            if (!source._eqId) {\n                source._eqId = ++EventQueue._idCounter;\n            }\n            return `${type}|${source._eqId}`;\n        }\n    }\n\n    /** @private */\n    EventQueue._idCounter = 0;\n\n    class PlayerRespawnEvent extends CombatEvent {\n        static type = 'playerRespawn';\n\n        constructor(time, hrid) {\n            super(PlayerRespawnEvent.type, time);\n            this.hrid = hrid;\n        }\n    }\n\n    class RegenTickEvent extends CombatEvent {\n        static type = 'regenTick';\n\n        constructor(time) {\n            super(RegenTickEvent.type, time);\n        }\n    }\n\n    class StunExpirationEvent extends CombatEvent {\n        static type = 'stunExpiration';\n\n        constructor(time, source) {\n            super(StunExpirationEvent.type, time);\n\n            this.source = source;\n        }\n    }\n\n    class BlindExpirationEvent extends CombatEvent {\n        static type = 'blindExpiration';\n\n        constructor(time, source) {\n            super(BlindExpirationEvent.type, time);\n\n            this.source = source;\n        }\n    }\n\n    class SilenceExpirationEvent extends CombatEvent {\n        static type = 'silenceExpiration';\n\n        constructor(time, source) {\n            super(SilenceExpirationEvent.type, time);\n\n            this.source = source;\n        }\n    }\n\n    class CurseExpirationEvent extends CombatEvent {\n        static type = 'curseExpiration';\n        static maxCurseStacks = 5;\n\n        constructor(time, curseAmount, source) {\n            super(CurseExpirationEvent.type, time);\n\n            this.curseAmount = Math.min(curseAmount + 1, CurseExpirationEvent.maxCurseStacks);\n\n            this.source = source;\n        }\n    }\n\n    class WeakenExpirationEvent extends CombatEvent {\n        static type = 'weakenExpiration';\n        static maxWeakenStacks = 5;\n\n        constructor(time, weakenAmount, source) {\n            super(WeakenExpirationEvent.type, time);\n            this.weakenAmount = Math.min(weakenAmount + 1, WeakenExpirationEvent.maxWeakenStacks);\n            this.source = source;\n        }\n    }\n\n    class FuryExpirationEvent extends CombatEvent {\n        static type = 'furyExpiration';\n\n        constructor(time, furyAmount, source) {\n            super(FuryExpirationEvent.type, time);\n\n            this.furyAmount = furyAmount;\n            this.source = source;\n        }\n    }\n\n    class EnrageTickEvent extends CombatEvent {\n        static type = 'enrageTick';\n\n        constructor(time, encounterTime) {\n            super(EnrageTickEvent.type, time);\n\n            this.encounterTime = encounterTime;\n        }\n    }\n\n    class SimResult {\n        constructor(zone, numberOfPlayers) {\n            this.deaths = {};\n            this.experienceGained = {};\n            this.encounters = 0;\n            this.attacks = {};\n            this.consumablesUsed = {};\n            this.hitpointsGained = {};\n            this.manapointsGained = {};\n            this.debuffOnLevelGap = {};\n            this.dropRateMultiplier = {};\n            this.rareFindMultiplier = {};\n            this.combatDropQuantity = {};\n            this.playerRanOutOfMana = {\n                player1: false,\n                player2: false,\n                player3: false,\n                player4: false,\n                player5: false,\n            };\n            this.playerRanOutOfManaTime = {};\n            this.manaUsed = {};\n            this.timeSpentAlive = [];\n            this.bossSpawns = [];\n            this.hitpointsSpent = {};\n            this.zoneName = zone.hrid;\n            this.difficultyTier = zone.difficultyTier;\n            this.isDungeon = false;\n            this.dungeonsCompleted = 0;\n            this.dungeonsFailed = 0;\n            this.maxWaveReached = 0;\n            this.numberOfPlayers = numberOfPlayers;\n            this.maxEnrageStack = 0;\n\n            this.wipeEvents = [];\n        }\n\n        addWipeEvent(logs, simulationTime, wave) {\n            this.wipeEvents.push({\n                simulationTime: simulationTime,\n                logs: logs,\n                wave: wave,\n                timestamp: new Date().toISOString(),\n            });\n        }\n\n        addDeath(unit) {\n            if (!this.deaths[unit.hrid]) {\n                this.deaths[unit.hrid] = 0;\n            }\n\n            this.deaths[unit.hrid] += 1;\n        }\n\n        updateTimeSpentAlive(name, alive, time) {\n            const i = this.timeSpentAlive.findIndex((e) => e.name === name);\n            if (alive) {\n                if (i !== -1) {\n                    this.timeSpentAlive[i].alive = true;\n                    this.timeSpentAlive[i].spawnedAt = time;\n                } else {\n                    this.timeSpentAlive.push({ name: name, timeSpentAlive: 0, spawnedAt: time, alive: true, count: 0 });\n                }\n            } else {\n                const timeAlive = time - this.timeSpentAlive[i].spawnedAt;\n                this.timeSpentAlive[i].alive = false;\n                this.timeSpentAlive[i].timeSpentAlive += timeAlive;\n                this.timeSpentAlive[i].count += 1;\n            }\n        }\n\n        addExperienceGain(unit, experience) {\n            if (!unit.isPlayer) {\n                return;\n            }\n\n            if (!this.experienceGained[unit.hrid]) {\n                this.experienceGained[unit.hrid] = {\n                    stamina: 0,\n                    intelligence: 0,\n                    attack: 0,\n                    melee: 0,\n                    defense: 0,\n                    ranged: 0,\n                    magic: 0,\n                };\n            }\n\n            const experienceGainedRate = {\n                stamina: 0,\n                intelligence: 0,\n                attack: 0,\n                melee: 0,\n                defense: 0,\n                ranged: 0,\n                magic: 0,\n            };\n\n            const primaryTraining = unit.combatDetails.combatStats.primaryTraining;\n            experienceGainedRate[primaryTraining.split('/')[2]] = 0.3;\n\n            const combatStyleDetailMap = getGameData().combatStyleDetailMap;\n            const skillExpMap = combatStyleDetailMap[unit.combatDetails.combatStats.combatStyleHrid].skillExpMap;\n            const skillExpMapLength = Object.keys(skillExpMap).length;\n\n            const focusTraining = unit.combatDetails.combatStats.focusTraining;\n            if (focusTraining && skillExpMap[focusTraining]) {\n                experienceGainedRate[focusTraining.split('/')[2]] += 0.7;\n            } else {\n                Object.keys(skillExpMap).forEach((skillHrid) => {\n                    experienceGainedRate[skillHrid.split('/')[2]] += 0.7 / skillExpMapLength;\n                });\n            }\n\n            for (const [type, rate] of Object.entries(experienceGainedRate)) {\n                if (rate <= 0) continue;\n\n                const skillExperience = rate * (1 + unit.combatDetails.combatStats[type + 'Experience']);\n\n                this.experienceGained[unit.hrid][type] +=\n                    experience *\n                    (1 + unit.combatDetails.combatStats.combatExperience) *\n                    skillExperience *\n                    (1 + unit.debuffOnLevelGap);\n            }\n        }\n\n        addEncounterEnd() {\n            this.encounters++;\n        }\n\n        addAttack(source, target, ability, hit) {\n            if (!this.attacks[source.hrid]) {\n                this.attacks[source.hrid] = {};\n            }\n            if (!this.attacks[source.hrid][target.hrid]) {\n                this.attacks[source.hrid][target.hrid] = {};\n            }\n            if (!this.attacks[source.hrid][target.hrid][ability]) {\n                this.attacks[source.hrid][target.hrid][ability] = {};\n            }\n\n            if (!this.attacks[source.hrid][target.hrid][ability][hit]) {\n                this.attacks[source.hrid][target.hrid][ability][hit] = 0;\n            }\n\n            this.attacks[source.hrid][target.hrid][ability][hit] += 1;\n        }\n\n        addConsumableUse(unit, consumable) {\n            if (!this.consumablesUsed[unit.hrid]) {\n                this.consumablesUsed[unit.hrid] = {};\n            }\n            if (!this.consumablesUsed[unit.hrid][consumable.hrid]) {\n                this.consumablesUsed[unit.hrid][consumable.hrid] = 0;\n            }\n\n            this.consumablesUsed[unit.hrid][consumable.hrid] += 1;\n        }\n\n        addHitpointsGained(unit, source, amount) {\n            if (!this.hitpointsGained[unit.hrid]) {\n                this.hitpointsGained[unit.hrid] = {};\n            }\n            if (!this.hitpointsGained[unit.hrid][source]) {\n                this.hitpointsGained[unit.hrid][source] = 0;\n            }\n\n            this.hitpointsGained[unit.hrid][source] += amount;\n        }\n\n        addManapointsGained(unit, source, amount) {\n            if (!this.manapointsGained[unit.hrid]) {\n                this.manapointsGained[unit.hrid] = {};\n            }\n            if (!this.manapointsGained[unit.hrid][source]) {\n                this.manapointsGained[unit.hrid][source] = 0;\n            }\n\n            this.manapointsGained[unit.hrid][source] += amount;\n        }\n\n        setDropRateMultipliers(unit) {\n            if (!this.dropRateMultiplier[unit.hrid]) {\n                this.dropRateMultiplier[unit.hrid] = {};\n            }\n            this.dropRateMultiplier[unit.hrid] = 1 + unit.combatDetails.combatStats.combatDropRate;\n\n            if (!this.rareFindMultiplier[unit.hrid]) {\n                this.rareFindMultiplier[unit.hrid] = {};\n            }\n            this.rareFindMultiplier[unit.hrid] = 1 + unit.combatDetails.combatStats.combatRareFind;\n\n            if (!this.combatDropQuantity[unit.hrid]) {\n                this.combatDropQuantity[unit.hrid] = {};\n            }\n            this.combatDropQuantity[unit.hrid] = unit.combatDetails.combatStats.combatDropQuantity;\n\n            if (!this.debuffOnLevelGap[unit.hrid]) {\n                this.debuffOnLevelGap[unit.hrid] = {};\n            }\n            this.debuffOnLevelGap[unit.hrid] = unit.debuffOnLevelGap;\n        }\n\n        setManaUsed(unit) {\n            this.manaUsed[unit.hrid] = {};\n            for (const [key, value] of unit.abilityManaCosts.entries()) {\n                this.manaUsed[unit.hrid][key] = value;\n            }\n        }\n\n        addHitpointsSpent(unit, source, amount) {\n            if (!this.hitpointsSpent[unit.hrid]) {\n                this.hitpointsSpent[unit.hrid] = {};\n            }\n            if (!this.hitpointsSpent[unit.hrid][source]) {\n                this.hitpointsSpent[unit.hrid][source] = 0;\n            }\n\n            this.hitpointsSpent[unit.hrid][source] += amount;\n        }\n\n        addRanOutOfManaCount(unit, isOutOfMana, time) {\n            if (isOutOfMana) this.playerRanOutOfMana[unit.hrid] = true;\n\n            if (!this.playerRanOutOfManaTime[unit.hrid]) {\n                this.playerRanOutOfManaTime[unit.hrid] = {\n                    isOutOfMana: false,\n                    startTimeForOutOfMana: 0,\n                    totalTimeForOutOfMana: 0,\n                };\n            }\n\n            if (isOutOfMana) {\n                if (!this.playerRanOutOfManaTime[unit.hrid].isOutOfMana) {\n                    this.playerRanOutOfManaTime[unit.hrid].isOutOfMana = true;\n                    this.playerRanOutOfManaTime[unit.hrid].startTimeForOutOfMana = time;\n                }\n            } else if (this.playerRanOutOfManaTime[unit.hrid].isOutOfMana) {\n                this.playerRanOutOfManaTime[unit.hrid].isOutOfMana = false;\n                this.playerRanOutOfManaTime[unit.hrid].totalTimeForOutOfMana +=\n                    time - this.playerRanOutOfManaTime[unit.hrid].startTimeForOutOfMana;\n            }\n        }\n    }\n\n    class AbilityCastEndEvent extends CombatEvent {\n        static type = 'abilityCastEndEvent';\n\n        constructor(time, source, ability) {\n            super(AbilityCastEndEvent.type, time);\n\n            this.source = source;\n            this.ability = ability;\n        }\n    }\n\n    class AwaitCooldownEvent extends CombatEvent {\n        static type = 'awaitCooldownEvent';\n\n        constructor(time, source) {\n            super(AwaitCooldownEvent.type, time);\n\n            this.source = source;\n        }\n    }\n\n    class Buff {\n        startTime;\n\n        constructor(buff, level = 1) {\n            this.uniqueHrid = buff.uniqueHrid;\n            this.typeHrid = buff.typeHrid;\n            this.ratioBoost = buff.ratioBoost + (level - 1) * buff.ratioBoostLevelBonus;\n            this.flatBoost = buff.flatBoost + (level - 1) * buff.flatBoostLevelBonus;\n            this.duration = buff.duration;\n            this.multiplierForSkillHrid = buff.multiplierForSkillHrid ?? '';\n            this.multiplierPerSkillLevel = buff.multiplierPerSkillLevel ?? 0;\n        }\n    }\n\n    class Trigger {\n        constructor(dependencyHrid, conditionHrid, comparatorHrid, value = 0) {\n            this.dependencyHrid = dependencyHrid;\n            this.conditionHrid = conditionHrid;\n            this.comparatorHrid = comparatorHrid;\n            this.value = value;\n        }\n\n        static createFromDTO(dto) {\n            const trigger = new Trigger(dto.dependencyHrid, dto.conditionHrid, dto.comparatorHrid, dto.value);\n\n            return trigger;\n        }\n\n        isActive(source, target, friendlies, enemies, currentTime) {\n            const combatTriggerDependencyDetailMap = getGameData().combatTriggerDependencyDetailMap;\n            if (combatTriggerDependencyDetailMap[this.dependencyHrid].isSingleTarget) {\n                return this.isActiveSingleTarget(source, target, currentTime);\n            } else {\n                return this.isActiveMultiTarget(friendlies, enemies, currentTime);\n            }\n        }\n\n        isActiveSingleTarget(source, target, currentTime) {\n            let dependencyValue;\n            switch (this.dependencyHrid) {\n                case '/combat_trigger_dependencies/self':\n                    dependencyValue = this.getDependencyValue(source, currentTime);\n                    break;\n                case '/combat_trigger_dependencies/targeted_enemy':\n                    if (!target) {\n                        return false;\n                    }\n                    dependencyValue = this.getDependencyValue(target, currentTime);\n                    break;\n                default:\n                    throw new Error('Unknown dependencyHrid in trigger: ' + this.dependencyHrid);\n            }\n\n            return this.compareValue(dependencyValue);\n        }\n\n        isActiveMultiTarget(friendlies, enemies, currentTime) {\n            let dependency;\n            switch (this.dependencyHrid) {\n                case '/combat_trigger_dependencies/all_allies':\n                    dependency = friendlies;\n                    break;\n                case '/combat_trigger_dependencies/all_enemies':\n                    if (!enemies) {\n                        return false;\n                    }\n                    dependency = enemies;\n                    break;\n                default:\n                    throw new Error('Unknown dependencyHrid in trigger: ' + this.dependencyHrid);\n            }\n\n            let dependencyValue;\n            switch (this.conditionHrid) {\n                case '/combat_trigger_conditions/number_of_active_units':\n                    dependencyValue = dependency.filter((unit) => unit.combatDetails.currentHitpoints > 0).length;\n                    break;\n                case '/combat_trigger_conditions/number_of_dead_units':\n                    dependencyValue = dependency.filter((unit) => unit.combatDetails.currentHitpoints <= 0).length;\n                    break;\n                case '/combat_trigger_conditions/lowest_hp_percentage':\n                    dependencyValue =\n                        dependency.reduce((prev, curr) => {\n                            const currentHpPercentage =\n                                curr.combatDetails.currentHitpoints / curr.combatDetails.maxHitpoints;\n                            return currentHpPercentage < prev ? currentHpPercentage : prev;\n                        }, 2) * 100;\n                    break;\n                default:\n                    dependencyValue = dependency\n                        .map((unit) => this.getDependencyValue(unit, currentTime))\n                        .reduce((prev, cur) => prev + cur, 0);\n                    break;\n            }\n\n            return this.compareValue(dependencyValue);\n        }\n\n        getDependencyValue(source, currentTime) {\n            switch (this.conditionHrid) {\n                case '/combat_trigger_conditions/berserk':\n                case '/combat_trigger_conditions/frenzy':\n                case '/combat_trigger_conditions/precision':\n                case '/combat_trigger_conditions/vampirism':\n                case '/combat_trigger_conditions/attack_coffee':\n                case '/combat_trigger_conditions/defense_coffee':\n                case '/combat_trigger_conditions/lucky_coffee':\n                case '/combat_trigger_conditions/magic_coffee':\n                case '/combat_trigger_conditions/melee_coffee':\n                case '/combat_trigger_conditions/ranged_coffee':\n                case '/combat_trigger_conditions/swiftness_coffee':\n                case '/combat_trigger_conditions/wisdom_coffee':\n                case '/combat_trigger_conditions/ice_spear':\n                case '/combat_trigger_conditions/puncture':\n                case '/combat_trigger_conditions/frost_surge':\n                case '/combat_trigger_conditions/elusiveness':\n                case '/combat_trigger_conditions/channeling_coffee':\n                case '/combat_trigger_conditions/fierce_aura':\n                case '/combat_trigger_conditions/invincible_armor':\n                case '/combat_trigger_conditions/invincible_fire_resistance':\n                case '/combat_trigger_conditions/invincible_nature_resistance':\n                case '/combat_trigger_conditions/invincible_water_resistance':\n                case '/combat_trigger_conditions/provoke':\n                case '/combat_trigger_conditions/taunt':\n                case '/combat_trigger_conditions/crippling_slash':\n                case '/combat_trigger_conditions/mana_spring':\n                case '/combat_trigger_conditions/retribution':\n                case '/combat_trigger_conditions/fracturing_impact':\n                case '/combat_trigger_conditions/maim':\n                case '/combat_trigger_conditions/curse':\n                case '/combat_trigger_conditions/weaken': {\n                    const buffHrid = '/buff_uniques' + this.conditionHrid.slice(this.conditionHrid.lastIndexOf('/'));\n                    return source.combatBuffs[buffHrid];\n                }\n                case '/combat_trigger_conditions/critical_aura':\n                case '/combat_trigger_conditions/critical_coffee':\n                case '/combat_trigger_conditions/intelligence_coffee':\n                case '/combat_trigger_conditions/stamina_coffee':\n                case '/combat_trigger_conditions/elemental_affinity':\n                case '/combat_trigger_conditions/fury':\n                case '/combat_trigger_conditions/guardian_aura':\n                case '/combat_trigger_conditions/insanity':\n                case '/combat_trigger_conditions/spike_shell':\n                case '/combat_trigger_conditions/toxic_pollen':\n                case '/combat_trigger_conditions/invincible':\n                case '/combat_trigger_conditions/mystic_aura':\n                case '/combat_trigger_conditions/pestilent_shot':\n                case '/combat_trigger_conditions/smoke_burst':\n                case '/combat_trigger_conditions/speed_aura':\n                case '/combat_trigger_conditions/toughness':\n                case '/combat_trigger_conditions/enrage': {\n                    const buffPrefix = '/buff_uniques' + this.conditionHrid.slice(this.conditionHrid.lastIndexOf('/'));\n                    const buffs = Object.keys(source.combatBuffs).filter((buff) => buff.startsWith(buffPrefix));\n                    return source.combatBuffs[buffs?.[0]];\n                }\n                case '/combat_trigger_conditions/current_hp':\n                    return source.combatDetails.currentHitpoints;\n                case '/combat_trigger_conditions/current_mp':\n                    return source.combatDetails.currentManapoints;\n                case '/combat_trigger_conditions/missing_hp':\n                    return source.combatDetails.maxHitpoints - source.combatDetails.currentHitpoints;\n                case '/combat_trigger_conditions/missing_mp':\n                    return source.combatDetails.maxManapoints - source.combatDetails.currentManapoints;\n                case '/combat_trigger_conditions/stun_status':\n                    // Replicate the game's behaviour of \"stun status active\" triggers activating\n                    // immediately after the stun has worn off\n                    return source.isStunned || source.stunExpireTime === currentTime;\n                case '/combat_trigger_conditions/blind_status':\n                    return source.isBlinded || source.blindExpireTime === currentTime;\n                case '/combat_trigger_conditions/silence_status':\n                    return source.isSilenced || source.silenceExpireTime === currentTime;\n                default:\n                    throw new Error('Unknown conditionHrid in trigger: ' + this.conditionHrid);\n            }\n        }\n\n        compareValue(dependencyValue) {\n            switch (this.comparatorHrid) {\n                case '/combat_trigger_comparators/greater_than_equal':\n                    return dependencyValue >= this.value;\n                case '/combat_trigger_comparators/less_than_equal':\n                    return dependencyValue <= this.value;\n                case '/combat_trigger_comparators/is_active':\n                    return !!dependencyValue;\n                case '/combat_trigger_comparators/is_inactive':\n                    return !dependencyValue;\n                default:\n                    throw new Error('Unknown comparatorHrid in trigger: ' + this.comparatorHrid);\n            }\n        }\n    }\n\n    const abilityFromCombatStat = {\n        blaze: {\n            hrid: '/abilities/blaze',\n            name: 'Blaze',\n            description: '',\n            isSpecialAbility: false,\n            manaCost: 0,\n            cooldownDuration: 0,\n            castDuration: 0,\n            abilityEffects: [\n                {\n                    targetType: 'allEnemies',\n                    effectType: '/ability_effect_types/damage',\n                    combatStyleHrid: '/combat_styles/magic',\n                    damageType: '/damage_types/fire',\n                    baseDamageFlat: 0,\n                    baseDamageFlatLevelBonus: 0.0,\n                    baseDamageRatio: 0.3,\n                    baseDamageRatioLevelBonus: 0,\n                    bonusAccuracyRatio: 0,\n                    bonusAccuracyRatioLevelBonus: 0,\n                    damageOverTimeRatio: 0,\n                    damageOverTimeDuration: 0,\n                    armorDamageRatio: 0,\n                    armorDamageRatioLevelBonus: 0,\n                    hpDrainRatio: 0,\n                    pierceChance: 0,\n                    blindChance: 0,\n                    blindDuration: 0,\n                    silenceChance: 0,\n                    silenceDuration: 0,\n                    stunChance: 0,\n                    stunDuration: 0,\n                    spendHpRatio: 0,\n                    buffs: null,\n                },\n            ],\n            defaultCombatTriggers: [\n                {\n                    dependencyHrid: '/combat_trigger_dependencies/all_enemies',\n                    conditionHrid: '/combat_trigger_conditions/number_of_active_units',\n                    comparatorHrid: '/combat_trigger_comparators/greater_than_equal',\n                    value: 1,\n                },\n                {\n                    dependencyHrid: '/combat_trigger_dependencies/all_enemies',\n                    conditionHrid: '/combat_trigger_conditions/current_hp',\n                    comparatorHrid: '/combat_trigger_comparators/greater_than_equal',\n                    value: 1,\n                },\n            ],\n        },\n        bloom: {\n            hrid: '/abilities/bloom',\n            name: 'Bloom',\n            description: '',\n            isSpecialAbility: false,\n            manaCost: 0,\n            cooldownDuration: 0,\n            castDuration: 0,\n            abilityEffects: [\n                {\n                    targetType: 'lowestHpAlly',\n                    effectType: '/ability_effect_types/heal',\n                    combatStyleHrid: '/combat_styles/magic',\n                    damageType: '',\n                    baseDamageFlat: 10,\n                    baseDamageFlatLevelBonus: 0,\n                    baseDamageRatio: 0.15,\n                    baseDamageRatioLevelBonus: 0,\n                    bonusAccuracyRatio: 0,\n                    bonusAccuracyRatioLevelBonus: 0,\n                    damageOverTimeRatio: 0,\n                    damageOverTimeDuration: 0,\n                    armorDamageRatio: 0,\n                    armorDamageRatioLevelBonus: 0,\n                    hpDrainRatio: 0,\n                    pierceChance: 0,\n                    blindChance: 0,\n                    blindDuration: 0,\n                    silenceChance: 0,\n                    silenceDuration: 0,\n                    stunChance: 0,\n                    stunDuration: 0,\n                    spendHpRatio: 0,\n                    buffs: null,\n                },\n            ],\n            defaultCombatTriggers: [\n                {\n                    dependencyHrid: '/combat_trigger_dependencies/all_allies',\n                    conditionHrid: '/combat_trigger_conditions/lowest_hp_percentage',\n                    comparatorHrid: '/combat_trigger_comparators/less_than_equal',\n                    value: 100,\n                },\n            ],\n        },\n    };\n\n    class Ability {\n        constructor(hrid, level = 1, triggers = null) {\n            this.hrid = hrid;\n            this.level = level;\n\n            const abilityDetailMap = getGameData().abilityDetailMap;\n            let gameAbility = abilityDetailMap[hrid];\n            if (!gameAbility) {\n                gameAbility = abilityFromCombatStat[hrid];\n            }\n            if (!gameAbility) {\n                throw new Error('No ability found for hrid: ' + this.hrid);\n            }\n\n            this.manaCost = gameAbility.manaCost;\n            this.cooldownDuration = gameAbility.cooldownDuration;\n            this.castDuration = gameAbility.castDuration;\n            this.isSpecialAbility = gameAbility.isSpecialAbility;\n\n            this.abilityEffects = [];\n\n            for (const effect of gameAbility.abilityEffects) {\n                const abilityEffect = {\n                    targetType: effect.targetType,\n                    effectType: effect.effectType,\n                    combatStyleHrid: effect.combatStyleHrid,\n                    damageType: effect.damageType,\n                    damageFlat: effect.baseDamageFlat + (this.level - 1) * effect.baseDamageFlatLevelBonus,\n                    damageRatio: effect.baseDamageRatio + (this.level - 1) * effect.baseDamageRatioLevelBonus,\n                    bonusAccuracyRatio: effect.bonusAccuracyRatio + (this.level - 1) * effect.bonusAccuracyRatioLevelBonus,\n                    damageOverTimeRatio: effect.damageOverTimeRatio,\n                    damageOverTimeDuration: effect.damageOverTimeDuration,\n                    armorDamageRatio: effect.armorDamageRatio + (this.level - 1) * effect.armorDamageRatioLevelBonus,\n                    hpDrainRatio: effect.hpDrainRatio,\n                    pierceChance: effect.pierceChance,\n                    blindChance: effect.blindChance,\n                    blindDuration: effect.blindDuration,\n                    silenceChance: effect.silenceChance,\n                    silenceDuration: effect.silenceDuration,\n                    stunChance: effect.stunChance,\n                    stunDuration: effect.stunDuration,\n                    spendHpRatio: effect.spendHpRatio,\n                    buffs: null,\n                };\n                if (effect.buffs) {\n                    abilityEffect.buffs = [];\n                    for (const buff of effect.buffs) {\n                        abilityEffect.buffs.push(new Buff(buff, this.level));\n                    }\n                }\n                this.abilityEffects.push(abilityEffect);\n            }\n\n            if (triggers) {\n                this.triggers = triggers;\n            } else {\n                this.triggers = [];\n                for (const defaultTrigger of gameAbility.defaultCombatTriggers) {\n                    const trigger = new Trigger(\n                        defaultTrigger.dependencyHrid,\n                        defaultTrigger.conditionHrid,\n                        defaultTrigger.comparatorHrid,\n                        defaultTrigger.value\n                    );\n                    this.triggers.push(trigger);\n                }\n            }\n\n            this.lastUsed = Number.MIN_SAFE_INTEGER;\n        }\n\n        static createFromDTO(dto) {\n            const triggers = dto.triggers ? dto.triggers.map((trigger) => Trigger.createFromDTO(trigger)) : null;\n            const ability = new Ability(dto.hrid, dto.level, triggers);\n\n            return ability;\n        }\n\n        shouldTrigger(currentTime, source, target, friendlies, enemies) {\n            if (source.isStunned) {\n                return false;\n            }\n\n            if (source.isSilenced) {\n                return false;\n            }\n\n            const haste = source.combatDetails.combatStats.abilityHaste;\n            let cooldownDuration = this.cooldownDuration;\n            if (haste > 0) {\n                cooldownDuration = (cooldownDuration * 100) / (100 + haste);\n            }\n\n            if (this.lastUsed + cooldownDuration > currentTime) {\n                return false;\n            }\n\n            if (this.triggers.length === 0) {\n                return true;\n            }\n\n            let shouldTrigger = true;\n            for (const trigger of this.triggers) {\n                if (!trigger.isActive(source, target, friendlies, enemies, currentTime)) {\n                    shouldTrigger = false;\n                }\n            }\n\n            return shouldTrigger;\n        }\n    }\n\n    class CombatUnit {\n        isPlayer;\n        isStunned = false;\n        stunExpireTime = null;\n        isBlinded = false;\n        blindExpireTime = null;\n        isSilenced = false;\n        silenceExpireTime = null;\n\n        isOutOfMana = false;\n\n        // Base levels which don't change after initialization\n        staminaLevel = 1;\n        intelligenceLevel = 1;\n        attackLevel = 1;\n        meleeLevel = 1;\n        defenseLevel = 1;\n        rangedLevel = 1;\n        magicLevel = 1;\n\n        experience = 0;\n        experienceRate = 0;\n        enrageTime = 0;\n\n        abilities = [null, null, null, null];\n        food = [null, null, null];\n        drinks = [null, null, null];\n        houseRooms = [];\n        dropTable = [];\n        rareDropTable = [];\n        abilityManaCosts = new Map();\n\n        // Calculated combat stats including temporary buffs\n        combatDetails = {\n            staminaLevel: 1,\n            intelligenceLevel: 1,\n            attackLevel: 1,\n            meleeLevel: 1,\n            defenseLevel: 1,\n            rangedLevel: 1,\n            magicLevel: 1,\n            maxHitpoints: 110,\n            currentHitpoints: 110,\n            maxManapoints: 110,\n            currentManapoints: 110,\n            stabAccuracyRating: 11,\n            slashAccuracyRating: 11,\n            smashAccuracyRating: 11,\n            rangedAccuracyRating: 11,\n            magicAccuracyRating: 11,\n            stabMaxDamage: 11,\n            slashMaxDamage: 11,\n            smashMaxDamage: 11,\n            rangedMaxDamage: 11,\n            magicMaxDamage: 11,\n            stabEvasionRating: 11,\n            slashEvasionRating: 11,\n            smashEvasionRating: 11,\n            rangedEvasionRating: 11,\n            magicEvasionRating: 11,\n            defensiveMaxDamage: 0,\n            totalArmor: 0.2,\n            totalWaterResistance: 0.4,\n            totalNatureResistance: 0.4,\n            totalFireResistance: 0.4,\n            abilityHaste: 0,\n            tenacity: 0,\n            totalThreat: 100,\n            combatStats: {\n                combatStyleHrid: '/combat_styles/smash',\n                damageType: '/damage_types/physical',\n                attackInterval: 3000000000,\n                autoAttackDamage: 0,\n                abilityDamage: 0,\n                criticalRate: 0,\n                criticalDamage: 0,\n                stabAccuracy: 0,\n                slashAccuracy: 0,\n                smashAccuracy: 0,\n                rangedAccuracy: 0,\n                magicAccuracy: 0,\n                stabDamage: 0,\n                slashDamage: 0,\n                smashDamage: 0,\n                rangedDamage: 0,\n                magicDamage: 0,\n                defensiveDamage: 0,\n                taskDamage: 0,\n                physicalAmplify: 0,\n                waterAmplify: 0,\n                natureAmplify: 0,\n                fireAmplify: 0,\n                healingAmplify: 0,\n                physicalThorns: 0,\n                elementalThorns: 0,\n                maxHitpoints: 0,\n                maxManapoints: 0,\n                stabEvasion: 0,\n                slashEvasion: 0,\n                smashEvasion: 0,\n                rangedEvasion: 0,\n                magicEvasion: 0,\n                armor: 0,\n                waterResistance: 0,\n                natureResistance: 0,\n                fireResistance: 0,\n                lifeSteal: 0,\n                hpRegenPer10: 0.01,\n                mpRegenPer10: 0.01,\n                combatDropRate: 0,\n                combatDropQuantity: 0,\n                combatRareFind: 0,\n                combatExperience: 0,\n                foodSlots: 1,\n                drinkSlots: 1,\n                armorPenetration: 0,\n                waterPenetration: 0,\n                naturePenetration: 0,\n                firePenetration: 0,\n                manaLeech: 0,\n                castSpeed: 0,\n                threat: 100,\n                parry: 0,\n                mayhem: 0,\n                pierce: 0,\n                curse: 0,\n                ripple: 0,\n                bloom: 0,\n                blaze: 0,\n                weaken: 0,\n                fury: 0,\n                foodHaste: 0,\n                drinkConcentration: 0,\n                damageTaken: 0,\n                attackSpeed: 0,\n                armorDamageRatio: 0,\n                hpDrainRatio: 0,\n                primaryTraining: '',\n                focusTraining: '',\n                staminaExperience: 0,\n                intelligenceExperience: 0,\n                attackExperience: 0,\n                defenseExperience: 0,\n                meleeExperience: 0,\n                rangedExperience: 0,\n                magicExperience: 0,\n                retaliation: 0,\n            },\n        };\n        combatBuffs = {};\n        permanentBuffs = {};\n        zoneBuffs = {};\n        extraBuffs = {};\n\n        constructor() {}\n\n        updateCombatDetails() {\n            if (this.isPlayer) {\n                if (this.combatDetails.combatStats.hpRegenPer10 === 0) {\n                    this.combatDetails.combatStats.hpRegenPer10 = 0.01;\n                } else {\n                    this.combatDetails.combatStats.hpRegenPer10 = 0.01 + this.combatDetails.combatStats.hpRegenPer10;\n                }\n                if (this.combatDetails.combatStats.mpRegenPer10 === 0) {\n                    this.combatDetails.combatStats.mpRegenPer10 = 0.01;\n                } else {\n                    this.combatDetails.combatStats.mpRegenPer10 = 0.01 + this.combatDetails.combatStats.mpRegenPer10;\n                }\n            }\n\n            ['stamina', 'intelligence', 'attack', 'melee', 'defense', 'ranged', 'magic'].forEach((stat) => {\n                this.combatDetails[stat + 'Level'] = this[stat + 'Level'];\n                const boosts = this.getBuffBoosts('/buff_types/' + stat + '_level');\n                boosts.forEach((buff) => {\n                    this.combatDetails[stat + 'Level'] += this[stat + 'Level'] * buff.ratioBoost;\n                    this.combatDetails[stat + 'Level'] += buff.flatBoost;\n                });\n            });\n\n            this.combatDetails.maxHitpoints = Math.floor(\n                10 * (10 + this.combatDetails.staminaLevel) + this.combatDetails.combatStats.maxHitpoints\n            );\n            this.combatDetails.maxManapoints = Math.floor(\n                10 * (10 + this.combatDetails.intelligenceLevel) + this.combatDetails.combatStats.maxManapoints\n            );\n\n            const accuracyRatioBoostFromFury = this.getBuffBoost('/buff_types/fury_accuracy').ratioBoost;\n            const damageRatioBoostFromFury = this.getBuffBoost('/buff_types/fury_damage').ratioBoost;\n\n            const accuracyRatioBoost = this.getBuffBoost('/buff_types/accuracy').ratioBoost;\n            const damageRatioBoost = this.getBuffBoost('/buff_types/damage').ratioBoost;\n\n            ['stab', 'slash', 'smash'].forEach((style) => {\n                this.combatDetails[style + 'AccuracyRating'] =\n                    (10 + this.combatDetails.attackLevel) *\n                    (1 + this.combatDetails.combatStats[style + 'Accuracy']) *\n                    (1 + accuracyRatioBoost) *\n                    (1 + accuracyRatioBoostFromFury);\n                this.combatDetails[style + 'MaxDamage'] =\n                    (10 + this.combatDetails.meleeLevel) *\n                    (1 + this.combatDetails.combatStats[style + 'Damage']) *\n                    (1 + damageRatioBoost) *\n                    (1 + damageRatioBoostFromFury);\n                const baseEvasion =\n                    (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats[style + 'Evasion']);\n                this.combatDetails[style + 'EvasionRating'] = baseEvasion;\n                const evasionBoosts = this.getBuffBoosts('/buff_types/evasion');\n                for (const boost of evasionBoosts) {\n                    this.combatDetails[style + 'EvasionRating'] += boost.flatBoost;\n                    this.combatDetails[style + 'EvasionRating'] += baseEvasion * boost.ratioBoost;\n                }\n            });\n\n            this.combatDetails.defensiveMaxDamage =\n                (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats.defensiveDamage);\n\n            // when equiped bulwark\n            if (this.equipment?.['/equipment_types/two_hand']?.hrid.includes('bulwark')) {\n                this.combatDetails.smashMaxDamage += this.combatDetails.defensiveMaxDamage;\n            }\n\n            this.combatDetails.rangedAccuracyRating =\n                (10 + this.combatDetails.attackLevel) *\n                (1 + this.combatDetails.combatStats.rangedAccuracy) *\n                (1 + accuracyRatioBoost) *\n                (1 + accuracyRatioBoostFromFury);\n            this.combatDetails.rangedMaxDamage =\n                (10 + this.combatDetails.rangedLevel) *\n                (1 + this.combatDetails.combatStats.rangedDamage) *\n                (1 + damageRatioBoost) *\n                (1 + damageRatioBoostFromFury);\n\n            const baseRangedEvasion =\n                (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats.rangedEvasion);\n            this.combatDetails.rangedEvasionRating = baseRangedEvasion;\n            const evasionBoosts = this.getBuffBoosts('/buff_types/evasion');\n            for (const boost of evasionBoosts) {\n                this.combatDetails.rangedEvasionRating += boost.flatBoost;\n                this.combatDetails.rangedEvasionRating += baseRangedEvasion * boost.ratioBoost;\n            }\n\n            this.combatDetails.combatStats.damageTaken = this.getBuffBoost('/buff_types/damage_taken').flatBoost;\n\n            this.combatDetails.magicAccuracyRating =\n                (10 + this.combatDetails.attackLevel) *\n                (1 + this.combatDetails.combatStats.magicAccuracy) *\n                (1 + accuracyRatioBoost) *\n                (1 + accuracyRatioBoostFromFury);\n            this.combatDetails.magicMaxDamage =\n                (10 + this.combatDetails.magicLevel) *\n                (1 + this.combatDetails.combatStats.magicDamage) *\n                (1 + damageRatioBoost) *\n                (1 + damageRatioBoostFromFury);\n\n            const baseMagicEvasion =\n                (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats.magicEvasion);\n            this.combatDetails.magicEvasionRating = baseMagicEvasion;\n            for (const boost of evasionBoosts) {\n                this.combatDetails.magicEvasionRating += boost.flatBoost;\n                this.combatDetails.magicEvasionRating += baseMagicEvasion * boost.ratioBoost;\n            }\n\n            this.combatDetails.combatStats.physicalAmplify += this.getBuffBoost('/buff_types/physical_amplify').flatBoost;\n            this.combatDetails.combatStats.waterAmplify += this.getBuffBoost('/buff_types/water_amplify').flatBoost;\n            this.combatDetails.combatStats.natureAmplify += this.getBuffBoost('/buff_types/nature_amplify').flatBoost;\n            this.combatDetails.combatStats.fireAmplify += this.getBuffBoost('/buff_types/fire_amplify').flatBoost;\n\n            this.combatDetails.combatStats.attackInterval /= 1 + this.combatDetails.attackLevel / 2000;\n\n            const baseAttackSpeed = this.combatDetails.combatStats.attackSpeed;\n            this.combatDetails.combatStats.attackInterval /= 1 + baseAttackSpeed;\n            const attackIntervalBoosts = this.getBuffBoosts('/buff_types/attack_speed');\n            const attackIntervalRatioBoost = attackIntervalBoosts\n                .map((boost) => boost.ratioBoost)\n                .reduce((prev, cur) => prev + cur, 0);\n            this.combatDetails.combatStats.attackInterval /= 1 + attackIntervalRatioBoost;\n\n            const baseArmor = 0.2 * this.combatDetails.defenseLevel + this.combatDetails.combatStats.armor;\n            this.combatDetails.totalArmor = baseArmor;\n            const armorBoosts = this.getBuffBoosts('/buff_types/armor');\n            for (const boost of armorBoosts) {\n                this.combatDetails.totalArmor += boost.flatBoost;\n                this.combatDetails.totalArmor += baseArmor * boost.ratioBoost;\n            }\n\n            const baseWaterResistance =\n                0.2 * this.combatDetails.defenseLevel + this.combatDetails.combatStats.waterResistance;\n            this.combatDetails.totalWaterResistance = baseWaterResistance;\n            const waterResistanceBoosts = this.getBuffBoosts('/buff_types/water_resistance');\n            for (const boost of waterResistanceBoosts) {\n                this.combatDetails.totalWaterResistance += boost.flatBoost;\n                this.combatDetails.totalWaterResistance += baseWaterResistance * boost.ratioBoost;\n            }\n\n            const baseNatureResistance =\n                0.2 * this.combatDetails.defenseLevel + this.combatDetails.combatStats.natureResistance;\n            this.combatDetails.totalNatureResistance = baseNatureResistance;\n            const natureResistanceBoosts = this.getBuffBoosts('/buff_types/nature_resistance');\n            for (const boost of natureResistanceBoosts) {\n                this.combatDetails.totalNatureResistance += boost.flatBoost;\n                this.combatDetails.totalNatureResistance += baseNatureResistance * boost.ratioBoost;\n            }\n\n            const baseFireResistance =\n                0.2 * this.combatDetails.defenseLevel + this.combatDetails.combatStats.fireResistance;\n            this.combatDetails.totalFireResistance = baseFireResistance;\n            const fireResistanceBoosts = this.getBuffBoosts('/buff_types/fire_resistance');\n            for (const boost of fireResistanceBoosts) {\n                this.combatDetails.totalFireResistance += boost.flatBoost;\n                this.combatDetails.totalFireResistance += baseFireResistance * boost.ratioBoost;\n            }\n\n            const hpRegenBoosts = this.getBuffBoost('/buff_types/hp_regen');\n            this.combatDetails.combatStats.hpRegenPer10 +=\n                this.combatDetails.combatStats.hpRegenPer10 * hpRegenBoosts.ratioBoost;\n            this.combatDetails.combatStats.hpRegenPer10 += hpRegenBoosts.flatBoost;\n\n            const mpRegenBoosts = this.getBuffBoost('/buff_types/mp_regen');\n            this.combatDetails.combatStats.mpRegenPer10 +=\n                this.combatDetails.combatStats.mpRegenPer10 * mpRegenBoosts.ratioBoost;\n            this.combatDetails.combatStats.mpRegenPer10 += mpRegenBoosts.flatBoost;\n\n            this.combatDetails.combatStats.lifeSteal += this.getBuffBoost('/buff_types/life_steal').flatBoost;\n            this.combatDetails.combatStats.physicalThorns += this.getBuffBoost('/buff_types/physical_thorns').flatBoost;\n            this.combatDetails.combatStats.elementalThorns += this.getBuffBoost('/buff_types/elemental_thorns').flatBoost;\n            this.combatDetails.combatStats.combatExperience += this.getBuffBoost('/buff_types/wisdom').flatBoost;\n            this.combatDetails.combatStats.criticalRate += this.getBuffBoost('/buff_types/critical_rate').flatBoost;\n            this.combatDetails.combatStats.criticalDamage += this.getBuffBoost('/buff_types/critical_damage').flatBoost;\n\n            this.combatDetails.combatStats.castSpeed += this.getBuffBoost('/buff_types/cast_speed').flatBoost;\n            this.combatDetails.combatStats.castSpeed += this.combatDetails['attackLevel'] / 2000;\n\n            const combatDropRateBoosts = this.getBuffBoost('/buff_types/combat_drop_rate');\n            this.combatDetails.combatStats.combatDropRate +=\n                (1 + this.combatDetails.combatStats.combatDropRate) * combatDropRateBoosts.ratioBoost;\n            this.combatDetails.combatStats.combatDropRate += combatDropRateBoosts.flatBoost;\n            const combatRareFindBoosts = this.getBuffBoost('/buff_types/rare_find');\n            this.combatDetails.combatStats.combatRareFind +=\n                (1 + this.combatDetails.combatStats.combatRareFind) * combatRareFindBoosts.ratioBoost;\n            this.combatDetails.combatStats.combatRareFind += combatRareFindBoosts.flatBoost;\n            const combatDropQuantityBoosts = this.getBuffBoost('/buff_types/combat_drop_quantity');\n            this.combatDetails.combatStats.combatDropQuantity +=\n                (1 + this.combatDetails.combatStats.combatDropQuantity) * combatDropQuantityBoosts.ratioBoost;\n            this.combatDetails.combatStats.combatDropQuantity += combatDropQuantityBoosts.flatBoost;\n\n            const baseThreat = 100 + this.combatDetails.combatStats.threat;\n            this.combatDetails.totalThreat = baseThreat;\n            const threatBoosts = this.getBuffBoost('/buff_types/threat');\n            if (threatBoosts.ratioBoost !== 0) {\n                this.combatDetails.combatStats.threat += baseThreat * threatBoosts.ratioBoost;\n            } else {\n                this.combatDetails.combatStats.threat = baseThreat;\n            }\n            this.combatDetails.combatStats.threat += threatBoosts.flatBoost;\n\n            this.combatDetails.combatStats.retaliation += this.getBuffBoost('/buff_types/retaliation').flatBoost;\n        }\n\n        addBuff(buff, currentTime) {\n            buff.startTime = currentTime;\n            this.combatBuffs[buff.uniqueHrid] = buff;\n\n            this.updateCombatDetails();\n        }\n\n        removeBuff(buff) {\n            if (!this.combatBuffs[buff.uniqueHrid]) {\n                return;\n            }\n            delete this.combatBuffs[buff.uniqueHrid];\n\n            this.updateCombatDetails();\n        }\n\n        addPermanentBuff(buff) {\n            if (this.permanentBuffs[buff.typeHrid]) {\n                this.permanentBuffs[buff.typeHrid].flatBoost += buff.flatBoost;\n                this.permanentBuffs[buff.typeHrid].ratioBoost += buff.ratioBoost;\n            } else {\n                this.permanentBuffs[buff.typeHrid] = buff;\n            }\n        }\n\n        generatePermanentBuffs() {\n            for (let i = 0; i < this.houseRooms.length; i++) {\n                const houseRoom = this.houseRooms[i];\n                houseRoom.buffs.forEach((buff) => {\n                    this.addPermanentBuff(buff);\n                });\n            }\n            if (this.zoneBuffs) {\n                this.zoneBuffs.forEach((buff) => {\n                    this.addPermanentBuff(buff);\n                });\n            }\n            if (this.extraBuffs) {\n                this.extraBuffs.forEach((buff) => {\n                    this.addPermanentBuff(buff);\n                });\n            }\n        }\n\n        removeExpiredBuffs(currentTime) {\n            const expiredBuffs = Object.values(this.combatBuffs).filter(\n                (buff) => buff.startTime + buff.duration <= currentTime\n            );\n            expiredBuffs.forEach((buff) => {\n                delete this.combatBuffs[buff.uniqueHrid];\n            });\n\n            this.updateCombatDetails();\n        }\n\n        clearBuffs() {\n            this.combatBuffs = structuredClone(this.permanentBuffs);\n            this.updateCombatDetails();\n        }\n\n        clearCCs() {\n            this.isStunned = false;\n            this.stunExpireTime = null;\n            this.isSilenced = false;\n            this.silenceExpireTime = null;\n            this.isBlinded = false;\n            this.blindExpireTime = null;\n            this.combatDetails.combatStats.damageTaken = 0;\n        }\n\n        getBuffBoosts(type) {\n            const boosts = [];\n            Object.values(this.combatBuffs)\n                .filter((buff) => buff.typeHrid === type)\n                .forEach((buff) => {\n                    boosts.push({ ratioBoost: buff.ratioBoost, flatBoost: buff.flatBoost });\n                });\n\n            return boosts;\n        }\n\n        getBuffBoost(type) {\n            const boosts = this.getBuffBoosts(type);\n\n            const boost = {\n                ratioBoost: 0,\n                flatBoost: 0,\n            };\n\n            for (let i = 0; i < boosts.length; i++) {\n                boost.ratioBoost += boosts[i]?.ratioBoost ?? 0;\n                boost.flatBoost += boosts[i]?.flatBoost ?? 0;\n            }\n\n            return boost;\n        }\n\n        reset(currentTime = 0) {\n            this.clearCCs();\n            this.clearBuffs();\n            this.updateCombatDetails();\n            this.resetCooldowns(currentTime);\n\n            this.combatDetails.currentHitpoints = this.combatDetails.maxHitpoints;\n            this.combatDetails.currentManapoints = this.combatDetails.maxManapoints;\n        }\n\n        resetCooldowns(currentTime = 0) {\n            this.food.filter((food) => food !== null).forEach((food) => (food.lastUsed = Number.MIN_SAFE_INTEGER));\n            this.drinks.filter((drink) => drink !== null).forEach((drink) => (drink.lastUsed = Number.MIN_SAFE_INTEGER));\n\n            const haste = this.combatDetails.combatStats.abilityHaste;\n\n            this.abilities\n                .filter((ability) => ability !== null)\n                .forEach((ability) => {\n                    if (this.isPlayer) {\n                        ability.lastUsed = Number.MIN_SAFE_INTEGER;\n                    } else {\n                        let cooldownDuration = ability.cooldownDuration;\n                        if (haste > 0) {\n                            cooldownDuration = (cooldownDuration * 100) / (100 + haste);\n                        }\n                        ability.lastUsed =\n                            currentTime -\n                            Math.floor(cooldownDuration * 0.5) +\n                            Math.floor(Math.random() * cooldownDuration * 0.5);\n                    }\n                });\n        }\n\n        addHitpoints(hitpoints) {\n            let hitpointsAdded = 0;\n\n            if (this.combatDetails.currentHitpoints >= this.combatDetails.maxHitpoints) {\n                return hitpointsAdded;\n            }\n\n            const newHitpoints = Math.min(this.combatDetails.currentHitpoints + hitpoints, this.combatDetails.maxHitpoints);\n            hitpointsAdded = newHitpoints - this.combatDetails.currentHitpoints;\n            this.combatDetails.currentHitpoints = newHitpoints;\n\n            return hitpointsAdded;\n        }\n\n        addManapoints(manapoints) {\n            let manapointsAdded = 0;\n\n            if (this.combatDetails.currentManapoints >= this.combatDetails.maxManapoints) {\n                return manapointsAdded;\n            }\n\n            const newManapoints = Math.min(\n                this.combatDetails.currentManapoints + manapoints,\n                this.combatDetails.maxManapoints\n            );\n            manapointsAdded = newManapoints - this.combatDetails.currentManapoints;\n            this.combatDetails.currentManapoints = newManapoints;\n\n            return manapointsAdded;\n        }\n    }\n\n    class Drops {\n        constructor(itemHrid, dropRate, minCount, maxCount, difficultyTier) {\n            this.itemHrid = itemHrid;\n            this.dropRate = dropRate;\n            this.minCount = minCount;\n            this.maxCount = maxCount;\n            this.difficultyTier = difficultyTier;\n        }\n    }\n\n    class Monster extends CombatUnit {\n        difficultyTier = 0;\n\n        constructor(hrid, difficultyTier = 0) {\n            super();\n\n            this.isPlayer = false;\n            this.hrid = hrid;\n            this.difficultyTier = difficultyTier;\n\n            const combatMonsterDetailMap = getGameData().combatMonsterDetailMap;\n            const gameMonster = combatMonsterDetailMap[this.hrid];\n            if (!gameMonster) {\n                throw new Error('No monster found for hrid: ' + this.hrid);\n            }\n\n            this.enrageTime = gameMonster.enrageTime;\n\n            for (let i = 0; i < gameMonster.abilities.length; i++) {\n                if (gameMonster.abilities[i].minDifficultyTier > this.difficultyTier) {\n                    continue;\n                }\n                this.abilities[i] = new Ability(gameMonster.abilities[i].abilityHrid, gameMonster.abilities[i].level);\n            }\n            if (gameMonster.dropTable) {\n                for (let i = 0; i < gameMonster.dropTable.length; i++) {\n                    this.dropTable[i] = new Drops(\n                        gameMonster.dropTable[i].itemHrid,\n                        gameMonster.dropTable[i].dropRate,\n                        gameMonster.dropTable[i].minCount,\n                        gameMonster.dropTable[i].maxCount,\n                        gameMonster.dropTable[i].difficultyTier\n                    );\n                }\n            }\n            for (let i = 0; i < gameMonster.rareDropTable.length; i++) {\n                const dropTableItem =\n                    gameMonster.dropTable && i < gameMonster.dropTable.length ? gameMonster.dropTable[i] : null;\n                const difficultyTier = dropTableItem?.difficultyTier ?? gameMonster.rareDropTable[i].minDifficultyTier;\n\n                this.rareDropTable[i] = new Drops(\n                    gameMonster.rareDropTable[i].itemHrid,\n                    gameMonster.rareDropTable[i].dropRate,\n                    gameMonster.rareDropTable[i].minCount,\n                    difficultyTier\n                );\n            }\n        }\n\n        updateCombatDetails() {\n            const combatMonsterDetailMap = getGameData().combatMonsterDetailMap;\n            const gameMonster = combatMonsterDetailMap[this.hrid];\n\n            const levelMultiplier = 1.0 + 0.25 * this.difficultyTier;\n            const defLevelMultiplier = 1.0 + 0.15 * this.difficultyTier;\n            const levelBonus = 20.0 * this.difficultyTier;\n\n            this.staminaLevel = levelMultiplier * (gameMonster.combatDetails.staminaLevel + levelBonus);\n            this.intelligenceLevel = levelMultiplier * (gameMonster.combatDetails.intelligenceLevel + levelBonus);\n            this.attackLevel = levelMultiplier * (gameMonster.combatDetails.attackLevel + levelBonus);\n            this.meleeLevel = levelMultiplier * (gameMonster.combatDetails.meleeLevel + levelBonus);\n            this.defenseLevel = defLevelMultiplier * (gameMonster.combatDetails.defenseLevel + levelBonus);\n            this.rangedLevel = levelMultiplier * (gameMonster.combatDetails.rangedLevel + levelBonus);\n            this.magicLevel = levelMultiplier * (gameMonster.combatDetails.magicLevel + levelBonus);\n\n            const expMultiplier = 1.0 + 0.5 * this.difficultyTier;\n            const expBonus = 5.0 * this.difficultyTier;\n\n            this.experience = expMultiplier * (gameMonster.experience + expBonus);\n\n            this.combatDetails.combatStats.combatStyleHrid = gameMonster.combatDetails.combatStats.combatStyleHrids[0];\n\n            for (const [key, value] of Object.entries(gameMonster.combatDetails.combatStats)) {\n                this.combatDetails.combatStats[key] = value;\n            }\n\n            [\n                'stabAccuracy',\n                'slashAccuracy',\n                'smashAccuracy',\n                'rangedAccuracy',\n                'magicAccuracy',\n                'stabDamage',\n                'slashDamage',\n                'smashDamage',\n                'rangedDamage',\n                'magicDamage',\n                'defensiveDamage',\n                'taskDamage',\n                'physicalAmplify',\n                'waterAmplify',\n                'natureAmplify',\n                'fireAmplify',\n                'healingAmplify',\n                'stabEvasion',\n                'slashEvasion',\n                'smashEvasion',\n                'rangedEvasion',\n                'magicEvasion',\n                'armor',\n                'waterResistance',\n                'natureResistance',\n                'fireResistance',\n                'maxHitpoints',\n                'maxManapoints',\n                'lifeSteal',\n                'hpRegenPer10',\n                'mpRegenPer10',\n                'physicalThorns',\n                'elementalThorns',\n                'combatDropRate',\n                'combatRareFind',\n                'combatDropQuantity',\n                'combatExperience',\n                'criticalRate',\n                'criticalDamage',\n                'armorPenetration',\n                'waterPenetration',\n                'naturePenetration',\n                'firePenetration',\n                'abilityHaste',\n                'tenacity',\n                'manaLeech',\n                'castSpeed',\n                'threat',\n                'parry',\n                'mayhem',\n                'pierce',\n                'curse',\n                'fury',\n                'weaken',\n                'ripple',\n                'bloom',\n                'blaze',\n                'attackSpeed',\n                'foodHaste',\n                'drinkConcentration',\n                'autoAttackDamage',\n                'abilityDamage',\n                'retaliation',\n            ].forEach((stat) => {\n                if (gameMonster.combatDetails.combatStats[stat] == null) {\n                    this.combatDetails.combatStats[stat] = 0;\n                }\n            });\n\n            if (this.combatDetails.combatStats.attackInterval === 0) {\n                this.combatDetails.combatStats.attackInterval = gameMonster.combatDetails.attackInterval;\n            }\n\n            super.updateCombatDetails();\n        }\n    }\n\n    const ONE_SECOND = 1e9;\n    const HOT_TICK_INTERVAL = 5 * ONE_SECOND;\n    const DOT_TICK_INTERVAL = 3 * ONE_SECOND;\n    const REGEN_TICK_INTERVAL = 10 * ONE_SECOND;\n    const ENEMY_RESPAWN_INTERVAL = 3 * ONE_SECOND;\n    const PLAYER_RESPAWN_INTERVAL = 150 * ONE_SECOND;\n    const RESTART_INTERVAL = 15 * ONE_SECOND;\n    const ENRAGE_TICK_INTERVAL = 60 * ONE_SECOND;\n\n    class CombatSimulator {\n        /**\n         * @param {Array} players\n         * @param {Object} zone\n         * @param {Function} [onProgress] - Optional progress callback receiving { zone, difficultyTier, progress }\n         */\n        constructor(players, zone, onProgress) {\n            this.players = players;\n            this.zone = zone;\n            this.onProgress = onProgress;\n            this.eventQueue = new EventQueue();\n            this.simResult = new SimResult(zone, players.length);\n            this.allPlayersDead = false;\n\n            this.wipeLogs = {\n                buffer: new Array(200),\n                index: 0,\n                count: 0,\n                maxSize: 200,\n            };\n        }\n\n        addToWipeLogs(logEntry) {\n            const { buffer, maxSize } = this.wipeLogs;\n\n            buffer[this.wipeLogs.index] = logEntry;\n            this.wipeLogs.index = (this.wipeLogs.index + 1) % maxSize;\n            this.wipeLogs.count = Math.min(this.wipeLogs.count + 1, maxSize);\n        }\n\n        logAndResetWipeLogs() {\n            const logs = this.getOrderedWipeLogs();\n\n            logs.forEach((log) => {\n                if (log.error) {\n                    console.log(log.error);\n                }\n            });\n\n            this.wipeLogs.index = 0;\n            this.wipeLogs.count = 0;\n        }\n\n        buildCombatLog(source, ability, target, damageDone) {\n            try {\n                const sourceHrid = source?.hrid || 'UNKNOWN_SOURCE';\n                const targetHrid = target?.hrid || 'UNKNOWN_TARGET';\n\n                const afterHp = target?.combatDetails?.currentHitpoints || 0;\n                const beforeHp = Math.max(0, afterHp + damageDone);\n\n                const playersHp = this.players.map((p) => ({\n                    hrid: p.hrid || 'UNKNOWN_PLAYER',\n                    current: p.combatDetails?.currentHitpoints ?? 0,\n                    max: p.combatDetails?.maxHitpoints ?? 0,\n                }));\n\n                return {\n                    time: this.simulationTime,\n                    wave: this.zone.encountersKilled - 1,\n                    source: sourceHrid,\n                    ability: ability,\n                    target: targetHrid,\n                    damage: damageDone,\n                    beforeHp: beforeHp,\n                    afterHp: afterHp,\n                    playersHp: playersHp,\n                    isCrit: false,\n                };\n            } catch (e) {\n                return {\n                    error: `[Log generation error] ${e.message}`,\n                };\n            }\n        }\n\n        generateCombatLog(source, ability, target, attackResult) {\n            try {\n                const sourceHrid = source?.hrid || 'UNKNOWN_SOURCE';\n                const targetHrid = target?.hrid || 'UNKNOWN_TARGET';\n                const damage = attackResult?.damageDone || 0;\n\n                const afterHp = target?.combatDetails?.currentHitpoints || 0;\n                const beforeHp = Math.max(0, afterHp + damage);\n\n                const playersHp = this.players.map((p) => ({\n                    hrid: p.hrid || 'UNKNOWN_PLAYER',\n                    current: p.combatDetails?.currentHitpoints ?? 0,\n                    max: p.combatDetails?.maxHitpoints ?? 0,\n                }));\n\n                return {\n                    time: this.simulationTime,\n                    wave: this.zone.encountersKilled - 1,\n                    source: sourceHrid,\n                    ability: ability,\n                    target: targetHrid,\n                    damage: damage,\n                    beforeHp: beforeHp,\n                    afterHp: afterHp,\n                    playersHp: playersHp,\n                    isCrit: attackResult?.isCrit || false,\n                };\n            } catch (e) {\n                return {\n                    error: `[Log generation error] ${e.message}`,\n                };\n            }\n        }\n\n        getOrderedWipeLogs() {\n            const { buffer, maxSize, count } = this.wipeLogs;\n            const logs = [];\n\n            for (let i = 0; i < count; i++) {\n                const idx = (this.wipeLogs.index - count + maxSize + i) % maxSize;\n                logs.push(buffer[idx]);\n            }\n\n            return logs;\n        }\n\n        saveWipeLogsToSimResult(wave) {\n            const logs = this.getOrderedWipeLogs();\n            this.simResult.addWipeEvent(logs, this.simulationTime, wave);\n        }\n\n        /**\n         * Run the combat simulation synchronously.\n         * @param {number} simulationTimeLimit - Simulation time limit in nanoseconds\n         * @returns {SimResult}\n         */\n        simulate(simulationTimeLimit) {\n            this.reset();\n\n            let ticks = 0;\n\n            const combatStartEvent = new CombatStartEvent(0);\n            this.eventQueue.addEvent(combatStartEvent);\n\n            while (this.simulationTime < simulationTimeLimit) {\n                const nextEvent = this.eventQueue.getNextEvent();\n                this.processEvent(nextEvent);\n\n                ticks++;\n                if (ticks === 50000) {\n                    ticks = 0;\n                    if (this.onProgress) {\n                        this.onProgress({\n                            zone: this.zone.hrid,\n                            difficultyTier: this.zone.difficultyTier,\n                            progress: Math.min(this.simulationTime / simulationTimeLimit, 1),\n                        });\n                    }\n                }\n            }\n\n            this.simResult.isDungeon = this.zone.isDungeon;\n            if (this.simResult.isDungeon) {\n                this.simResult.dungeonsCompleted = this.zone.dungeonsCompleted;\n                this.simResult.dungeonsFailed = this.zone.dungeonsFailed;\n                if (this.simResult.dungeonsCompleted < 1) {\n                    this.simResult.maxWaveReached = 0;\n                    for (let i = 0; i <= this.zone.dungeonSpawnInfo.maxWaves; i++) {\n                        const waveName = '#' + i.toString();\n                        const idx = this.simResult.timeSpentAlive.findIndex((e) => e.name === waveName);\n                        if (idx === -1 || this.simResult.timeSpentAlive[idx].count === 0) {\n                            break;\n                        }\n                        this.simResult.maxWaveReached = i;\n                    }\n                } else {\n                    this.simResult.maxWaveReached = this.zone.dungeonSpawnInfo.maxWaves;\n                }\n            }\n            this.simResult.simulatedTime = this.simulationTime;\n\n            for (let i = 0; i < this.players.length; i++) {\n                this.simResult.setDropRateMultipliers(this.players[i]);\n                this.simResult.setManaUsed(this.players[i]);\n            }\n\n            if (this.zone.isDungeon) {\n                Object.entries(this.zone.dungeonSpawnInfo.fixedSpawnsMap).forEach(([wave, monsters]) => {\n                    let waveName = '#' + wave.toString();\n                    monsters.forEach((monster) => {\n                        waveName += ',' + monster.combatMonsterHrid;\n                    });\n                    this.simResult.bossSpawns.push(waveName);\n                });\n            }\n            if (this.zone.monsterSpawnInfo.bossSpawns) {\n                for (const boss of this.zone.monsterSpawnInfo.bossSpawns) {\n                    this.simResult.bossSpawns.push(boss.combatMonsterHrid);\n                }\n            }\n\n            return this.simResult;\n        }\n\n        reset() {\n            this.tempDungeonCount = 0;\n            this.simulationTime = 0;\n            this.eventQueue.clear();\n            this.simResult = new SimResult(this.zone, this.players.length);\n        }\n\n        processEvent(event) {\n            this.simulationTime = event.time;\n\n            switch (event.type) {\n                case CombatStartEvent.type:\n                    this.processCombatStartEvent(event);\n                    break;\n                case PlayerRespawnEvent.type:\n                    this.processPlayerRespawnEvent(event);\n                    break;\n                case EnemyRespawnEvent.type:\n                    this.processEnemyRespawnEvent(event);\n                    break;\n                case AutoAttackEvent.type:\n                    this.processAutoAttackEvent(event);\n                    break;\n                case ConsumableTickEvent.type:\n                    this.processConsumableTickEvent(event);\n                    break;\n                case DamageOverTimeEvent.type:\n                    this.processDamageOverTimeTickEvent(event);\n                    break;\n                case CheckBuffExpirationEvent.type:\n                    this.processCheckBuffExpirationEvent(event);\n                    break;\n                case RegenTickEvent.type:\n                    this.processRegenTickEvent(event);\n                    break;\n                case StunExpirationEvent.type:\n                    this.processStunExpirationEvent(event);\n                    break;\n                case BlindExpirationEvent.type:\n                    this.processBlindExpirationEvent(event);\n                    break;\n                case SilenceExpirationEvent.type:\n                    this.processSilenceExpirationEvent(event);\n                    break;\n                case CurseExpirationEvent.type:\n                    this.processCurseExpirationEvent(event);\n                    break;\n                case WeakenExpirationEvent.type:\n                    this.processWeakenExpirationEvent(event);\n                    break;\n                case FuryExpirationEvent.type:\n                    this.processFuryExpirationEvent(event);\n                    break;\n                case EnrageTickEvent.type:\n                    this.processEnrageTickEvent(event);\n                    break;\n                case AbilityCastEndEvent.type:\n                    this.tryUseAbility(event.source, event.ability);\n                    break;\n                case AwaitCooldownEvent.type:\n                    this.addNextAttackEvent(event.source);\n                    break;\n            }\n\n            this.checkTriggers();\n        }\n\n        processCombatStartEvent(event) {\n            for (let i = 0; i < this.players.length; i++) {\n                if (event.time === 0) {\n                    // First combat start event\n                    this.players[i].generatePermanentBuffs();\n                }\n                this.players[i].reset(this.simulationTime);\n            }\n\n            const regenTickEvent = new RegenTickEvent(this.simulationTime + REGEN_TICK_INTERVAL);\n            this.eventQueue.addEvent(regenTickEvent);\n\n            this.startNewEncounter();\n        }\n\n        processPlayerRespawnEvent(event) {\n            const respawningPlayer = this.players.find((player) => player.hrid === event.hrid);\n            respawningPlayer.combatDetails.currentHitpoints = respawningPlayer.combatDetails.maxHitpoints;\n            respawningPlayer.combatDetails.currentManapoints = respawningPlayer.combatDetails.maxManapoints;\n            respawningPlayer.clearBuffs();\n            respawningPlayer.clearCCs();\n            if (this.allPlayersDead) {\n                this.allPlayersDead = false;\n                this.startAttacks();\n            } else {\n                this.addNextAttackEvent(respawningPlayer);\n            }\n        }\n\n        processEnemyRespawnEvent(_event) {\n            this.startNewEncounter();\n        }\n\n        startNewEncounter() {\n            if (this.allPlayersDead) {\n                this.allPlayersDead = false;\n                this.zone.failWave();\n            }\n\n            if (!this.zone.isDungeon) {\n                this.enemies = this.zone.getRandomEncounter();\n            } else {\n                this.enemies = this.zone.getNextWave();\n                this.simResult.updateTimeSpentAlive(\n                    '#' + (this.zone.encountersKilled - 1).toString(),\n                    true,\n                    this.simulationTime\n                );\n                const currentDungeonCount = this.zone.dungeonsCompleted;\n                if (currentDungeonCount > this.tempDungeonCount) {\n                    this.tempDungeonCount = currentDungeonCount;\n                    for (let i = 0; i < this.players.length; i++) {\n                        this.players[i].combatDetails.currentHitpoints = this.players[i].combatDetails.maxHitpoints;\n                        this.players[i].combatDetails.currentManapoints = this.players[i].combatDetails.maxManapoints;\n                    }\n                }\n            }\n\n            this.enemies.forEach((enemy) => {\n                enemy.reset(this.simulationTime);\n                this.simResult.updateTimeSpentAlive(enemy.hrid, true, this.simulationTime);\n            });\n\n            this.eventQueue.clearEventsOfType(EnrageTickEvent.type);\n            const enrageTickEvent = new EnrageTickEvent(this.simulationTime + ENRAGE_TICK_INTERVAL, ENRAGE_TICK_INTERVAL);\n            this.eventQueue.addEvent(enrageTickEvent);\n            this.enrageBeginTime = this.simulationTime;\n\n            this.eventQueue.clearEventsOfType(AbilityCastEndEvent.type);\n\n            this.startAttacks();\n        }\n\n        startAttacks() {\n            const units = [...this.players];\n            if (this.enemies) {\n                units.push(...this.enemies);\n            }\n\n            for (const unit of units) {\n                if (unit.combatDetails.currentHitpoints <= 0) {\n                    continue;\n                }\n\n                this.addNextAttackEvent(unit);\n            }\n        }\n\n        checkParry(targets) {\n            const parryUnits = targets.filter(\n                (unit) => unit && unit.combatDetails.currentHitpoints > 0 && unit.combatDetails.combatStats.parry > 0\n            );\n            if (parryUnits.length <= 0) {\n                return undefined;\n            }\n            const randomIndex = Math.floor(Math.random() * parryUnits.length);\n            if (parryUnits[randomIndex].combatDetails.combatStats.parry > Math.random()) {\n                return parryUnits[randomIndex];\n            }\n            return undefined;\n        }\n\n        processAutoAttackEvent(event) {\n            const targets = event.source.isPlayer ? this.enemies : this.players;\n\n            if (!targets) {\n                return;\n            }\n\n            const aliveTargets = targets.filter((unit) => unit && unit.combatDetails.currentHitpoints > 0);\n\n            for (let i = 0; i < aliveTargets.length; i++) {\n                let target = aliveTargets[i];\n                if (!event.source.isPlayer && aliveTargets.length > 1) {\n                    let cumulativeThreat = 0;\n                    const cumulativeRanges = [];\n                    aliveTargets.forEach((player) => {\n                        const playerThreat = player.combatDetails.combatStats.threat;\n                        cumulativeThreat += playerThreat;\n                        cumulativeRanges.push({\n                            player: player,\n                            rangeStart: cumulativeThreat - playerThreat,\n                            rangeEnd: cumulativeThreat,\n                        });\n                    });\n                    const randomValueHit = Math.random() * cumulativeThreat;\n                    target = cumulativeRanges.find(\n                        (range) => randomValueHit >= range.rangeStart && randomValueHit < range.rangeEnd\n                    ).player;\n                }\n                let source = event.source;\n\n                const parryTarget = this.checkParry(targets);\n                if (parryTarget) {\n                    target = source;\n                    source = parryTarget;\n                }\n\n                const attackResult = CombatUtilities.processAttack(source, target);\n                if (this.zone.isDungeon && target.isPlayer && attackResult.didHit && attackResult.damageDone > 0) {\n                    const log = this.generateCombatLog(source, 'autoAttack', target, attackResult);\n                    this.addToWipeLogs(log);\n                }\n\n                const mayhem = source.combatDetails.combatStats.mayhem > Math.random();\n\n                if (attackResult.didHit && source.combatDetails.combatStats.curse > 0) {\n                    const curseExpireTime = 15000000000;\n                    const currentCurseEvent = this.eventQueue.getByTypeAndSource(CurseExpirationEvent.type, target);\n                    let currentCurseAmount = 0;\n                    if (currentCurseEvent) currentCurseAmount = currentCurseEvent.curseAmount;\n                    this.eventQueue.clearByTypeAndSource(CurseExpirationEvent.type, target);\n\n                    const curseExpirationEvent = new CurseExpirationEvent(\n                        this.simulationTime + curseExpireTime,\n                        currentCurseAmount,\n                        target\n                    );\n                    const curseBuff = {\n                        uniqueHrid: '/buff_uniques/curse',\n                        typeHrid: '/buff_types/damage_taken',\n                        ratioBoost: 0,\n                        ratioBoostLevelBonus: 0,\n                        flatBoost: source.combatDetails.combatStats.curse * curseExpirationEvent.curseAmount,\n                        flatBoostLevelBonus: 0,\n                        startTime: '0001-01-01T00:00:00Z',\n                        duration: curseExpireTime,\n                    };\n                    target.addBuff(curseBuff);\n                    this.eventQueue.addEvent(curseExpirationEvent);\n                }\n\n                if (source.combatDetails.combatStats.fury > 0) {\n                    const currentFuryEvent = this.eventQueue.getByTypeAndSource(FuryExpirationEvent.type, source);\n                    this.eventQueue.clearByTypeAndSource(FuryExpirationEvent.type, source);\n\n                    const furyExpireTime = 15000000000;\n                    const maxFuryStack = 5;\n\n                    let furyAmount = 0;\n                    if (currentFuryEvent) furyAmount = currentFuryEvent.furyAmount;\n\n                    if (attackResult.didHit) {\n                        furyAmount = Math.min(furyAmount + 1, maxFuryStack);\n                    } else {\n                        furyAmount = Math.floor(furyAmount / 2);\n                    }\n\n                    const furyAccuracyBuf = {\n                        uniqueHrid: '/buff_uniques/fury_accuracy',\n                        typeHrid: '/buff_types/fury_accuracy',\n                        ratioBoost: furyAmount * source.combatDetails.combatStats.fury,\n                        ratioBoostLevelBonus: 0,\n                        flatBoost: 0,\n                        flatBoostLevelBonus: 0,\n                        startTime: '0001-01-01T00:00:00Z',\n                        duration: furyExpireTime,\n                    };\n                    const furyDamageBuf = {\n                        uniqueHrid: '/buff_uniques/fury_damage',\n                        typeHrid: '/buff_types/fury_damage',\n                        ratioBoost: furyAmount * source.combatDetails.combatStats.fury,\n                        ratioBoostLevelBonus: 0,\n                        flatBoost: 0,\n                        flatBoostLevelBonus: 0,\n                        startTime: '0001-01-01T00:00:00Z',\n                        duration: furyExpireTime,\n                    };\n\n                    if (furyAmount > 0) {\n                        const furyExpirationEvent = new FuryExpirationEvent(\n                            this.simulationTime + furyExpireTime,\n                            furyAmount,\n                            source\n                        );\n                        this.eventQueue.addEvent(furyExpirationEvent);\n\n                        source.addBuff(furyAccuracyBuf, this.simulationTime);\n                        source.addBuff(furyDamageBuf, this.simulationTime);\n                    } else {\n                        source.removeBuff(furyAccuracyBuf);\n                        source.removeBuff(furyDamageBuf);\n                    }\n                }\n\n                if (target.combatDetails.combatStats.weaken > 0) {\n                    const weakenExpireTime = 15000000000;\n                    const currentWeakenEvent = this.eventQueue.getByTypeAndSource(WeakenExpirationEvent.type, source);\n                    let weakenAmount = 0;\n                    if (currentWeakenEvent) weakenAmount = currentWeakenEvent.weakenAmount;\n                    this.eventQueue.clearByTypeAndSource(WeakenExpirationEvent.type, source);\n                    const weakenExpirationEvent = new WeakenExpirationEvent(\n                        this.simulationTime + 15000000000,\n                        weakenAmount,\n                        source\n                    );\n                    const weakenBuff = {\n                        uniqueHrid: '/buff_uniques/weaken',\n                        typeHrid: '/buff_types/damage',\n                        ratioBoost: -1 * target.combatDetails.combatStats.weaken * weakenExpirationEvent.weakenAmount,\n                        ratioBoostLevelBonus: 0,\n                        flatBoost: 0,\n                        flatBoostLevelBonus: 0,\n                        startTime: '0001-01-01T00:00:00Z',\n                        duration: weakenExpireTime,\n                    };\n                    source.addBuff(weakenBuff);\n                    this.eventQueue.addEvent(weakenExpirationEvent);\n                }\n\n                if (!mayhem || (mayhem && attackResult.didHit) || (mayhem && i === aliveTargets.length - 1)) {\n                    this.simResult.addAttack(\n                        source,\n                        target,\n                        'autoAttack',\n                        attackResult.didHit ? attackResult.damageDone : 'miss'\n                    );\n                }\n\n                if (attackResult.lifeStealHeal > 0) {\n                    this.simResult.addHitpointsGained(source, 'lifesteal', attackResult.lifeStealHeal);\n                }\n\n                if (attackResult.manaLeechMana > 0) {\n                    this.simResult.addManapointsGained(source, 'manaLeech', attackResult.manaLeechMana);\n                }\n\n                if (attackResult.thornDamageDone > 0) {\n                    this.simResult.addAttack(target, source, attackResult.thornType, attackResult.thornDamageDone);\n                }\n                if (this.zone.isDungeon && attackResult.thornDamageDone > 0 && source.isPlayer) {\n                    const log = this.buildCombatLog(target, attackResult.thornType, source, attackResult.thornDamageDone);\n                    this.addToWipeLogs(log);\n                }\n\n                if (target.combatDetails.combatStats.retaliation > 0) {\n                    this.simResult.addAttack(\n                        target,\n                        source,\n                        'retaliation',\n                        attackResult.retaliationDamageDone > 0 ? attackResult.retaliationDamageDone : 'miss'\n                    );\n                }\n                if (this.zone.isDungeon && attackResult.retaliationDamageDone > 0 && source.isPlayer) {\n                    const log = this.buildCombatLog(target, 'retaliation', source, attackResult.retaliationDamageDone);\n                    this.addToWipeLogs(log);\n                }\n\n                if (target.combatDetails.currentHitpoints === 0) {\n                    this.eventQueue.clearEventsForUnit(target);\n                    this.simResult.addDeath(target);\n                    if (!target.isPlayer) {\n                        this.simResult.updateTimeSpentAlive(target.hrid, false, this.simulationTime);\n                    }\n                }\n\n                // Could die from reflect damage\n                if (\n                    source.combatDetails.currentHitpoints === 0 &&\n                    (attackResult.thornDamageDone !== 0 || attackResult.retaliationDamageDone !== 0)\n                ) {\n                    this.eventQueue.clearEventsForUnit(source);\n                    this.simResult.addDeath(source);\n                    if (!source.isPlayer) {\n                        this.simResult.updateTimeSpentAlive(source.hrid, false, this.simulationTime);\n                    }\n                    break;\n                }\n\n                if (mayhem && !attackResult.didHit) {\n                    continue;\n                }\n\n                if (!attackResult.didHit || parryTarget || source.combatDetails.combatStats.pierce <= Math.random()) {\n                    break;\n                }\n            }\n\n            if (!this.checkEncounterEnd()) {\n                this.addNextAttackEvent(event.source);\n            }\n        }\n\n        checkEncounterEnd() {\n            if (this.enemies) {\n                const deadEnemies = this.enemies.filter(\n                    (enemy) => enemy.combatDetails.currentHitpoints <= 0 && enemy.experienceRate === 0\n                );\n                if (deadEnemies.length > 0) {\n                    deadEnemies.forEach((enemy) => {\n                        let aliveDuration = this.simulationTime - this.enrageBeginTime;\n                        if (aliveDuration > enemy.enrageTime) {\n                            aliveDuration = enemy.enrageTime;\n                        }\n                        enemy.experienceRate = 1.0 + aliveDuration / enemy.enrageTime;\n                    });\n                }\n            }\n\n            let encounterEnded = false;\n\n            if (this.enemies && !this.enemies.some((enemy) => enemy.combatDetails.currentHitpoints > 0)) {\n                this.eventQueue.clearEventsOfType(AutoAttackEvent.type);\n                const enemyRespawnEvent = new EnemyRespawnEvent(this.simulationTime + ENEMY_RESPAWN_INTERVAL);\n                this.eventQueue.addEvent(enemyRespawnEvent);\n\n                // calc exp before clear\n                if (this.enemies.some((enemy) => enemy.experienceRate <= 0)) {\n                    console.warn('[CombatSimulator] Some enemies have no experience rate');\n                }\n\n                const totalExp = this.enemies\n                    .map((enemy) => enemy.experience * enemy.experienceRate)\n                    .reduce((a, b) => a + b, 0);\n                this.players.forEach((player) => {\n                    this.simResult.addExperienceGain(player, totalExp / this.players.length);\n                });\n\n                this.enemies = null;\n\n                if (this.zone.isDungeon) {\n                    this.simResult.updateTimeSpentAlive(\n                        '#' + (this.zone.encountersKilled - 1).toString(),\n                        false,\n                        this.simulationTime\n                    );\n                }\n                this.simResult.addEncounterEnd();\n\n                encounterEnded = true;\n            }\n\n            this.players.forEach((player) => {\n                if (\n                    player.combatDetails.currentHitpoints <= 0 &&\n                    !this.eventQueue.containsEventOfTypeAndHrid(PlayerRespawnEvent.type, player.hrid)\n                ) {\n                    if (!this.zone.isDungeon) {\n                        const playerRespawnEvent = new PlayerRespawnEvent(\n                            this.simulationTime + PLAYER_RESPAWN_INTERVAL,\n                            player.hrid\n                        );\n                        this.eventQueue.addEvent(playerRespawnEvent);\n                    }\n                    this.simResult.addRanOutOfManaCount(player, false, this.simulationTime);\n                }\n            });\n\n            if (!this.players.some((player) => player.combatDetails.currentHitpoints > 0)) {\n                if (this.zone.isDungeon) {\n                    this.saveWipeLogsToSimResult(this.zone.encountersKilled - 1);\n                    this.wipeLogs.index = 0;\n                    this.wipeLogs.count = 0;\n\n                    this.eventQueue.clear();\n                    this.enemies = null;\n\n                    const combatStartEvent = new CombatStartEvent(this.simulationTime + RESTART_INTERVAL);\n                    this.eventQueue.addEvent(combatStartEvent);\n                } else {\n                    this.eventQueue.clearEventsOfType(AutoAttackEvent.type);\n                    this.eventQueue.clearEventsOfType(AbilityCastEndEvent.type);\n                }\n                encounterEnded = true;\n                this.allPlayersDead = true;\n            }\n\n            return encounterEnded;\n        }\n\n        addNextAttackEvent(source) {\n            // Check both event types via indexed lookups instead of O(n) getMatching\n            if (\n                this.eventQueue.getByTypeAndSource(AbilityCastEndEvent.type, source) ||\n                this.eventQueue.getByTypeAndSource(AutoAttackEvent.type, source)\n            ) {\n                return;\n            }\n\n            let target;\n            let friendlies;\n            let enemies;\n            if (source.isPlayer) {\n                target = CombatUtilities.getTarget(this.enemies);\n                friendlies = this.players;\n                enemies = this.enemies;\n            } else {\n                target = CombatUtilities.getTarget(this.players);\n                friendlies = this.enemies;\n                enemies = this.players;\n            }\n\n            let usedAbility = false;\n            let skipNextAbility = false;\n\n            source.abilities\n                .filter((ability) => ability != null)\n                .forEach((ability) => {\n                    if (\n                        !usedAbility &&\n                        !skipNextAbility &&\n                        ability.shouldTrigger(this.simulationTime, source, target, friendlies, enemies)\n                    ) {\n                        if (!this.canUseAbility(source, ability, true)) {\n                            skipNextAbility = true;\n                        }\n\n                        if (!skipNextAbility) {\n                            let castDuration = ability.castDuration;\n                            castDuration /= 1 + source.combatDetails.combatStats.castSpeed;\n                            const abilityCastEndEvent = new AbilityCastEndEvent(\n                                this.simulationTime + castDuration,\n                                source,\n                                ability\n                            );\n                            this.eventQueue.addEvent(abilityCastEndEvent);\n                            usedAbility = true;\n                        }\n                    }\n                });\n\n            if (usedAbility) {\n                source.isOutOfMana = false;\n                return;\n            }\n\n            if (!enemies) {\n                return;\n            }\n\n            if (!source.isBlinded) {\n                const autoAttackEvent = new AutoAttackEvent(\n                    this.simulationTime + source.combatDetails.combatStats.attackInterval,\n                    source\n                );\n                this.eventQueue.addEvent(autoAttackEvent);\n            } else {\n                source.isOutOfMana = true;\n            }\n        }\n\n        processConsumableTickEvent(event) {\n            if (event.consumable.hitpointRestore > 0) {\n                const tickValue = CombatUtilities.calculateTickValue(\n                    event.consumable.hitpointRestore,\n                    event.totalTicks,\n                    event.currentTick\n                );\n                const hitpointsAdded = event.source.addHitpoints(tickValue);\n                this.simResult.addHitpointsGained(event.source, event.consumable.hrid, hitpointsAdded);\n            }\n\n            if (event.consumable.manapointRestore > 0) {\n                const tickValue = CombatUtilities.calculateTickValue(\n                    event.consumable.manapointRestore,\n                    event.totalTicks,\n                    event.currentTick\n                );\n                const manapointsAdded = event.source.addManapoints(tickValue);\n                this.simResult.addManapointsGained(event.source, event.consumable.hrid, manapointsAdded);\n\n                // when oom check ability trigger\n                if (event.source.isOutOfMana) {\n                    const awaitCooldownEvent = new AwaitCooldownEvent(this.simulationTime, event.source);\n                    this.eventQueue.addEvent(awaitCooldownEvent);\n                }\n            }\n\n            if (event.currentTick < event.totalTicks) {\n                const consumableTickEvent = new ConsumableTickEvent(\n                    this.simulationTime + HOT_TICK_INTERVAL,\n                    event.source,\n                    event.consumable,\n                    event.totalTicks,\n                    event.currentTick + 1\n                );\n                this.eventQueue.addEvent(consumableTickEvent);\n            }\n        }\n\n        processDamageOverTimeTickEvent(event) {\n            const tickDamage = CombatUtilities.calculateTickValue(event.damage, event.totalTicks, event.currentTick);\n            const damage = Math.min(tickDamage, event.target.combatDetails.currentHitpoints);\n\n            event.target.combatDetails.currentHitpoints -= damage;\n            this.simResult.addAttack(event.sourceRef, event.target, 'damageOverTime', damage);\n\n            const log = this.buildCombatLog('', 'damageOverTime', event.target, damage);\n            this.addToWipeLogs(log);\n\n            if (event.currentTick < event.totalTicks) {\n                const damageOverTimeTickEvent = new DamageOverTimeEvent(\n                    this.simulationTime + DOT_TICK_INTERVAL,\n                    event.sourceRef,\n                    event.target,\n                    event.damage,\n                    event.totalTicks,\n                    event.currentTick + 1,\n                    event.combatStyleHrid\n                );\n                this.eventQueue.addEvent(damageOverTimeTickEvent);\n            }\n\n            if (event.target.combatDetails.currentHitpoints === 0) {\n                this.eventQueue.clearEventsForUnit(event.target);\n                this.simResult.addDeath(event.target);\n                if (!event.target.isPlayer) {\n                    this.simResult.updateTimeSpentAlive(event.target.hrid, false, this.simulationTime);\n                }\n            }\n\n            this.checkEncounterEnd();\n        }\n\n        processRegenTickEvent(_event) {\n            const units = [...this.players];\n            if (this.enemies) {\n                units.push(...this.enemies);\n            }\n\n            for (const unit of units) {\n                if (unit.combatDetails.currentHitpoints <= 0) {\n                    continue;\n                }\n\n                const hitpointRegen = Math.floor(\n                    unit.combatDetails.maxHitpoints * unit.combatDetails.combatStats.hpRegenPer10\n                );\n                const hitpointsAdded = unit.addHitpoints(hitpointRegen);\n                this.simResult.addHitpointsGained(unit, 'regen', hitpointsAdded);\n\n                const manapointRegen = Math.floor(\n                    unit.combatDetails.maxManapoints * unit.combatDetails.combatStats.mpRegenPer10\n                );\n                const manapointsAdded = unit.addManapoints(manapointRegen);\n                this.simResult.addManapointsGained(unit, 'regen', manapointsAdded);\n\n                // when oom check ability trigger\n                if (unit.isOutOfMana) {\n                    const awaitCooldownEvent = new AwaitCooldownEvent(this.simulationTime, unit);\n                    this.eventQueue.addEvent(awaitCooldownEvent);\n                }\n            }\n\n            const regenTickEvent = new RegenTickEvent(this.simulationTime + REGEN_TICK_INTERVAL);\n            this.eventQueue.addEvent(regenTickEvent);\n        }\n\n        processCheckBuffExpirationEvent(event) {\n            event.source.removeExpiredBuffs(this.simulationTime);\n        }\n\n        processStunExpirationEvent(event) {\n            event.source.isStunned = false;\n            this.addNextAttackEvent(event.source);\n        }\n\n        processBlindExpirationEvent(event) {\n            event.source.isBlinded = false;\n            this.addNextAttackEvent(event.source);\n        }\n\n        processSilenceExpirationEvent(event) {\n            event.source.isSilenced = false;\n        }\n\n        processCurseExpirationEvent(event) {\n            event.source.removeExpiredBuffs(this.simulationTime);\n        }\n\n        processWeakenExpirationEvent(event) {\n            event.source.removeExpiredBuffs(this.simulationTime);\n        }\n\n        processFuryExpirationEvent(event) {\n            event.source.removeExpiredBuffs(this.simulationTime);\n        }\n\n        processEnrageTickEvent(event) {\n            if (!this.enemies) return;\n            const maxEnrageStack = 10;\n            this.enemies\n                .filter((enemy) => enemy.combatDetails.currentHitpoints > 0)\n                .forEach((enemy) => {\n                    const nowStack = Math.min(maxEnrageStack, Math.floor(event.encounterTime / enemy.enrageTime));\n\n                    if (nowStack <= 0) {\n                        return;\n                    }\n\n                    const enrageDamageBuff = {\n                        uniqueHrid: '/buff_uniques/enrage_damage',\n                        typeHrid: '/buff_types/damage',\n                        ratioBoost: nowStack * 0.1,\n                        ratioBoostLevelBonus: 0,\n                        flatBoost: 0,\n                        flatBoostLevelBonus: 0,\n                        startTime: '0001-01-01T00:00:00Z',\n                        duration: ENRAGE_TICK_INTERVAL,\n                    };\n                    const enrageAccuracyBuff = {\n                        uniqueHrid: '/buff_uniques/enrage_accuracy',\n                        typeHrid: '/buff_types/accuracy',\n                        ratioBoost: nowStack * 0.1,\n                        ratioBoostLevelBonus: 0,\n                        flatBoost: 0,\n                        flatBoostLevelBonus: 0,\n                        startTime: '0001-01-01T00:00:00Z',\n                        duration: ENRAGE_TICK_INTERVAL,\n                    };\n                    enemy.addBuff(enrageDamageBuff);\n                    enemy.addBuff(enrageAccuracyBuff);\n\n                    this.simResult.maxEnrageStack = Math.max(this.simResult.maxEnrageStack, nowStack);\n                });\n\n            const enrageTickEvent = new EnrageTickEvent(\n                this.simulationTime + ENRAGE_TICK_INTERVAL,\n                event.encounterTime + ENRAGE_TICK_INTERVAL\n            );\n            this.eventQueue.addEvent(enrageTickEvent);\n        }\n\n        checkTriggers() {\n            let triggeredSomething;\n\n            do {\n                triggeredSomething = false;\n\n                for (const player of this.players) {\n                    if (player.combatDetails.currentHitpoints > 0) {\n                        if (this.checkTriggersForUnit(player, this.players, this.enemies)) {\n                            triggeredSomething = true;\n                        }\n                    }\n                }\n\n                if (this.enemies) {\n                    for (const enemy of this.enemies) {\n                        if (enemy.combatDetails.currentHitpoints > 0) {\n                            if (this.checkTriggersForUnit(enemy, this.enemies, this.players)) {\n                                triggeredSomething = true;\n                            }\n                        }\n                    }\n                }\n            } while (triggeredSomething);\n        }\n\n        checkTriggersForUnit(unit, friendlies, enemies) {\n            if (unit.combatDetails.currentHitpoints <= 0) {\n                throw new Error('Checking triggers for a dead unit');\n            }\n\n            let triggeredSomething = false;\n            const target = CombatUtilities.getTarget(enemies);\n\n            for (const food of unit.food) {\n                if (food && food.shouldTrigger(this.simulationTime, unit, target, friendlies, enemies)) {\n                    const result = this.tryUseConsumable(unit, food);\n                    if (result) {\n                        triggeredSomething = true;\n                    }\n                }\n            }\n\n            for (const drink of unit.drinks) {\n                if (drink && drink.shouldTrigger(this.simulationTime, unit, target, friendlies, enemies)) {\n                    const result = this.tryUseConsumable(unit, drink);\n                    if (result) {\n                        triggeredSomething = true;\n                    }\n                }\n            }\n\n            return triggeredSomething;\n        }\n\n        tryUseConsumable(source, consumable) {\n            if (source.combatDetails.currentHitpoints <= 0) {\n                return false;\n            }\n\n            consumable.lastUsed = this.simulationTime;\n            let consumeCooldown = consumable.cooldownDuration;\n            if (source.combatDetails.combatStats.drinkConcentration > 0 && consumable.catagoryHrid.includes('drink')) {\n                consumeCooldown = consumeCooldown / (1 + source.combatDetails.combatStats.drinkConcentration);\n            } else if (source.combatDetails.combatStats.foodHaste > 0 && consumable.catagoryHrid.includes('food')) {\n                consumeCooldown = consumeCooldown / (1 + source.combatDetails.combatStats.foodHaste);\n            }\n            const cooldownReadyEvent = new CooldownReadyEvent(this.simulationTime + consumeCooldown);\n            this.eventQueue.addEvent(cooldownReadyEvent);\n\n            this.simResult.addConsumableUse(source, consumable);\n\n            if (consumable.recoveryDuration === 0) {\n                if (consumable.hitpointRestore > 0) {\n                    const hitpointsAdded = source.addHitpoints(consumable.hitpointRestore);\n                    this.simResult.addHitpointsGained(source, consumable.hrid, hitpointsAdded);\n                }\n\n                if (consumable.manapointRestore > 0) {\n                    const manapointsAdded = source.addManapoints(consumable.manapointRestore);\n                    this.simResult.addManapointsGained(source, consumable.hrid, manapointsAdded);\n\n                    // when oom check ability trigger\n                    if (source.isOutOfMana) {\n                        const awaitCooldownEvent = new AwaitCooldownEvent(this.simulationTime, source);\n                        this.eventQueue.addEvent(awaitCooldownEvent);\n                    }\n                }\n            } else {\n                const consumableTickEvent = new ConsumableTickEvent(\n                    this.simulationTime + HOT_TICK_INTERVAL,\n                    source,\n                    consumable,\n                    consumable.recoveryDuration / HOT_TICK_INTERVAL,\n                    1\n                );\n                this.eventQueue.addEvent(consumableTickEvent);\n            }\n\n            for (const buff of consumable.buffs) {\n                const currentBuff = structuredClone(buff);\n                if (source.combatDetails.combatStats.drinkConcentration > 0 && consumable.catagoryHrid.includes('drink')) {\n                    currentBuff.ratioBoost *= 1 + source.combatDetails.combatStats.drinkConcentration;\n                    currentBuff.flatBoost *= 1 + source.combatDetails.combatStats.drinkConcentration;\n                    currentBuff.duration = currentBuff.duration / (1 + source.combatDetails.combatStats.drinkConcentration);\n                }\n                source.addBuff(currentBuff, this.simulationTime);\n                const checkBuffExpirationEvent = new CheckBuffExpirationEvent(\n                    this.simulationTime + currentBuff.duration,\n                    source\n                );\n                this.eventQueue.addEvent(checkBuffExpirationEvent);\n            }\n\n            return true;\n        }\n\n        canUseAbility(source, ability, oomCheck) {\n            if (source.combatDetails.currentHitpoints <= 0) {\n                return false;\n            }\n\n            if (source.combatDetails.currentManapoints < ability.manaCost) {\n                if (source.isPlayer && oomCheck) {\n                    this.simResult.addRanOutOfManaCount(source, true, this.simulationTime);\n                }\n                return false;\n            }\n            if (source.isPlayer && oomCheck) {\n                this.simResult.addRanOutOfManaCount(source, false, this.simulationTime);\n            }\n            return true;\n        }\n\n        tryUseAbility(source, ability) {\n            if (!this.canUseAbility(source, ability, true)) {\n                return false;\n            }\n\n            if (source.isPlayer) {\n                if (source.abilityManaCosts.has(ability.hrid)) {\n                    source.abilityManaCosts.set(ability.hrid, source.abilityManaCosts.get(ability.hrid) + ability.manaCost);\n                } else {\n                    source.abilityManaCosts.set(ability.hrid, ability.manaCost);\n                }\n            }\n\n            source.combatDetails.currentManapoints -= ability.manaCost;\n\n            ability.lastUsed = this.simulationTime;\n\n            source.combatDetails.combatStats.abilityHaste;\n            ability.cooldownDuration;\n\n            this.addNextAttackEvent(source);\n\n            const todoAbilities = [ability];\n\n            if (source.combatDetails.combatStats.blaze > 0 && Math.random() < source.combatDetails.combatStats.blaze) {\n                todoAbilities.push(new Ability('blaze'));\n            }\n\n            if (source.combatDetails.combatStats.bloom > 0 && Math.random() < source.combatDetails.combatStats.bloom) {\n                todoAbilities.push(new Ability('bloom'));\n            }\n\n            for (const todoAbility of todoAbilities) {\n                for (const abilityEffect of todoAbility.abilityEffects) {\n                    switch (abilityEffect.effectType) {\n                        case '/ability_effect_types/buff':\n                            this.processAbilityBuffEffect(source, todoAbility, abilityEffect);\n                            break;\n                        case '/ability_effect_types/damage':\n                            this.processAbilityDamageEffect(source, todoAbility, abilityEffect);\n                            break;\n                        case '/ability_effect_types/heal':\n                            this.processAbilityHealEffect(source, todoAbility, abilityEffect);\n                            break;\n                        case '/ability_effect_types/spend_hp':\n                            this.processAbilitySpendHpEffect(source, todoAbility, abilityEffect);\n                            break;\n                        case '/ability_effect_types/revive':\n                            this.processAbilityReviveEffect(source, todoAbility, abilityEffect);\n                            break;\n                        case '/ability_effect_types/promote':\n                            this.eventQueue.clearEventsForUnit(source);\n                            source = this.processAbilityPromoteEffect(source, todoAbility, abilityEffect);\n                            this.addNextAttackEvent(source);\n                            break;\n                        default:\n                            throw new Error(\n                                'Unsupported effect type for ability: ' +\n                                    todoAbility.hrid +\n                                    ' effectType: ' +\n                                    abilityEffect.effectType\n                            );\n                    }\n                }\n            }\n\n            if (source.combatDetails.combatStats.ripple > 0 && Math.random() < source.combatDetails.combatStats.ripple) {\n                const manapointsAdded = source.addManapoints(10);\n                this.simResult.addManapointsGained(source, 'ripple', manapointsAdded);\n                for (const ab of source.abilities) {\n                    if (ab && ab.lastUsed) {\n                        const remainingCooldown = ab.lastUsed + ab.cooldownDuration - this.simulationTime;\n                        if (remainingCooldown > 0) {\n                            ab.lastUsed = Math.max(ab.lastUsed - ONE_SECOND * 2, this.simulationTime - ab.cooldownDuration);\n                        }\n                    }\n                }\n            }\n\n            // Could die from reflect damage\n            if (source.combatDetails.currentHitpoints === 0) {\n                this.eventQueue.clearEventsForUnit(source);\n                this.simResult.addDeath(source);\n                if (!source.isPlayer) {\n                    this.simResult.updateTimeSpentAlive(source.hrid, false, this.simulationTime);\n                }\n            }\n\n            this.checkEncounterEnd();\n\n            return true;\n        }\n\n        processAbilityBuffEffect(source, ability, abilityEffect) {\n            if (abilityEffect.targetType === 'allAllies') {\n                const targets = source.isPlayer ? this.players : this.enemies;\n                for (const target of targets.filter((unit) => unit && unit.combatDetails.currentHitpoints > 0)) {\n                    for (const buff of abilityEffect.buffs) {\n                        if (ability.isSpecialAbility && buff.multiplierForSkillHrid && buff.multiplierPerSkillLevel > 0) {\n                            const multiplier =\n                                1.0 +\n                                source.combatDetails[buff.multiplierForSkillHrid.split('/')[2] + 'Level'] *\n                                    buff.multiplierPerSkillLevel;\n                            const currentBuff = structuredClone(buff);\n                            currentBuff.flatBoost *= multiplier;\n                            target.addBuff(currentBuff, this.simulationTime);\n                        } else {\n                            target.addBuff(buff, this.simulationTime);\n                        }\n                        const checkBuffExpirationEvent = new CheckBuffExpirationEvent(\n                            this.simulationTime + buff.duration,\n                            target\n                        );\n                        this.eventQueue.addEvent(checkBuffExpirationEvent);\n                    }\n                }\n                return;\n            }\n\n            if (abilityEffect.targetType !== 'self') {\n                throw new Error('Unsupported target type for buff ability effect: ' + ability.hrid);\n            }\n\n            for (const buff of abilityEffect.buffs) {\n                source.addBuff(buff, this.simulationTime);\n                const checkBuffExpirationEvent = new CheckBuffExpirationEvent(this.simulationTime + buff.duration, source);\n                this.eventQueue.addEvent(checkBuffExpirationEvent);\n            }\n        }\n\n        processAbilityDamageEffect(source, ability, abilityEffect) {\n            let targets;\n            switch (abilityEffect.targetType) {\n                case 'enemy':\n                case 'allEnemies':\n                    targets = source.isPlayer ? this.enemies : this.players;\n                    break;\n                default:\n                    throw new Error('Unsupported target type for damage ability effect: ' + ability.hrid);\n            }\n\n            if (!targets) {\n                return;\n            }\n\n            const avoidTarget = [];\n\n            let isSkipParry = false;\n\n            for (let target of targets.filter((unit) => unit && unit.combatDetails.currentHitpoints > 0)) {\n                let parryTarget;\n                if (!isSkipParry) {\n                    parryTarget = this.checkParry(targets);\n                    isSkipParry = true; // parry check only once on first target\n                }\n\n                if (parryTarget) {\n                    const tempTarget = source;\n                    const tempSource = parryTarget;\n\n                    const attackResult = CombatUtilities.processAttack(tempSource, tempTarget);\n\n                    this.simResult.addAttack(\n                        tempSource,\n                        tempTarget,\n                        'parry',\n                        attackResult.didHit ? attackResult.damageDone : 'miss'\n                    );\n\n                    if (attackResult.lifeStealHeal > 0) {\n                        this.simResult.addHitpointsGained(tempSource, 'lifesteal', attackResult.lifeStealHeal);\n                    }\n\n                    if (attackResult.manaLeechMana > 0) {\n                        this.simResult.addManapointsGained(tempSource, 'manaLeech', attackResult.manaLeechMana);\n                    }\n\n                    if (attackResult.thornDamageDone > 0) {\n                        this.simResult.addAttack(\n                            tempTarget,\n                            tempSource,\n                            attackResult.thornType,\n                            attackResult.thornDamageDone\n                        );\n                    }\n                    if (tempTarget.combatDetails.combatStats.retaliation > 0) {\n                        this.simResult.addAttack(\n                            tempTarget,\n                            tempSource,\n                            'retaliation',\n                            attackResult.retaliationDamageDone > 0 ? attackResult.retaliationDamageDone : 'miss'\n                        );\n                    }\n\n                    if (tempTarget.combatDetails.currentHitpoints === 0) {\n                        this.eventQueue.clearEventsForUnit(tempTarget);\n                        this.simResult.addDeath(tempTarget);\n                        if (!tempTarget.isPlayer) {\n                            this.simResult.updateTimeSpentAlive(tempTarget.hrid, false, this.simulationTime);\n                        }\n                    }\n\n                    // Could die from reflect damage\n                    if (\n                        tempSource.combatDetails.currentHitpoints === 0 &&\n                        (attackResult.thornDamageDone !== 0 || attackResult.retaliationDamageDone !== 0)\n                    ) {\n                        this.eventQueue.clearEventsForUnit(tempSource);\n                        this.simResult.addDeath(tempSource);\n                        if (!tempSource.isPlayer) {\n                            this.simResult.updateTimeSpentAlive(tempSource.hrid, false, this.simulationTime);\n                        }\n                    }\n                } else {\n                    targets = targets.filter(\n                        (unit) => unit && !avoidTarget.includes(unit.hrid) && unit.combatDetails.currentHitpoints > 0\n                    );\n                    if (!source.isPlayer && targets.length > 0 && abilityEffect.targetType === 'enemy') {\n                        let cumulativeThreat = 0;\n                        const cumulativeRanges = [];\n                        targets.forEach((player) => {\n                            const playerThreat = player.combatDetails.combatStats.threat;\n                            cumulativeThreat += playerThreat;\n                            cumulativeRanges.push({\n                                player: player,\n                                rangeStart: cumulativeThreat - playerThreat,\n                                rangeEnd: cumulativeThreat,\n                            });\n                        });\n                        const randomValueHit = Math.random() * cumulativeThreat;\n                        target = cumulativeRanges.find(\n                            (range) => randomValueHit >= range.rangeStart && randomValueHit < range.rangeEnd\n                        ).player;\n                        avoidTarget.push(target.hrid);\n                    }\n                    if (targets.length <= 0) {\n                        break;\n                    }\n\n                    const attackResult = CombatUtilities.processAttack(source, target, abilityEffect);\n\n                    if (this.zone.isDungeon && target.isPlayer && attackResult.didHit && attackResult.damageDone > 0) {\n                        const log = this.generateCombatLog(source, ability.hrid, target, attackResult);\n                        this.addToWipeLogs(log);\n                    }\n\n                    if (attackResult.hpDrain > 0) {\n                        this.simResult.addHitpointsGained(source, ability.hrid, attackResult.hpDrain);\n                    }\n\n                    if (attackResult.didHit && abilityEffect.buffs) {\n                        for (const buff of abilityEffect.buffs) {\n                            target.addBuff(buff, this.simulationTime);\n                            const checkBuffExpirationEvent = new CheckBuffExpirationEvent(\n                                this.simulationTime + buff.duration,\n                                target\n                            );\n                            this.eventQueue.addEvent(checkBuffExpirationEvent);\n                        }\n                    }\n\n                    if (abilityEffect.damageOverTimeRatio > 0 && attackResult.damageDone > 0) {\n                        const damageOverTimeEvent = new DamageOverTimeEvent(\n                            this.simulationTime + DOT_TICK_INTERVAL,\n                            source,\n                            target,\n                            attackResult.damageDone * abilityEffect.damageOverTimeRatio,\n                            abilityEffect.damageOverTimeDuration / DOT_TICK_INTERVAL,\n                            1,\n                            abilityEffect.combatStyleHrid\n                        );\n                        this.eventQueue.addEvent(damageOverTimeEvent);\n                    }\n\n                    if (\n                        attackResult.didHit &&\n                        abilityEffect.stunChance > 0 &&\n                        Math.random() < (abilityEffect.stunChance * 100) / (100 + target.combatDetails.combatStats.tenacity)\n                    ) {\n                        target.isStunned = true;\n                        target.stunExpireTime = this.simulationTime + abilityEffect.stunDuration;\n                        // Clear all 3 event types via indexed lookups instead of O(n) clearMatching\n                        this.eventQueue.clearByTypeAndSource(AutoAttackEvent.type, target);\n                        this.eventQueue.clearByTypeAndSource(AbilityCastEndEvent.type, target);\n                        this.eventQueue.clearByTypeAndSource(StunExpirationEvent.type, target);\n                        const stunExpirationEvent = new StunExpirationEvent(target.stunExpireTime, target);\n                        this.eventQueue.addEvent(stunExpirationEvent);\n                    }\n\n                    if (\n                        attackResult.didHit &&\n                        abilityEffect.blindChance > 0 &&\n                        Math.random() <\n                            (abilityEffect.blindChance * 100) / (100 + target.combatDetails.combatStats.tenacity)\n                    ) {\n                        target.isBlinded = true;\n                        target.blindExpireTime = this.simulationTime + abilityEffect.blindDuration;\n                        this.eventQueue.clearByTypeAndSource(BlindExpirationEvent.type, target);\n                        if (this.eventQueue.clearByTypeAndSource(AutoAttackEvent.type, target)) {\n                            this.addNextAttackEvent(target);\n                        }\n                        const blindExpirationEvent = new BlindExpirationEvent(target.blindExpireTime, target);\n                        this.eventQueue.addEvent(blindExpirationEvent);\n                    }\n\n                    if (\n                        attackResult.didHit &&\n                        abilityEffect.silenceChance > 0 &&\n                        Math.random() <\n                            (abilityEffect.silenceChance * 100) / (100 + target.combatDetails.combatStats.tenacity)\n                    ) {\n                        target.isSilenced = true;\n                        target.silenceExpireTime = this.simulationTime + abilityEffect.silenceDuration;\n                        this.eventQueue.clearByTypeAndSource(SilenceExpirationEvent.type, target);\n                        if (this.eventQueue.clearByTypeAndSource(AbilityCastEndEvent.type, target)) {\n                            this.addNextAttackEvent(target);\n                        }\n                        const silenceExpirationEvent = new SilenceExpirationEvent(target.silenceExpireTime, target);\n                        this.eventQueue.addEvent(silenceExpirationEvent);\n                    }\n\n                    if (\n                        attackResult.didHit &&\n                        source.combatDetails.combatStats.curse > 0 &&\n                        Math.random() < 100 / (100 + target.combatDetails.combatStats.tenacity)\n                    ) {\n                        const curseExpireTime = 15000000000;\n                        const currentCurseEvent = this.eventQueue.getByTypeAndSource(CurseExpirationEvent.type, target);\n                        let currentCurseAmount = 0;\n                        if (currentCurseEvent) currentCurseAmount = currentCurseEvent.curseAmount;\n                        this.eventQueue.clearByTypeAndSource(CurseExpirationEvent.type, target);\n\n                        const curseExpirationEvent = new CurseExpirationEvent(\n                            this.simulationTime + curseExpireTime,\n                            currentCurseAmount,\n                            target\n                        );\n                        const curseBuff = {\n                            uniqueHrid: '/buff_uniques/curse',\n                            typeHrid: '/buff_types/damage_taken',\n                            ratioBoost: 0,\n                            ratioBoostLevelBonus: 0,\n                            flatBoost: source.combatDetails.combatStats.curse * curseExpirationEvent.curseAmount,\n                            flatBoostLevelBonus: 0,\n                            startTime: '0001-01-01T00:00:00Z',\n                            duration: curseExpireTime,\n                        };\n                        target.addBuff(curseBuff);\n                        this.eventQueue.addEvent(curseExpirationEvent);\n                    }\n\n                    if (target.combatDetails.combatStats.weaken > 0) {\n                        const weakenExpireTime = 15000000000;\n                        source.weakenExpireTime = this.simulationTime + weakenExpireTime;\n                        const currentWeakenEvent = this.eventQueue.getByTypeAndSource(WeakenExpirationEvent.type, source);\n                        let weakenAmount = 0;\n                        if (currentWeakenEvent) weakenAmount = currentWeakenEvent.weakenAmount;\n                        this.eventQueue.clearByTypeAndSource(WeakenExpirationEvent.type, source);\n                        const weakenExpirationEvent = new WeakenExpirationEvent(\n                            this.simulationTime + weakenExpireTime,\n                            weakenAmount,\n                            source\n                        );\n                        const weakenBuff = {\n                            uniqueHrid: '/buff_uniques/weaken',\n                            typeHrid: '/buff_types/damage',\n                            ratioBoost: -1 * target.combatDetails.combatStats.weaken * weakenExpirationEvent.weakenAmount,\n                            ratioBoostLevelBonus: 0,\n                            flatBoost: 0,\n                            flatBoostLevelBonus: 0,\n                            startTime: '0001-01-01T00:00:00Z',\n                            duration: weakenExpireTime,\n                        };\n                        source.addBuff(weakenBuff);\n                        this.eventQueue.addEvent(weakenExpirationEvent);\n                    }\n\n                    this.simResult.addAttack(\n                        source,\n                        target,\n                        ability.hrid,\n                        attackResult.didHit ? attackResult.damageDone : 'miss'\n                    );\n\n                    if (attackResult.thornDamageDone > 0) {\n                        this.simResult.addAttack(target, source, attackResult.thornType, attackResult.thornDamageDone);\n                    }\n                    if (this.zone.isDungeon && attackResult.thornDamageDone > 0 && source.isPlayer) {\n                        const log = this.buildCombatLog(\n                            target,\n                            attackResult.thornType,\n                            source,\n                            attackResult.thornDamageDone\n                        );\n                        this.addToWipeLogs(log);\n                    }\n\n                    if (target.combatDetails.combatStats.retaliation > 0) {\n                        this.simResult.addAttack(\n                            target,\n                            source,\n                            'retaliation',\n                            attackResult.retaliationDamageDone > 0 ? attackResult.retaliationDamageDone : 'miss'\n                        );\n                    }\n                    if (this.zone.isDungeon && attackResult.retaliationDamageDone > 0 && source.isPlayer) {\n                        const log = this.buildCombatLog(target, 'retaliation', source, attackResult.retaliationDamageDone);\n                        this.addToWipeLogs(log);\n                    }\n\n                    if (target.combatDetails.currentHitpoints === 0) {\n                        this.eventQueue.clearEventsForUnit(target);\n                        this.simResult.addDeath(target);\n                        if (!target.isPlayer) {\n                            this.simResult.updateTimeSpentAlive(target.hrid, false, this.simulationTime);\n                        }\n                    }\n\n                    if (attackResult.didHit && abilityEffect.pierceChance > Math.random()) {\n                        continue;\n                    }\n                }\n\n                if (parryTarget) {\n                    break;\n                }\n\n                if (abilityEffect.targetType === 'enemy') {\n                    break;\n                }\n            }\n        }\n\n        processAbilityHealEffect(source, ability, abilityEffect) {\n            if (abilityEffect.targetType === 'allAllies') {\n                const targets = source.isPlayer ? this.players : this.enemies;\n                for (const target of targets.filter((unit) => unit && unit.combatDetails.currentHitpoints > 0)) {\n                    const amountHealed = CombatUtilities.processHeal(source, abilityEffect, target);\n                    this.simResult.addHitpointsGained(target, ability.hrid, amountHealed);\n                }\n                return;\n            }\n\n            if (abilityEffect.targetType === 'lowestHpAlly') {\n                const targets = source.isPlayer ? this.players : this.enemies;\n                let healTarget;\n                for (const target of targets.filter((unit) => unit && unit.combatDetails.currentHitpoints > 0)) {\n                    if (!healTarget) {\n                        healTarget = target;\n                        continue;\n                    }\n                    if (target.combatDetails.currentHitpoints < healTarget.combatDetails.currentHitpoints) {\n                        healTarget = target;\n                    }\n                }\n\n                if (healTarget) {\n                    const amountHealed = CombatUtilities.processHeal(source, abilityEffect, healTarget);\n                    this.simResult.addHitpointsGained(healTarget, ability.hrid, amountHealed);\n                }\n                return;\n            }\n\n            if (abilityEffect.targetType !== 'self') {\n                throw new Error('Unsupported target type for heal ability effect: ' + ability.hrid);\n            }\n\n            const amountHealed = CombatUtilities.processHeal(source, abilityEffect, source);\n            this.simResult.addHitpointsGained(source, ability.hrid, amountHealed);\n        }\n\n        processAbilityReviveEffect(source, ability, abilityEffect) {\n            if (abilityEffect.targetType !== 'deadAlly') {\n                throw new Error('Unsupported target type for revive ability effect: ' + ability.hrid);\n            }\n\n            const targets = source.isPlayer ? this.players : this.enemies;\n            const reviveTarget = targets.find((unit) => unit && unit.combatDetails.currentHitpoints <= 0);\n\n            if (reviveTarget) {\n                this.eventQueue.clearByTypeAndHrid(PlayerRespawnEvent.type, reviveTarget.hrid);\n\n                reviveTarget.removeExpiredBuffs(this.simulationTime);\n\n                const amountHealed = CombatUtilities.processRevive(source, abilityEffect, reviveTarget);\n                this.simResult.addHitpointsGained(reviveTarget, ability.hrid, amountHealed);\n\n                this.addNextAttackEvent(reviveTarget);\n\n                if (!source.isPlayer) {\n                    this.simResult.updateTimeSpentAlive(reviveTarget.hrid, true, this.simulationTime);\n                }\n            }\n        }\n\n        processAbilityPromoteEffect(source, _ability, _abilityEffect) {\n            const promotionHrids = ['/monsters/enchanted_rook', '/monsters/enchanted_knight', '/monsters/enchanted_bishop'];\n            const randomPromotionIndex = Math.floor(Math.random() * promotionHrids.length);\n            return new Monster(promotionHrids[randomPromotionIndex], source.difficultyTier);\n        }\n\n        processAbilitySpendHpEffect(source, ability, abilityEffect) {\n            if (abilityEffect.targetType !== 'self') {\n                throw new Error('Unsupported target type for spend hp ability effect: ' + ability.hrid);\n            }\n\n            const hpSpent = CombatUtilities.processSpendHp(source, abilityEffect);\n            this.simResult.addHitpointsSpent(source, ability.hrid, hpSpent);\n        }\n    }\n\n    class Consumable {\n        constructor(hrid, triggers = null) {\n            this.hrid = hrid;\n\n            const itemDetailMap = getGameData().itemDetailMap;\n            const gameConsumable = itemDetailMap[this.hrid];\n            if (!gameConsumable) {\n                throw new Error('No consumable found for hrid: ' + this.hrid);\n            }\n\n            this.cooldownDuration = gameConsumable.consumableDetail.cooldownDuration;\n            this.hitpointRestore = gameConsumable.consumableDetail.hitpointRestore;\n            this.manapointRestore = gameConsumable.consumableDetail.manapointRestore;\n            this.recoveryDuration = gameConsumable.consumableDetail.recoveryDuration;\n            this.catagoryHrid = gameConsumable.categoryHrid;\n\n            this.buffs = [];\n            if (gameConsumable.consumableDetail.buffs) {\n                for (const consumableBuff of gameConsumable.consumableDetail.buffs) {\n                    const buff = new Buff(consumableBuff);\n                    this.buffs.push(buff);\n                }\n            }\n\n            if (triggers) {\n                this.triggers = triggers;\n            } else {\n                this.triggers = [];\n                for (const defaultTrigger of gameConsumable.consumableDetail.defaultCombatTriggers) {\n                    const trigger = new Trigger(\n                        defaultTrigger.dependencyHrid,\n                        defaultTrigger.conditionHrid,\n                        defaultTrigger.comparatorHrid,\n                        defaultTrigger.value\n                    );\n                    this.triggers.push(trigger);\n                }\n            }\n\n            this.lastUsed = Number.MIN_SAFE_INTEGER;\n        }\n\n        static createFromDTO(dto) {\n            const triggers = dto.triggers ? dto.triggers.map((trigger) => Trigger.createFromDTO(trigger)) : null;\n            const consumable = new Consumable(dto.hrid, triggers);\n\n            return consumable;\n        }\n\n        shouldTrigger(currentTime, source, target, friendlies, enemies) {\n            if (source.isStunned) {\n                return false;\n            }\n            let consumableHaste;\n            if (this.catagoryHrid.includes('food')) {\n                consumableHaste = source.combatDetails.combatStats.foodHaste;\n            } else {\n                consumableHaste = source.combatDetails.combatStats.drinkConcentration;\n            }\n            let cooldownDuration = this.cooldownDuration;\n            if (consumableHaste > 0) {\n                cooldownDuration = cooldownDuration / (1 + consumableHaste);\n            }\n\n            if (this.lastUsed + cooldownDuration > currentTime) {\n                return false;\n            }\n\n            if (this.triggers.length === 0) {\n                return true;\n            }\n\n            let shouldTrigger = true;\n            for (const trigger of this.triggers) {\n                if (!trigger.isActive(source, target, friendlies, enemies, currentTime)) {\n                    shouldTrigger = false;\n                }\n            }\n\n            return shouldTrigger;\n        }\n    }\n\n    class Equipment {\n        constructor(hrid, enhancementLevel) {\n            this.hrid = hrid;\n            const gameData = getGameData();\n            const gameItem = gameData.itemDetailMap[this.hrid];\n            if (!gameItem) {\n                throw new Error('No equipment found for hrid: ' + this.hrid);\n            }\n            this.gameItem = gameItem;\n            this.enhancementLevel = enhancementLevel;\n        }\n\n        static createFromDTO(dto) {\n            const equipment = new Equipment(dto.hrid, dto.enhancementLevel);\n\n            return equipment;\n        }\n\n        getCombatStat(combatStat) {\n            const gameData = getGameData();\n            const multiplier = gameData.enhancementLevelTotalBonusMultiplierTable[this.enhancementLevel];\n            if (this.gameItem.equipmentDetail.combatStats[combatStat]) {\n                const enhancementBonus = this.gameItem.equipmentDetail.combatEnhancementBonuses[combatStat] || 0;\n                const stat = this.gameItem.equipmentDetail.combatStats[combatStat] + multiplier * enhancementBonus;\n                return stat;\n            }\n            return 0;\n        }\n\n        getCombatStyle() {\n            return this.gameItem.equipmentDetail.combatStats.combatStyleHrids[0];\n        }\n\n        getDamageType() {\n            return this.gameItem.equipmentDetail.combatStats.damageType;\n        }\n\n        getPrimaryTraining() {\n            return this.gameItem.equipmentDetail.combatStats.primaryTraining;\n        }\n\n        getFocusTraining() {\n            return this.gameItem.equipmentDetail.combatStats.focusTraining;\n        }\n    }\n\n    class HouseRoom {\n        constructor(hrid, level) {\n            this.hrid = hrid;\n            this.level = level;\n\n            const gameData = getGameData();\n            const gameHouseRoom = gameData.houseRoomDetailMap[this.hrid];\n            if (!gameHouseRoom) {\n                throw new Error('No house room found for hrid: ' + this.hrid);\n            }\n\n            this.buffs = [];\n            if (gameHouseRoom.actionBuffs) {\n                for (const actionBuff of gameHouseRoom.actionBuffs) {\n                    const buff = new Buff(actionBuff, level);\n                    this.buffs.push(buff);\n                }\n            }\n            if (gameHouseRoom.globalBuffs) {\n                for (const globalBuff of gameHouseRoom.globalBuffs) {\n                    const buff = new Buff(globalBuff, level);\n                    this.buffs.push(buff);\n                }\n            }\n        }\n    }\n\n    class Player extends CombatUnit {\n        equipment = {\n            '/equipment_types/head': null,\n            '/equipment_types/body': null,\n            '/equipment_types/legs': null,\n            '/equipment_types/feet': null,\n            '/equipment_types/hands': null,\n            '/equipment_types/main_hand': null,\n            '/equipment_types/two_hand': null,\n            '/equipment_types/off_hand': null,\n            '/equipment_types/pouch': null,\n            '/equipment_types/back': null,\n            '/equipment_types/neck': null,\n            '/equipment_types/earrings': null,\n            '/equipment_types/ring': null,\n            '/equipment_types/charm': null,\n        };\n\n        constructor() {\n            super();\n\n            this.isPlayer = true;\n            this.hrid = 'player';\n        }\n\n        static createFromDTO(dto) {\n            const player = new Player();\n\n            player.staminaLevel = dto.staminaLevel;\n            player.intelligenceLevel = dto.intelligenceLevel;\n            player.attackLevel = dto.attackLevel;\n            player.meleeLevel = dto.meleeLevel;\n            player.defenseLevel = dto.defenseLevel;\n            player.rangedLevel = dto.rangedLevel;\n            player.magicLevel = dto.magicLevel;\n\n            player.hrid = dto.hrid;\n\n            for (const [key, value] of Object.entries(dto.equipment)) {\n                player.equipment[key] = value ? Equipment.createFromDTO(value) : null;\n            }\n\n            player.food = dto.food.map((food) => (food ? Consumable.createFromDTO(food) : null));\n            player.drinks = dto.drinks.map((drink) => (drink ? Consumable.createFromDTO(drink) : null));\n            player.abilities = dto.abilities.map((ability) => (ability ? Ability.createFromDTO(ability) : null));\n            Object.entries(dto.houseRooms).forEach((houseRoom) => {\n                if (houseRoom[1] > 0) {\n                    player.houseRooms.push(new HouseRoom(houseRoom[0], houseRoom[1]));\n                }\n            });\n\n            player.debuffOnLevelGap = dto.debuffOnLevelGap;\n\n            return player;\n        }\n\n        updateCombatDetails() {\n            if (this.equipment['/equipment_types/main_hand']) {\n                this.combatDetails.combatStats.combatStyleHrid =\n                    this.equipment['/equipment_types/main_hand'].getCombatStyle();\n                this.combatDetails.combatStats.damageType = this.equipment['/equipment_types/main_hand'].getDamageType();\n                this.combatDetails.combatStats.attackInterval =\n                    this.equipment['/equipment_types/main_hand'].getCombatStat('attackInterval');\n                this.combatDetails.combatStats.primaryTraining =\n                    this.equipment['/equipment_types/main_hand'].getPrimaryTraining();\n            } else if (this.equipment['/equipment_types/two_hand']) {\n                this.combatDetails.combatStats.combatStyleHrid =\n                    this.equipment['/equipment_types/two_hand'].getCombatStyle();\n                this.combatDetails.combatStats.damageType = this.equipment['/equipment_types/two_hand'].getDamageType();\n                this.combatDetails.combatStats.attackInterval =\n                    this.equipment['/equipment_types/two_hand'].getCombatStat('attackInterval');\n                this.combatDetails.combatStats.primaryTraining =\n                    this.equipment['/equipment_types/two_hand'].getPrimaryTraining();\n            } else {\n                this.combatDetails.combatStats.combatStyleHrid = '/combat_styles/smash';\n                this.combatDetails.combatStats.damageType = '/damage_types/physical';\n                this.combatDetails.combatStats.attackInterval = 3000000000;\n                this.combatDetails.combatStats.primaryTraining = '/skills/melee';\n            }\n\n            if (this.equipment['/equipment_types/charm']) {\n                this.combatDetails.combatStats.focusTraining = this.equipment['/equipment_types/charm'].getFocusTraining();\n            } else {\n                this.combatDetails.combatStats.focusTraining = '';\n            }\n\n            [\n                'stabAccuracy',\n                'slashAccuracy',\n                'smashAccuracy',\n                'rangedAccuracy',\n                'magicAccuracy',\n                'stabDamage',\n                'slashDamage',\n                'smashDamage',\n                'rangedDamage',\n                'magicDamage',\n                'defensiveDamage',\n                'taskDamage',\n                'physicalAmplify',\n                'waterAmplify',\n                'natureAmplify',\n                'fireAmplify',\n                'healingAmplify',\n                'stabEvasion',\n                'slashEvasion',\n                'smashEvasion',\n                'rangedEvasion',\n                'magicEvasion',\n                'armor',\n                'waterResistance',\n                'natureResistance',\n                'fireResistance',\n                'maxHitpoints',\n                'maxManapoints',\n                'lifeSteal',\n                'hpRegenPer10',\n                'mpRegenPer10',\n                'physicalThorns',\n                'elementalThorns',\n                'combatDropRate',\n                'combatRareFind',\n                'combatDropQuantity',\n                'combatExperience',\n                'criticalRate',\n                'criticalDamage',\n                'armorPenetration',\n                'waterPenetration',\n                'naturePenetration',\n                'firePenetration',\n                'abilityHaste',\n                'tenacity',\n                'manaLeech',\n                'castSpeed',\n                'threat',\n                'parry',\n                'mayhem',\n                'pierce',\n                'curse',\n                'fury',\n                'weaken',\n                'ripple',\n                'bloom',\n                'blaze',\n                'attackSpeed',\n                'foodHaste',\n                'drinkConcentration',\n                'autoAttackDamage',\n                'abilityDamage',\n                'staminaExperience',\n                'intelligenceExperience',\n                'attackExperience',\n                'defenseExperience',\n                'meleeExperience',\n                'rangedExperience',\n                'magicExperience',\n                'retaliation',\n            ].forEach((stat) => {\n                this.combatDetails.combatStats[stat] = Object.values(this.equipment)\n                    .filter((equipment) => equipment != null)\n                    .map((equipment) => equipment.getCombatStat(stat))\n                    .reduce((prev, cur) => prev + cur, 0);\n            });\n\n            if (this.equipment['/equipment_types/pouch']) {\n                this.combatDetails.combatStats.foodSlots =\n                    1 + this.equipment['/equipment_types/pouch'].getCombatStat('foodSlots');\n                this.combatDetails.combatStats.drinkSlots =\n                    1 + this.equipment['/equipment_types/pouch'].getCombatStat('drinkSlots');\n            } else {\n                this.combatDetails.combatStats.foodSlots = 1;\n                this.combatDetails.combatStats.drinkSlots = 1;\n            }\n\n            super.updateCombatDetails();\n        }\n    }\n\n    class Zone {\n        constructor(hrid, difficultyTier) {\n            this.hrid = hrid;\n            this.difficultyTier = difficultyTier;\n\n            const actionDetailMap = getGameData().actionDetailMap;\n            const gameZone = actionDetailMap[this.hrid];\n            this.monsterSpawnInfo = gameZone.combatZoneInfo.fightInfo;\n            this.dungeonSpawnInfo = gameZone.combatZoneInfo.dungeonInfo;\n            this.encountersKilled = 1;\n            this.monsterSpawnInfo.battlesPerBoss = 10;\n            this.buffs = gameZone.buffs;\n            this.isDungeon = gameZone.combatZoneInfo.isDungeon;\n            this.dungeonsCompleted = 0;\n            this.dungeonsFailed = 0;\n            this.finalWave = false;\n        }\n\n        getRandomEncounter() {\n            if (this.monsterSpawnInfo.bossSpawns && this.encountersKilled === this.monsterSpawnInfo.battlesPerBoss) {\n                this.encountersKilled = 1;\n                return this.monsterSpawnInfo.bossSpawns.map(\n                    (monster) => new Monster(monster.combatMonsterHrid, monster.difficultyTier + this.difficultyTier)\n                );\n            }\n\n            const totalWeight = this.monsterSpawnInfo.randomSpawnInfo.spawns.reduce((prev, cur) => prev + cur.rate, 0);\n\n            const encounterHrids = [];\n            let totalStrength = 0;\n\n            outer: for (let i = 0; i < this.monsterSpawnInfo.randomSpawnInfo.maxSpawnCount; i++) {\n                const randomWeight = totalWeight * Math.random();\n                let cumulativeWeight = 0;\n\n                for (const spawn of this.monsterSpawnInfo.randomSpawnInfo.spawns) {\n                    cumulativeWeight += spawn.rate;\n                    if (randomWeight <= cumulativeWeight) {\n                        totalStrength += spawn.strength;\n\n                        if (totalStrength <= this.monsterSpawnInfo.randomSpawnInfo.maxTotalStrength) {\n                            encounterHrids.push({ hrid: spawn.combatMonsterHrid, difficultyTier: spawn.difficultyTier });\n                        } else {\n                            break outer;\n                        }\n                        break;\n                    }\n                }\n            }\n            this.encountersKilled++;\n            return encounterHrids.map((hrid) => new Monster(hrid.hrid, hrid.difficultyTier + this.difficultyTier));\n        }\n\n        failWave() {\n            this.dungeonsFailed++;\n            this.encountersKilled = 1;\n        }\n\n        getNextWave() {\n            if (this.encountersKilled > this.dungeonSpawnInfo.maxWaves) {\n                this.dungeonsCompleted++;\n                this.encountersKilled = 1;\n            }\n            // console.log(\"Wave #\" + this.encountersKilled);\n            if (this.dungeonSpawnInfo.fixedSpawnsMap.hasOwnProperty(this.encountersKilled.toString())) {\n                const currentMonsters = this.dungeonSpawnInfo.fixedSpawnsMap[this.encountersKilled.toString()];\n                this.encountersKilled++;\n                return currentMonsters.map(\n                    (monster) => new Monster(monster.combatMonsterHrid, monster.difficultyTier + this.difficultyTier)\n                );\n            } else {\n                let monsterSpawns = {};\n                const waveKeys = Object.keys(this.dungeonSpawnInfo.randomSpawnInfoMap)\n                    .map(Number)\n                    .sort((a, b) => a - b);\n                if (this.encountersKilled > waveKeys[waveKeys.length - 1]) {\n                    monsterSpawns = this.dungeonSpawnInfo.randomSpawnInfoMap[waveKeys[waveKeys.length - 1]];\n                } else {\n                    for (let i = 0; i < waveKeys.length - 1; i++) {\n                        if (this.encountersKilled >= waveKeys[i] && this.encountersKilled <= waveKeys[i + 1]) {\n                            monsterSpawns = this.dungeonSpawnInfo.randomSpawnInfoMap[waveKeys[i]];\n                            break;\n                        }\n                    }\n                }\n                const totalWeight = monsterSpawns.spawns.reduce((prev, cur) => prev + cur.rate, 0);\n\n                const encounterHrids = [];\n                let totalStrength = 0;\n\n                outer: for (let i = 0; i < monsterSpawns.maxSpawnCount; i++) {\n                    const randomWeight = totalWeight * Math.random();\n                    let cumulativeWeight = 0;\n\n                    for (const spawn of monsterSpawns.spawns) {\n                        cumulativeWeight += spawn.rate;\n                        if (randomWeight <= cumulativeWeight) {\n                            totalStrength += spawn.strength;\n\n                            if (totalStrength <= monsterSpawns.maxTotalStrength) {\n                                encounterHrids.push({\n                                    hrid: spawn.combatMonsterHrid,\n                                    difficultyTier: spawn.difficultyTier,\n                                });\n                            } else {\n                                break outer;\n                            }\n                            break;\n                        }\n                    }\n                }\n                this.encountersKilled++;\n                return encounterHrids.map((hrid) => new Monster(hrid.hrid, hrid.difficultyTier + this.difficultyTier));\n            }\n        }\n    }\n\n    /**\n     * Combat Simulator Worker Entry\n     *\n     * This file is bundled into a string at build time by the workerBundlePlugin\n     * and runs inside a Web Worker. It receives simulation parameters via\n     * postMessage and returns results.\n     */\n\n\n    onmessage = function (event) {\n        const { type, taskId } = event.data;\n\n        if (type !== 'start_simulation') return;\n\n        try {\n            const { gameData, playerDTOs, zoneHrid, difficultyTier, simulationTimeLimit, extraBuffs } = event.data;\n\n            // Set game data for the engine singleton\n            setGameData(gameData);\n\n            // Create Zone\n            const zone = new Zone(zoneHrid, difficultyTier);\n\n            // Create Players\n            const players = playerDTOs.map((dto) => {\n                const player = Player.createFromDTO(structuredClone(dto));\n                player.zoneBuffs = zone.buffs;\n                player.extraBuffs = extraBuffs;\n                return player;\n            });\n\n            // Create simulator with progress callback\n            const combatSimulator = new CombatSimulator(players, zone, (progressData) => {\n                postMessage({\n                    type: 'progress',\n                    taskId,\n                    progress: Math.round(progressData.progress * 100),\n                });\n            });\n\n            // Run simulation\n            const simResult = combatSimulator.simulate(simulationTimeLimit);\n\n            postMessage({\n                type: 'result',\n                taskId,\n                simResult,\n            });\n        } catch (error) {\n            postMessage({\n                type: 'error',\n                taskId,\n                error: error.message || String(error),\n            });\n        }\n    };\n\n})();\n";
+
+    /**
+     * Combat Simulator Runner
+     * Runs simulations in parallel Web Workers for maximum speed.
+     *
+     * For large simulations (>= 20 hours), the time is split across multiple
+     * workers (up to 4) running in parallel. Results are merged by summing
+     * all additive counters. For small simulations, a single worker is used.
+     */
+
+
+    let workerBlobURL = null;
+    let activeWorkers = [];
+    let taskIdCounter = 0;
+
+    /**
+     * Get or create the worker Blob URL (created once, reused).
+     * @returns {string}
+     */
+    function getWorkerURL() {
+        if (!workerBlobURL) {
+            const blob = new Blob([WORKER_SCRIPT], { type: 'application/javascript' });
+            workerBlobURL = URL.createObjectURL(blob);
+        }
+        return workerBlobURL;
+    }
+
+    /**
+     * Build extra buffs from community buffs and MooPass.
+     * @param {Object} communityBuffs - { mooPass, comExp, comDrop }
+     * @returns {Array<Object>}
+     */
+    function buildExtraBuffs(communityBuffs) {
+        const extraBuffs = [];
+
+        if (communityBuffs?.mooPass) {
+            extraBuffs.push({
+                uniqueHrid: '/buff_uniques/experience_moo_pass_buff',
+                typeHrid: '/buff_types/wisdom',
+                ratioBoost: 0,
+                ratioBoostLevelBonus: 0,
+                flatBoost: 0.05,
+                flatBoostLevelBonus: 0,
+                startTime: '0001-01-01T00:00:00Z',
+                duration: 0,
+            });
+        }
+
+        if (communityBuffs?.comExp > 0) {
+            extraBuffs.push({
+                uniqueHrid: '/buff_uniques/experience_community_buff',
+                typeHrid: '/buff_types/wisdom',
+                ratioBoost: 0,
+                ratioBoostLevelBonus: 0,
+                flatBoost: 0.005 * (communityBuffs.comExp - 1) + 0.2,
+                flatBoostLevelBonus: 0,
+                startTime: '0001-01-01T00:00:00Z',
+                duration: 0,
+            });
+        }
+
+        if (communityBuffs?.comDrop > 0) {
+            extraBuffs.push({
+                uniqueHrid: '/buff_uniques/combat_community_buff',
+                typeHrid: '/buff_types/combat_drop_quantity',
+                ratioBoost: 0,
+                ratioBoostLevelBonus: 0,
+                flatBoost: 0.005 * (communityBuffs.comDrop - 1) + 0.2,
+                flatBoostLevelBonus: 0,
+                startTime: '0001-01-01T00:00:00Z',
+                duration: 0,
+            });
+        }
+
+        return extraBuffs;
+    }
+
+    /**
+     * Run a single simulation chunk in a Worker.
+     * @param {Object} message - Worker message payload
+     * @param {Function} [onProgress] - Progress callback (0-100 for this chunk)
+     * @returns {Promise<Object>} SimResult
+     */
+    function runWorkerChunk(message, onProgress) {
+        return new Promise((resolve, reject) => {
+            const worker = new Worker(getWorkerURL());
+            activeWorkers.push(worker);
+
+            worker.onmessage = (event) => {
+                const msg = event.data;
+                if (msg.taskId !== message.taskId) return;
+
+                if (msg.type === 'progress') {
+                    if (onProgress) onProgress(msg.progress);
+                } else if (msg.type === 'result') {
+                    worker.terminate();
+                    activeWorkers = activeWorkers.filter((w) => w !== worker);
+                    resolve(msg.simResult);
+                } else if (msg.type === 'error') {
+                    worker.terminate();
+                    activeWorkers = activeWorkers.filter((w) => w !== worker);
+                    reject(new Error(msg.error));
+                }
+            };
+
+            worker.onerror = (error) => {
+                worker.terminate();
+                activeWorkers = activeWorkers.filter((w) => w !== worker);
+                reject(new Error(error.message || 'Worker error'));
+            };
+
+            worker.postMessage(message);
+        });
+    }
+
+    /**
+     * Merge multiple SimResults into one by summing all additive counters.
+     * @param {Array<Object>} results - Array of SimResult objects
+     * @returns {Object} Merged SimResult
+     */
+    function mergeSimResults(results) {
+        if (results.length === 1) return results[0];
+
+        const merged = structuredClone(results[0]);
+
+        for (let i = 1; i < results.length; i++) {
+            const r = results[i];
+
+            // Encounters
+            merged.encounters += r.encounters;
+
+            // Deaths (per unit hrid)
+            for (const [hrid, count] of Object.entries(r.deaths)) {
+                merged.deaths[hrid] = (merged.deaths[hrid] || 0) + count;
+            }
+
+            // Experience gained (per player → per skill)
+            for (const [playerHrid, skills] of Object.entries(r.experienceGained)) {
+                if (!merged.experienceGained[playerHrid]) {
+                    merged.experienceGained[playerHrid] = {};
+                }
+                for (const [skill, amount] of Object.entries(skills)) {
+                    merged.experienceGained[playerHrid][skill] = (merged.experienceGained[playerHrid][skill] || 0) + amount;
+                }
+            }
+
+            // Consumables used (per player → per item)
+            for (const [playerHrid, items] of Object.entries(r.consumablesUsed)) {
+                if (!merged.consumablesUsed[playerHrid]) {
+                    merged.consumablesUsed[playerHrid] = {};
+                }
+                for (const [itemHrid, count] of Object.entries(items)) {
+                    merged.consumablesUsed[playerHrid][itemHrid] =
+                        (merged.consumablesUsed[playerHrid][itemHrid] || 0) + count;
+                }
+            }
+
+            // Mana used (per player → per ability)
+            if (r.manaUsed) {
+                if (!merged.manaUsed) merged.manaUsed = {};
+                for (const [playerHrid, abilities] of Object.entries(r.manaUsed)) {
+                    if (!merged.manaUsed[playerHrid]) merged.manaUsed[playerHrid] = {};
+                    for (const [abilityHrid, amount] of Object.entries(abilities)) {
+                        merged.manaUsed[playerHrid][abilityHrid] = (merged.manaUsed[playerHrid][abilityHrid] || 0) + amount;
+                    }
+                }
+            }
+
+            // Hitpoints gained/spent (per unit → per source)
+            for (const field of ['hitpointsGained', 'manapointsGained', 'hitpointsSpent']) {
+                if (r[field]) {
+                    if (!merged[field]) merged[field] = {};
+                    for (const [unitHrid, sources] of Object.entries(r[field])) {
+                        if (!merged[field][unitHrid]) merged[field][unitHrid] = {};
+                        for (const [source, amount] of Object.entries(sources)) {
+                            merged[field][unitHrid][source] = (merged[field][unitHrid][source] || 0) + amount;
+                        }
+                    }
+                }
+            }
+
+            // Attacks (per source → per target → per ability)
+            if (r.attacks) {
+                if (!merged.attacks) merged.attacks = {};
+                for (const [sourceHrid, targets] of Object.entries(r.attacks)) {
+                    if (!merged.attacks[sourceHrid]) merged.attacks[sourceHrid] = {};
+                    for (const [targetHrid, abilities] of Object.entries(targets)) {
+                        if (!merged.attacks[sourceHrid][targetHrid]) {
+                            merged.attacks[sourceHrid][targetHrid] = {};
+                        }
+                        for (const [abilityName, stats] of Object.entries(abilities)) {
+                            if (!merged.attacks[sourceHrid][targetHrid][abilityName]) {
+                                merged.attacks[sourceHrid][targetHrid][abilityName] = { hit: 0, miss: 0 };
+                            }
+                            merged.attacks[sourceHrid][targetHrid][abilityName].hit += stats.hit || 0;
+                            merged.attacks[sourceHrid][targetHrid][abilityName].miss += stats.miss || 0;
+                        }
+                    }
+                }
+            }
+
+            // Dungeon stats
+            if (r.isDungeon) {
+                merged.dungeonsCompleted = (merged.dungeonsCompleted || 0) + (r.dungeonsCompleted || 0);
+                merged.dungeonsFailed = (merged.dungeonsFailed || 0) + (r.dungeonsFailed || 0);
+                merged.maxWaveReached = Math.max(merged.maxWaveReached || 0, r.maxWaveReached || 0);
+            }
+
+            // Simulated time
+            merged.simulatedTime = (merged.simulatedTime || 0) + (r.simulatedTime || 0);
+
+            // Time spent alive
+            if (r.timeSpentAlive) {
+                if (!merged.timeSpentAlive) merged.timeSpentAlive = [];
+                for (const entry of r.timeSpentAlive) {
+                    const existing = merged.timeSpentAlive.find((e) => e.name === entry.name);
+                    if (existing) {
+                        existing.timeSpentAlive += entry.timeSpentAlive;
+                        existing.count += entry.count;
+                    } else {
+                        merged.timeSpentAlive.push({ ...entry });
+                    }
+                }
+            }
+        }
+
+        return merged;
+    }
+
+    /**
+     * Run a combat simulation, parallelized across multiple Workers when beneficial.
+     * @param {Object} params
+     * @param {Object} params.gameData - Game data maps from buildGameDataPayload()
+     * @param {Array<Object>} params.playerDTOs - Player DTOs from buildAllPlayerDTOs()
+     * @param {string} params.zoneHrid - Zone HRID
+     * @param {number} params.difficultyTier - Difficulty tier (0+)
+     * @param {number} params.hours - Hours to simulate
+     * @param {Object} params.communityBuffs - { mooPass, comExp, comDrop }
+     * @param {Function} [onProgress] - Called with (percent: 0-100)
+     * @returns {Promise<Object>} Merged SimResult
+     */
+    async function runSimulation(params, onProgress) {
+        const { gameData, playerDTOs, zoneHrid, difficultyTier, hours, communityBuffs } = params;
+
+        const extraBuffs = buildExtraBuffs(communityBuffs);
+        const ONE_HOUR_NS = 3600 * 1e9;
+
+        // Cancel any previous run
+        cancelSimulation();
+        const workerCount =
+            1;
+
+        // Split hours across workers
+        const baseHours = Math.floor(hours / workerCount);
+        const remainder = hours - baseHours * workerCount;
+
+        const chunks = [];
+        for (let i = 0; i < workerCount; i++) {
+            const chunkHours = baseHours + (i < remainder ? 1 : 0);
+            chunks.push(chunkHours);
+        }
+
+        // Track per-worker progress
+        const workerProgress = new Array(workerCount).fill(0);
+
+        // Launch all workers in parallel
+        const promises = chunks.map((chunkHours, i) => {
+            const taskId = ++taskIdCounter;
+            const message = {
+                type: 'start_simulation',
+                taskId,
+                gameData,
+                playerDTOs,
+                zoneHrid,
+                difficultyTier,
+                simulationTimeLimit: chunkHours * ONE_HOUR_NS,
+                extraBuffs,
+            };
+
+            return runWorkerChunk(message, (percent) => {
+                workerProgress[i] = percent;
+            });
+        });
+
+        const results = await Promise.all(promises);
+
+        return mergeSimResults(results);
+    }
+
+    /**
+     * Terminate all active simulation workers.
+     */
+    function cancelSimulation() {
+        for (const worker of activeWorkers) {
+            worker.terminate();
+        }
+        activeWorkers = [];
+    }
+
+    /**
+     * Loadout Snapshot
+     *
+     * Listens for `loadouts_updated` WebSocket messages to capture all loadout configurations
+     * (equipment, abilities, consumables, enhancement levels) in real time.
+     *
+     * Stored snapshots are used by profit calculators to apply the correct tool/equipment
+     * bonuses for a skill even when that loadout is not currently equipped.
+     *
+     * Skill matching: the loadout's actionTypeHrid (e.g. "/action_types/brewing") is compared
+     * to the action type of the profit calculation. An "All Skills" loadout (empty actionTypeHrid)
+     * is used as a fallback when no skill-specific snapshot is found.
+     *
+     * Priority: skill default > all skills default > skill non-default > all skills non-default
+     */
+
+
+    const STORAGE_KEY_PREFIX$2 = 'loadout_snapshots';
+
+    /**
+     * Get character-scoped storage key.
+     * @returns {string}
+     */
+    function getStorageKey$2() {
+        const charId = dataManager.getCurrentCharacterId() || 'default';
+        return `${STORAGE_KEY_PREFIX$2}_${charId}`;
+    }
+
+    /**
+     * Parse a wearable hash string into itemLocationHrid, itemHrid, and enhancementLevel.
+     * Format: "characterId::/item_locations/location::/items/item_hrid::enhancementLevel"
+     * Empty string means no item in that slot.
+     * @param {string} itemLocationHrid - The equipment slot key (e.g. "/item_locations/body")
+     * @param {string} wearableHash - The wearable hash value
+     * @returns {{ itemLocationHrid: string, itemHrid: string, enhancementLevel: number }|null}
+     */
+    function parseWearable(itemLocationHrid, wearableHash) {
+        if (!wearableHash) return null;
+
+        const parts = wearableHash.split('::');
+        const itemHrid = parts.find((p) => p.startsWith('/items/'));
+        if (!itemHrid) return null;
+
+        const lastPart = parts[parts.length - 1];
+        const enhancementLevel = !lastPart.startsWith('/') ? parseInt(lastPart, 10) || 0 : 0;
+
+        return { itemLocationHrid, itemHrid, enhancementLevel };
+    }
+
+    /**
+     * Convert a server loadout object into our snapshot format.
+     * @param {Object} loadout - A loadout entry from characterLoadoutMap
+     * @returns {Object} snapshot
+     */
+    function buildSnapshot(loadout) {
+        // Parse equipment from wearableMap
+        const equipment = [];
+        for (const [locationHrid, hash] of Object.entries(loadout.wearableMap || {})) {
+            const parsed = parseWearable(locationHrid, hash);
+            if (parsed) equipment.push(parsed);
+        }
+
+        // Parse drinks
+        const drinks = (loadout.drinkItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse food
+        const food = (loadout.foodItemHrids || []).map((hrid) => ({
+            itemHrid: hrid || '',
+        }));
+
+        // Parse abilities
+        const abilities = [];
+        for (const [slot, hrid] of Object.entries(loadout.abilityMap || {})) {
+            if (hrid) abilities.push({ abilityHrid: hrid, slot: parseInt(slot, 10) });
+        }
+
+        return {
+            name: loadout.name,
+            actionTypeHrid: loadout.actionTypeHrid || '',
+            isDefault: !!loadout.isDefault,
+            equipment,
+            abilities,
+            food,
+            drinks,
+            abilityCombatTriggersMap: loadout.abilityCombatTriggersMap || {},
+            consumableCombatTriggersMap: loadout.consumableCombatTriggersMap || {},
+            savedAt: Date.now(),
+        };
+    }
+
+    class LoadoutSnapshot {
+        constructor() {
+            this.snapshots = {}; // In-memory cache: { [loadoutName]: snapshot }
+            this.loadoutsUpdatedHandler = null;
+            this.isInitialized = false;
+        }
+
+        async initialize() {
+            if (this.isInitialized) return;
+            this.isInitialized = true;
+
+            // Load existing snapshots into memory
+            this.snapshots = (await storage.getJSON(getStorageKey$2(), 'settings', null)) || {};
+            console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
+
+            // Listen for loadouts_updated WebSocket messages
+            this.loadoutsUpdatedHandler = (data) => this._onLoadoutsUpdated(data);
+            webSocketHook.on('loadouts_updated', this.loadoutsUpdatedHandler);
+        }
+
+        /**
+         * Handle a loadouts_updated WebSocket message.
+         * Replaces all snapshots with the server's current state.
+         * @param {Object} data - The WebSocket message payload
+         */
+        _onLoadoutsUpdated(data) {
+            console.log('[LoadoutSnapshot] loadouts_updated WebSocket message received');
+            const loadoutMap = data.characterLoadoutMap;
+            if (!loadoutMap) {
+                console.log('[LoadoutSnapshot] no characterLoadoutMap in message');
+                return;
+            }
+
+            const newSnapshots = {};
+            for (const [id, loadout] of Object.entries(loadoutMap)) {
+                if (!loadout.name) continue;
+                newSnapshots[id] = buildSnapshot(loadout);
+                console.log(
+                    `[LoadoutSnapshot]   → ${loadout.name} (id=${id}): type=${loadout.actionTypeHrid || 'All Skills'}, default=${loadout.isDefault}`
+                );
+            }
+
+            this.snapshots = newSnapshots;
+            storage.setJSON(getStorageKey$2(), this.snapshots, 'settings');
+            console.log(
+                `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
+                Object.values(newSnapshots).map((s) => s.name)
+            );
+        }
+
+        /**
+         * Find the best snapshot for a given action type.
+         * Priority: skill default > all skills default > skill non-default > all skills non-default
+         * @param {string} actionTypeHrid - e.g. "/action_types/brewing"
+         * @returns {Object|null} snapshot entry or null
+         */
+        _findSnapshot(actionTypeHrid) {
+            if (!config.getSetting('loadoutSnapshot')) return null;
+
+            let skillDefault = null;
+            let allSkillsDefault = null;
+            let skillNonDefault = null;
+            let allSkillsNonDefault = null;
+
+            for (const snapshot of Object.values(this.snapshots)) {
+                if (snapshot.actionTypeHrid === actionTypeHrid) {
+                    if (snapshot.isDefault) {
+                        skillDefault = snapshot;
+                    } else {
+                        skillNonDefault = snapshot;
+                    }
+                } else if (snapshot.actionTypeHrid === '') {
+                    if (snapshot.isDefault) {
+                        allSkillsDefault = snapshot;
+                    } else {
+                        allSkillsNonDefault = snapshot;
+                    }
+                }
+            }
+
+            return skillDefault || allSkillsDefault || skillNonDefault || allSkillsNonDefault || null;
+        }
+
+        /**
+         * Get a Map<itemLocationHrid, item> for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned Map has the same format as dataManager.getEquipment().
+         * @param {string} actionTypeHrid
+         * @returns {Map<string, Object>|null}
+         */
+        getSnapshotForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot || !snapshot.equipment?.length) return null;
+            return new Map(snapshot.equipment.map((e) => [e.itemLocationHrid, e]));
+        }
+
+        /**
+         * Get the drink slots array for the best loadout snapshot matching the given
+         * action type. Returns null if no snapshot exists or the feature is disabled.
+         * The returned array has the same format as dataManager.getActionDrinkSlots().
+         * @param {string} actionTypeHrid
+         * @returns {Array<{itemHrid: string}>|null}
+         */
+        getSnapshotDrinksForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            // Filter out empty slots so callers get only actual items
+            const filled = (snapshot.drinks || []).filter((d) => d.itemHrid);
+            return filled.length > 0 ? filled : null;
+        }
+
+        /**
+         * Get all saved loadout snapshots as a flat array.
+         * @returns {Array<Object>} Array of snapshot objects
+         */
+        getAllSnapshots() {
+            return Object.values(this.snapshots);
+        }
+
+        /**
+         * Get the name and default status of the saved loadout being used for a given action type.
+         * Returns an object with name and isDefault, or null if no snapshot exists or feature is disabled.
+         * @param {string} actionTypeHrid
+         * @returns {{ name: string, isDefault: boolean }|null}
+         */
+        getSnapshotInfoForSkill(actionTypeHrid) {
+            const snapshot = this._findSnapshot(actionTypeHrid);
+            if (!snapshot) return null;
+            return { name: snapshot.name, isDefault: !!snapshot.isDefault };
+        }
+
+        disable() {
+            if (this.loadoutsUpdatedHandler) {
+                webSocketHook.off('loadouts_updated', this.loadoutsUpdatedHandler);
+                this.loadoutsUpdatedHandler = null;
+            }
+
+            this.isInitialized = false;
+        }
+    }
+
+    const loadoutSnapshot = new LoadoutSnapshot();
+
+    /**
+     * Combat Simulator Adapter
+     * Bridges Toolasha's live data to the combat sim engine.
+     *
+     * Extracts game data maps, builds player DTOs, and provides
+     * combat zone metadata for the simulation UI.
+     */
+
+
+    /**
+     * Extract all required game data maps from initClientData for the sim engine.
+     * @returns {Object|null} Plain object with all 13 game data maps, or null if data unavailable
+     */
+    function buildGameDataPayload() {
+        const clientData = dataManager.getInitClientData();
+        if (!clientData) {
+            console.error('[CombatSimAdapter] No initClientData available');
+            return null;
+        }
+
+        return {
+            itemDetailMap: clientData.itemDetailMap,
+            actionDetailMap: clientData.actionDetailMap,
+            abilityDetailMap: clientData.abilityDetailMap,
+            combatMonsterDetailMap: clientData.combatMonsterDetailMap,
+            combatStyleDetailMap: clientData.combatStyleDetailMap,
+            damageTypeDetailMap: clientData.damageTypeDetailMap,
+            houseRoomDetailMap: clientData.houseRoomDetailMap,
+            combatTriggerDependencyDetailMap: clientData.combatTriggerDependencyDetailMap,
+            combatTriggerConditionDetailMap: clientData.combatTriggerConditionDetailMap,
+            combatTriggerComparatorDetailMap: clientData.combatTriggerComparatorDetailMap,
+            enhancementLevelTotalBonusMultiplierTable: clientData.enhancementLevelTotalBonusMultiplierTable,
+            abilitySlotsLevelRequirementList: clientData.abilitySlotsLevelRequirementList,
+            openableLootDropMap: clientData.openableLootDropMap,
+        };
+    }
+
+    /**
+     * Build a player DTO from the current character data.
+     * Outputs the format expected by Player.createFromDTO():
+     *   { staminaLevel, ..., equipment: { '/equipment_types/head': {hrid, enhancementLevel}, ... },
+     *     food: [{hrid, triggers}], drinks: [{hrid, triggers}],
+     *     abilities: [{hrid, level, triggers}], houseRooms: {'/house_rooms/x': level},
+     *     hrid: 'player1', debuffOnLevelGap: 0 }
+     * @returns {Object|null} Player DTO in sim engine format, or null if data unavailable
+     */
+    function buildPlayerDTO() {
+        const characterData = dataManager.characterData;
+        const clientData = dataManager.getInitClientData();
+
+        if (!characterData) {
+            console.error('[CombatSimAdapter] No character data available');
+            return null;
+        }
+
+        const dto = {
+            staminaLevel: 1,
+            intelligenceLevel: 1,
+            attackLevel: 1,
+            meleeLevel: 1,
+            defenseLevel: 1,
+            rangedLevel: 1,
+            magicLevel: 1,
+            hrid: 'player1',
+            debuffOnLevelGap: 0,
+            equipment: {},
+            food: [],
+            drinks: [],
+            abilities: [],
+            houseRooms: {},
+        };
+
+        // Extract combat skill levels
+        for (const skill of characterData.characterSkills || []) {
+            const skillName = skill.skillHrid.split('/').pop();
+            const key = skillName + 'Level';
+            if (dto[key] !== undefined) {
+                dto[key] = skill.level;
+            }
+        }
+
+        // Extract equipped items → keyed by equipment type
+        // Use the item's equipmentDetail.type (already /equipment_types/ format) as the key
+        const itemDetailMap = clientData?.itemDetailMap || {};
+
+        if (Array.isArray(characterData.characterItems)) {
+            for (const item of characterData.characterItems) {
+                if (!item.itemLocationHrid || item.itemLocationHrid.includes('/item_locations/inventory')) continue;
+                const itemDetail = itemDetailMap[item.itemHrid];
+                if (!itemDetail?.equipmentDetail?.type) continue;
+                dto.equipment[itemDetail.equipmentDetail.type] = {
+                    hrid: item.itemHrid,
+                    enhancementLevel: item.enhancementLevel || 0,
+                };
+            }
+        } else if (characterData.characterEquipment) {
+            for (const key in characterData.characterEquipment) {
+                const item = characterData.characterEquipment[key];
+                const itemDetail = itemDetailMap[item.itemHrid];
+                if (!itemDetail?.equipmentDetail?.type) continue;
+                dto.equipment[itemDetail.equipmentDetail.type] = {
+                    hrid: item.itemHrid,
+                    enhancementLevel: item.enhancementLevel || 0,
+                };
+            }
+        }
+
+        // Build trigger map (ability + consumable triggers combined)
+        const triggerMap = {
+            ...(characterData.abilityCombatTriggersMap || {}),
+            ...(characterData.consumableCombatTriggersMap || {}),
+        };
+
+        /**
+         * Convert raw trigger data to DTOs for Trigger.createFromDTO.
+         * @param {string} hrid - Ability or consumable HRID
+         * @returns {Array<Object>} Trigger DTOs
+         */
+        const buildTriggerDTOs = (hrid) => {
+            const rawTriggers = triggerMap[hrid];
+            if (!Array.isArray(rawTriggers)) return null;
+
+            return rawTriggers.map((t) => ({
+                dependencyHrid: t.dependencyHrid,
+                conditionHrid: t.conditionHrid,
+                comparatorHrid: t.comparatorHrid,
+                value: t.value || 0,
+            }));
+        };
+
+        // Extract food slots → array of { hrid, triggers }
+        const foodSlots = characterData.actionTypeFoodSlotsMap?.['/action_types/combat'] || [];
+        for (let i = 0; i < 3; i++) {
+            const item = foodSlots[i];
+            if (item?.itemHrid) {
+                dto.food.push({ hrid: item.itemHrid, triggers: buildTriggerDTOs(item.itemHrid) });
+            } else {
+                dto.food.push(null);
+            }
+        }
+
+        // Extract drink slots → array of { hrid, triggers }
+        const drinkSlots = characterData.actionTypeDrinkSlotsMap?.['/action_types/combat'] || [];
+        for (let i = 0; i < 3; i++) {
+            const item = drinkSlots[i];
+            if (item?.itemHrid) {
+                dto.drinks.push({ hrid: item.itemHrid, triggers: buildTriggerDTOs(item.itemHrid) });
+            } else {
+                dto.drinks.push(null);
+            }
+        }
+
+        // Extract equipped abilities → array of { hrid, level, triggers }
+        const equippedAbilities = characterData.combatUnit?.combatAbilities || [];
+        // Slot 0 = special ability, slots 1-4 = normal abilities
+        for (let i = 0; i < 5; i++) {
+            dto.abilities.push(null);
+        }
+
+        let normalAbilityIndex = 1;
+        for (const ability of equippedAbilities) {
+            if (!ability?.abilityHrid) continue;
+
+            const isSpecial = clientData?.abilityDetailMap?.[ability.abilityHrid]?.isSpecialAbility || false;
+            const abilityDTO = {
+                hrid: ability.abilityHrid,
+                level: ability.level || 1,
+                triggers: buildTriggerDTOs(ability.abilityHrid),
+            };
+
+            if (isSpecial) {
+                dto.abilities[0] = abilityDTO;
+            } else if (normalAbilityIndex < 5) {
+                dto.abilities[normalAbilityIndex++] = abilityDTO;
+            }
+        }
+
+        // Extract house room levels
+        for (const house of Object.values(characterData.characterHouseRoomMap || {})) {
+            dto.houseRooms[house.houseRoomHrid] = house.level;
+        }
+
+        return dto;
+    }
+
+    /**
+     * Build a player DTO from a cached party member profile.
+     * @param {Object} profile - Profile data with .profile sub-object
+     * @param {Object} clientData - initClientData
+     * @param {Object} battleData - Battle data (optional, for consumable detection)
+     * @returns {Object} Player DTO in engine format
+     */
+    function buildPartyMemberDTO(profile, clientData, battleData) {
+        const itemDetailMap = clientData?.itemDetailMap || {};
+
+        const dto = {
+            staminaLevel: 1,
+            intelligenceLevel: 1,
+            attackLevel: 1,
+            meleeLevel: 1,
+            defenseLevel: 1,
+            rangedLevel: 1,
+            magicLevel: 1,
+            hrid: 'player',
+            debuffOnLevelGap: 0,
+            equipment: {},
+            food: [],
+            drinks: [],
+            abilities: [],
+            houseRooms: {},
+        };
+
+        // Extract skill levels
+        for (const skill of profile.profile?.characterSkills || []) {
+            const skillName = skill.skillHrid?.split('/').pop();
+            const key = skillName + 'Level';
+            if (dto[key] !== undefined) {
+                dto[key] = skill.level || 1;
+            }
+        }
+
+        // Extract equipment from wearableItemMap → keyed by equipmentDetail.type
+        if (profile.profile?.wearableItemMap) {
+            for (const key in profile.profile.wearableItemMap) {
+                const item = profile.profile.wearableItemMap[key];
+                const itemDetail = itemDetailMap[item.itemHrid];
+                if (!itemDetail?.equipmentDetail?.type) continue;
+                dto.equipment[itemDetail.equipmentDetail.type] = {
+                    hrid: item.itemHrid,
+                    enhancementLevel: item.enhancementLevel || 0,
+                };
+            }
+        }
+
+        // Try to get consumables from battle data first
+        let battlePlayer = null;
+        if (battleData?.players) {
+            battlePlayer = battleData.players.find((p) => p.character?.id === profile.characterID);
+        }
+        // Build trigger map — prefer battle data triggers over profile triggers (battle data is fresher)
+        const triggerMap = {
+            ...(battlePlayer?.abilityCombatTriggersMap || profile.profile?.abilityCombatTriggersMap || {}),
+            ...(battlePlayer?.consumableCombatTriggersMap || profile.profile?.consumableCombatTriggersMap || {}),
+        };
+
+        const buildTriggerDTOs = (hrid) => {
+            const rawTriggers = triggerMap[hrid];
+            if (!Array.isArray(rawTriggers)) return null;
+            return rawTriggers.map((t) => ({
+                dependencyHrid: t.dependencyHrid,
+                conditionHrid: t.conditionHrid,
+                comparatorHrid: t.comparatorHrid,
+                value: t.value || 0,
+            }));
+        };
+
+        // Consumables: prefer battle data, fall back to trigger map keys
+        if (battlePlayer?.combatConsumables) {
+            let foodIndex = 0;
+            let drinkIndex = 0;
+            for (const consumable of battlePlayer.combatConsumables) {
+                const hrid = consumable.itemHrid;
+                const isDrink =
+                    hrid.includes('/drinks/') ||
+                    hrid.includes('coffee') ||
+                    itemDetailMap[hrid]?.categoryHrid?.includes('drink');
+                if (isDrink && drinkIndex < 3) {
+                    dto.drinks.push({ hrid, triggers: buildTriggerDTOs(hrid) });
+                    drinkIndex++;
+                } else if (!isDrink && foodIndex < 3) {
+                    dto.food.push({ hrid, triggers: buildTriggerDTOs(hrid) });
+                    foodIndex++;
+                }
+            }
+        } else {
+            // Fall back to trigger map keys for consumable HRIDs
+            const consumableHrids = Object.keys(profile.profile?.consumableCombatTriggersMap || {});
+            let foodIndex = 0;
+            let drinkIndex = 0;
+            for (const hrid of consumableHrids) {
+                const isDrink =
+                    hrid.includes('/drinks/') ||
+                    hrid.includes('coffee') ||
+                    itemDetailMap[hrid]?.categoryHrid?.includes('drink');
+                if (isDrink && drinkIndex < 3) {
+                    dto.drinks.push({ hrid, triggers: buildTriggerDTOs(hrid) });
+                    drinkIndex++;
+                } else if (!isDrink && foodIndex < 3) {
+                    dto.food.push({ hrid, triggers: buildTriggerDTOs(hrid) });
+                    foodIndex++;
+                }
+            }
+        }
+
+        // Pad remaining slots with null
+        while (dto.food.length < 3) dto.food.push(null);
+        while (dto.drinks.length < 3) dto.drinks.push(null);
+
+        // Extract abilities
+        for (let i = 0; i < 5; i++) dto.abilities.push(null);
+        let normalAbilityIndex = 1;
+        const equippedAbilities = profile.profile?.equippedAbilities || [];
+        for (const ability of equippedAbilities) {
+            if (!ability?.abilityHrid) continue;
+            const isSpecial = clientData?.abilityDetailMap?.[ability.abilityHrid]?.isSpecialAbility || false;
+            const abilityDTO = {
+                hrid: ability.abilityHrid,
+                level: ability.level || 1,
+                triggers: buildTriggerDTOs(ability.abilityHrid),
+            };
+            if (isSpecial) {
+                dto.abilities[0] = abilityDTO;
+            } else if (normalAbilityIndex < 5) {
+                dto.abilities[normalAbilityIndex++] = abilityDTO;
+            }
+        }
+
+        // House rooms
+        if (profile.profile?.characterHouseRoomMap) {
+            for (const house of Object.values(profile.profile.characterHouseRoomMap)) {
+                dto.houseRooms[house.houseRoomHrid] = house.level;
+            }
+        }
+
+        return dto;
+    }
+
+    /**
+     * Calculate combat level for level gap debuff.
+     * @param {Object} dto - Player DTO
+     * @returns {number} Combat level
+     */
+    function calcCombatLevel(dto) {
+        const base = (dto.staminaLevel + dto.intelligenceLevel + dto.defenseLevel) / 4;
+        const melee = (dto.attackLevel + dto.meleeLevel) / 2;
+        const ranged = (dto.attackLevel + dto.rangedLevel) / 2;
+        const magic = (dto.attackLevel + dto.magicLevel) / 2;
+        return Math.floor(base + Math.max(melee, ranged, magic));
+    }
+
+    /**
+     * Build player DTOs for all party members (or solo if not in a party).
+     * Auto-detects party from characterData and loads cached profiles.
+     * @returns {Promise<{players: Array, playerNames: Array<string>, missingMembers: Array<string>}>}
+     */
+    async function buildAllPlayerDTOs() {
+        const characterData = dataManager.characterData;
+        const clientData = dataManager.getInitClientData();
+
+        if (!characterData) {
+            return { players: [], playerInfo: [], selfHrid: 'player1', missingMembers: [] };
+        }
+
+        const hasParty = characterData.partyInfo?.partySlotMap;
+
+        if (!hasParty) {
+            // Solo mode
+            const selfDTO = buildPlayerDTO();
+            if (!selfDTO) return { players: [], playerInfo: [], selfHrid: 'player1', missingMembers: [] };
+            return {
+                players: [selfDTO],
+                playerInfo: [{ hrid: selfDTO.hrid, name: characterData.character?.name || 'Player 1' }],
+                selfHrid: selfDTO.hrid,
+                missingMembers: [],
+            };
+        }
+
+        // Party mode — load profile list from storage
+        let profileList = [];
+        try {
+            const hasScriptManager = typeof GM_info !== 'undefined';
+            if (hasScriptManager) {
+                const data = await webSocketHook.loadFromStorage('toolasha_profile_list', '[]');
+                profileList = JSON.parse(data);
+            }
+        } catch (error) {
+            console.error('[CombatSimAdapter] Failed to load profile list:', error);
+        }
+
+        // Get battle data for consumable detection
+        let battleData = null;
+        try {
+            const hasScriptManager = typeof GM_info !== 'undefined';
+            if (hasScriptManager) {
+                const data = await webSocketHook.loadFromStorage('toolasha_new_battle', null);
+                if (data) battleData = JSON.parse(data);
+            } else {
+                battleData = dataManager.battleData;
+            }
+        } catch (error) {
+            console.error('[CombatSimAdapter] Failed to load battle data:', error);
+        }
+
+        const players = [];
+        const playerNames = [];
+        const missingMembers = [];
+        let selfHrid = null;
+        let slotIndex = 1;
+
+        for (const member of Object.values(characterData.partyInfo.partySlotMap)) {
+            if (!member.characterID) continue;
+
+            if (member.characterID === characterData.character.id) {
+                // Self
+                const selfDTO = buildPlayerDTO();
+                if (selfDTO) {
+                    selfDTO.hrid = 'player' + slotIndex;
+                    selfHrid = selfDTO.hrid;
+                    players.push(selfDTO);
+                    playerNames.push(characterData.character.name || 'Player ' + slotIndex);
+                }
+            } else {
+                // Party member — try profile list, then memory cache
+                let profile = profileList.find((p) => p.characterID === member.characterID);
+                if (!profile) {
+                    const cached = profileManager_js.getCurrentProfile();
+                    if (cached?.characterID === member.characterID) {
+                        profile = cached;
+                    }
+                }
+
+                if (profile) {
+                    const memberDTO = buildPartyMemberDTO(profile, clientData, battleData);
+                    memberDTO.hrid = 'player' + slotIndex;
+                    players.push(memberDTO);
+                    playerNames.push(profile.characterName || 'Player ' + slotIndex);
+                } else {
+                    missingMembers.push(member.characterName || 'Unknown');
+                }
+            }
+            slotIndex++;
+        }
+
+        // Calculate level gap debuff
+        if (players.length > 1) {
+            let maxCombatLevel = 0;
+            const levels = players.map((p) => {
+                const level = calcCombatLevel(p);
+                maxCombatLevel = Math.max(maxCombatLevel, level);
+                return level;
+            });
+
+            for (let i = 0; i < players.length; i++) {
+                const ratio = maxCombatLevel / levels[i];
+                if (ratio > 1.2) {
+                    const maxDebuff = 0.9;
+                    const levelPercent = Math.floor((ratio - 1.2) * 100) / 100;
+                    players[i].debuffOnLevelGap = -1 * Math.min(maxDebuff, 3 * levelPercent);
+                } else {
+                    players[i].debuffOnLevelGap = 0;
+                }
+            }
+        }
+
+        // Build playerInfo: hrid → name mapping in player order, for tab rendering
+        const playerInfo = players.map((p, i) => ({ hrid: p.hrid, name: playerNames[i] }));
+
+        return { players, playerInfo, selfHrid: selfHrid || players[0]?.hrid || 'player1', missingMembers };
+    }
+
+    /**
+     * Extract community buff levels from characterData for the simulation.
+     * @returns {{comExp: number, comDrop: number}} Community buff levels (0 if not active)
+     */
+    function getCommunityBuffs() {
+        const mooPassBuffs = dataManager.getMooPassBuffs();
+        return {
+            mooPass: mooPassBuffs && mooPassBuffs.length > 0,
+            comExp: dataManager.getCommunityBuffLevel('/community_buff_types/experience') || 0,
+            comDrop: dataManager.getCommunityBuffLevel('/community_buff_types/combat_drop_quantity') || 0,
+        };
+    }
+
+    /**
+     * Apply a named loadout snapshot to a player DTO (mutates dto in place).
+     * Extracted from CombatSimUI._applyLoadoutToDTO so both the sim UI and task display can use it.
+     * @param {Object} dto - Player DTO to mutate
+     * @param {string} snapshotName - Loadout snapshot name
+     * @param {Object} gameData - Game data payload from buildGameDataPayload()
+     * @returns {boolean} True if snapshot was found and applied, false otherwise
+     */
+    function applyLoadoutSnapshotToDTO(dto, snapshotName, gameData) {
+        const snapshots = loadoutSnapshot.getAllSnapshots();
+        const snapshot = snapshots.find((s) => s.name === snapshotName);
+        if (!snapshot) return false;
+
+        const itemDetailMap = gameData.itemDetailMap || {};
+        const abilityDetailMap = gameData.abilityDetailMap || {};
+
+        // Convert equipment: snapshot uses itemHrid, DTO keys by equipmentDetail.type
+        const newEquipment = {};
+        for (const equip of snapshot.equipment || []) {
+            const itemDetail = itemDetailMap[equip.itemHrid];
+            const equipType = itemDetail?.equipmentDetail?.type;
+            if (equipType) {
+                newEquipment[equipType] = {
+                    hrid: equip.itemHrid,
+                    enhancementLevel: equip.enhancementLevel || 0,
+                };
+            }
+        }
+        dto.equipment = newEquipment;
+
+        // Ability levels come from current character (not the snapshot)
+        const characterData = dataManager.characterData;
+        const currentAbilityLevels = {};
+        for (const ability of characterData?.combatUnit?.combatAbilities || []) {
+            if (ability?.abilityHrid) {
+                currentAbilityLevels[ability.abilityHrid] = ability.level || 1;
+            }
+        }
+
+        const triggerMap = {
+            ...(snapshot.abilityCombatTriggersMap || {}),
+            ...(snapshot.consumableCombatTriggersMap || {}),
+        };
+
+        const buildTriggers = (hrid) => {
+            const rawTriggers = triggerMap[hrid];
+            if (!Array.isArray(rawTriggers)) return [];
+            return rawTriggers.map((t) => ({
+                dependencyHrid: t.dependencyHrid,
+                conditionHrid: t.conditionHrid,
+                comparatorHrid: t.comparatorHrid,
+                value: t.value || 0,
+            }));
+        };
+
+        // Build abilities array (5 slots: 0=special, 1-4=normal)
+        dto.abilities = [null, null, null, null, null];
+        let normalAbilityIndex = 1;
+        for (const ab of snapshot.abilities || []) {
+            if (!ab.abilityHrid) continue;
+            const isSpecial = abilityDetailMap[ab.abilityHrid]?.isSpecialAbility || false;
+            const abilityDTO = {
+                hrid: ab.abilityHrid,
+                level: currentAbilityLevels[ab.abilityHrid] || 1,
+                triggers: buildTriggers(ab.abilityHrid),
+            };
+            if (isSpecial) {
+                dto.abilities[0] = abilityDTO;
+            } else if (normalAbilityIndex < 5) {
+                dto.abilities[normalAbilityIndex++] = abilityDTO;
+            }
+        }
+
+        // Convert food (3 slots)
+        dto.food = [];
+        for (let i = 0; i < 3; i++) {
+            const foodItem = snapshot.food?.[i];
+            if (foodItem?.itemHrid) {
+                dto.food.push({ hrid: foodItem.itemHrid, triggers: buildTriggers(foodItem.itemHrid) });
+            } else {
+                dto.food.push(null);
+            }
+        }
+
+        // Convert drinks (3 slots)
+        dto.drinks = [];
+        for (let i = 0; i < 3; i++) {
+            const drinkItem = snapshot.drinks?.[i];
+            if (drinkItem?.itemHrid) {
+                dto.drinks.push({ hrid: drinkItem.itemHrid, triggers: buildTriggers(drinkItem.itemHrid) });
+            } else {
+                dto.drinks.push(null);
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Calculate expected drops from simulation results for a specific player.
+     * Uses deterministic expected-value math (no RNG rolls).
+     * @param {Object} simResult - SimResult from the engine
+     * @param {Object} gameData - Game data maps
+     * @param {string} [playerHrid='player1'] - Which player's drop multipliers to use
+     * @returns {Map<string, number>} itemHrid → expected total drop count
+     */
+    function calculateExpectedDrops(simResult, gameData, playerHrid = 'player1') {
+        const combatMonsterDetailMap = gameData.combatMonsterDetailMap;
+        const dropRateMultiplier = simResult.dropRateMultiplier[playerHrid] || 1;
+        const rareFindMultiplier = simResult.rareFindMultiplier?.[playerHrid] || 1;
+        const combatDropQuantity = simResult.combatDropQuantity?.[playerHrid] || 0;
+        const debuffOnLevelGap = simResult.debuffOnLevelGap?.[playerHrid] || 0;
+        const numberOfPlayers = simResult.numberOfPlayers || 1;
+        const difficultyTier = simResult.difficultyTier || 0;
+
+        const totalDropMap = new Map();
+
+        if (simResult.isDungeon) {
+            // Dungeons: only completion rewards, no per-monster drops
+            if (simResult.dungeonsCompleted > 0) {
+                const zoneHrid = simResult.zoneName;
+                const actionDetailMap = gameData.actionDetailMap || {};
+                const actionDetail = actionDetailMap[zoneHrid];
+                const rewardDropTable = actionDetail?.combatZoneInfo?.dungeonInfo?.rewardDropTable;
+
+                if (rewardDropTable) {
+                    for (const drop of rewardDropTable) {
+                        const baseRate = drop.dropRate + (drop.dropRatePerDifficultyTier ?? 0) * difficultyTier;
+                        const adjustedRate = Math.min(1.0, Math.max(0, baseRate));
+                        if (adjustedRate <= 0) continue;
+
+                        const avgCount = (drop.minCount + drop.maxCount) / 2;
+                        const expected = simResult.dungeonsCompleted * adjustedRate * avgCount;
+
+                        totalDropMap.set(drop.itemHrid, (totalDropMap.get(drop.itemHrid) || 0) + expected);
+                    }
+                }
+            }
+        } else {
+            // Regular zones: per-monster drops from kill counts
+            const monsters = Object.keys(simResult.deaths).filter((hrid) => !hrid.startsWith('player'));
+
+            for (const monsterHrid of monsters) {
+                const monsterData = combatMonsterDetailMap[monsterHrid];
+                if (!monsterData) continue;
+
+                const killCount = simResult.deaths[monsterHrid];
+
+                // Regular drops
+                if (monsterData.dropTable) {
+                    for (const drop of monsterData.dropTable) {
+                        if (drop.minDifficultyTier > difficultyTier) continue;
+
+                        const tierMultiplier = 1.0 + 0.1 * difficultyTier;
+                        const baseRate = drop.dropRate + (drop.dropRatePerDifficultyTier ?? 0) * difficultyTier;
+                        const adjustedRate = Math.min(1.0, tierMultiplier * baseRate * dropRateMultiplier);
+                        if (adjustedRate <= 0) continue;
+
+                        const avgCount = (drop.minCount + drop.maxCount) / 2;
+                        const expected =
+                            (killCount * adjustedRate * avgCount * (1 + debuffOnLevelGap) * (1 + combatDropQuantity)) /
+                            numberOfPlayers;
+
+                        totalDropMap.set(drop.itemHrid, (totalDropMap.get(drop.itemHrid) || 0) + expected);
+                    }
+                }
+
+                // Rare drops
+                if (monsterData.rareDropTable) {
+                    for (const drop of monsterData.rareDropTable) {
+                        if (drop.minDifficultyTier > difficultyTier) continue;
+
+                        const adjustedRate = drop.dropRate * rareFindMultiplier;
+                        const avgCount = (drop.minCount + (drop.maxCount ?? drop.minCount)) / 2;
+                        const expected =
+                            (killCount * adjustedRate * avgCount * (1 + debuffOnLevelGap) * (1 + combatDropQuantity)) /
+                            numberOfPlayers;
+
+                        totalDropMap.set(drop.itemHrid, (totalDropMap.get(drop.itemHrid) || 0) + expected);
+                    }
+                }
+            }
+        }
+
+        return totalDropMap;
+    }
+
+    /**
+     * Get the sell price for an item based on the global pricing mode.
+     * @param {Object|null} priceData - { bid, ask } from marketAPI.getPrice()
+     * @returns {number}
+     */
+    function getSellPrice(priceData) {
+        if (!priceData) return 0;
+        const mode = config.getSettingValue('profitCalc_pricingMode', 'hybrid');
+        if (mode === 'conservative' || mode === 'patientBuy') {
+            return priceData.bid > 0 ? priceData.bid : 0;
+        }
+        return priceData.ask > 0 ? priceData.ask : 0;
+    }
+
+    /**
+     * Get the buy price for an item based on the global pricing mode.
+     * @param {Object|null} priceData - { bid, ask } from marketAPI.getPrice()
+     * @returns {number}
+     */
+    function getBuyPrice(priceData) {
+        if (!priceData) return 0;
+        const mode = config.getSettingValue('profitCalc_pricingMode', 'hybrid');
+        if (mode === 'optimistic' || mode === 'patientBuy') {
+            return priceData.bid > 0 ? priceData.bid : 0;
+        }
+        return priceData.ask > 0 ? priceData.ask : 0;
+    }
+
+    /**
+     * Calculate revenue and consumable costs from a sim result.
+     * Respects the user's profitCalc_pricingMode setting.
+     * @param {Object} simResult - SimResult from runSimulation()
+     * @param {Object} gameData - Game data payload from buildGameDataPayload()
+     * @param {string} playerHrid - Player HRID to read drop multipliers and consumables for
+     * @param {number} hours - Number of hours simulated
+     * @returns {{ revenuePerHour: number, costPerHour: number, netPerHour: number,
+     *             dropEntries: Array, consumableEntries: Array }}
+     */
+    function calculateSimRevenue(simResult, gameData, playerHrid, hours) {
+        let revenuePerHour = 0;
+        const dropEntries = [];
+
+        const dropMap = calculateExpectedDrops(simResult, gameData, playerHrid);
+        for (const [itemHrid, total] of dropMap.entries()) {
+            if (total <= 0) continue;
+            let unitValue = itemHrid === '/items/coin' ? 1 : getSellPrice(marketAPI.getPrice(itemHrid));
+            if (unitValue === 0) {
+                const evData = expectedValueCalculator.calculateExpectedValue(itemHrid);
+                if (evData?.expectedValue > 0) unitValue = evData.expectedValue;
+            }
+            const perHour = (total / hours) * unitValue;
+            revenuePerHour += perHour;
+            if (unitValue > 0) {
+                const itemName = dataManager.getItemDetails(itemHrid)?.name || itemHrid.split('/').pop();
+                dropEntries.push({ name: itemName, countPerHour: total / hours, unitValue, totalValue: perHour });
+            }
+        }
+        dropEntries.sort((a, b) => b.totalValue - a.totalValue);
+
+        let costPerHour = 0;
+        const consumableEntries = [];
+        const consumablesUsed = simResult.consumablesUsed?.[playerHrid] || {};
+        for (const [itemHrid, count] of Object.entries(consumablesUsed)) {
+            const unitCost = getBuyPrice(marketAPI.getPrice(itemHrid));
+            const perHour = (count / hours) * unitCost;
+            costPerHour += perHour;
+            if (unitCost > 0) {
+                const itemName = dataManager.getItemDetails(itemHrid)?.name || itemHrid.split('/').pop();
+                consumableEntries.push({ name: itemName, countPerHour: count / hours, unitCost, totalCost: perHour });
+            }
+        }
+
+        return {
+            revenuePerHour,
+            costPerHour,
+            netPerHour: revenuePerHour - costPerHour,
+            dropEntries,
+            consumableEntries,
+        };
+    }
+
     /**
      * Task Profit Display
      * Shows profit calculation on task cards
@@ -6478,17 +7870,24 @@ ${hideRules}
                 // Calculate profit
                 const profitData = await calculateTaskProfit(taskData);
 
-                // Don't show anything for combat tasks, but mark them so we detect rerolls
+                // Show combat estimate UI for combat tasks
                 if (profitData === null) {
-                    // Add hidden marker for combat tasks to enable reroll detection
+                    // Hidden marker for reroll detection (still needed)
                     const combatMarker = document.createElement('div');
                     combatMarker.className = 'mwi-task-profit';
                     combatMarker.style.display = 'none';
                     combatMarker.dataset.taskKey = `${taskData.description}|${taskData.quantity}`;
 
+                    // Visible estimate container
+                    const estimateContainer = document.createElement('div');
+                    estimateContainer.className = 'mwi-task-profit';
+                    estimateContainer.style.cssText = 'margin-top: 4px; font-size: 0.75rem;';
+                    this._renderCombatEstimateConfig(estimateContainer, taskData);
+
                     const actionNode = taskNode.querySelector(selectors_js.GAME.TASK_ACTION);
                     if (actionNode) {
                         actionNode.appendChild(combatMarker);
+                        actionNode.appendChild(estimateContainer);
                     }
                     return;
                 }
@@ -6607,6 +8006,286 @@ ${hideRules}
             }
 
             return parseFloat(text) || 0;
+        }
+
+        /**
+         * Render the pre-run config state for the combat task estimate.
+         * Shows a loadout dropdown and an "Estimate" button.
+         * @param {Element} container - Container element to render into
+         * @param {Object} taskData - Parsed task data
+         * @private
+         */
+        _renderCombatEstimateConfig(container, taskData) {
+            container.innerHTML = '';
+            const snapshots = loadoutSnapshot
+                .getAllSnapshots()
+                .filter((s) => !s.actionTypeHrid || s.actionTypeHrid === '/action_types/combat');
+
+            let html = '<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">';
+            html +=
+                '<select class="mwi-combat-est-loadout" style="font-size:11px; background:#1a1a1a; color:#ccc; border:1px solid #444; border-radius:3px; padding:2px 4px;">';
+            html += '<option value="">— Current Gear —</option>';
+            for (const s of snapshots) {
+                html += `<option value="${s.name}">${s.name}</option>`;
+            }
+            html += '</select>';
+            html +=
+                '<button class="mwi-combat-est-btn" style="font-size:11px; padding:2px 8px; background:#1a3a5c; color:#4a9eff; border:1px solid #4a9eff44; border-radius:3px; cursor:pointer;">⚔ Estimate</button>';
+            html += '</div>';
+            container.innerHTML = html;
+
+            container.querySelector('.mwi-combat-est-btn').addEventListener('click', () => {
+                const loadoutName = container.querySelector('.mwi-combat-est-loadout').value;
+                this._runCombatSimEstimate(container, taskData, loadoutName);
+            });
+        }
+
+        /**
+         * Run the combat sim to estimate task completion time.
+         * @param {Element} container - Container element to render into
+         * @param {Object} taskData - Parsed task data
+         * @param {string} loadoutName - Loadout snapshot name (empty = current gear)
+         * @private
+         */
+        async _runCombatSimEstimate(container, taskData, loadoutName) {
+            // Extract monster name from "Defeat - Monster Name" description
+            const match = taskData.description.match(/^Defeat\s*-\s*(.+)$/i);
+            const monsterName = match?.[1]?.trim();
+            const monsterHrid = monsterName ? dataManager.getMonsterHridFromName(monsterName) : null;
+            if (!monsterHrid) {
+                container.innerHTML = '<span style="color:#f87171; font-size:11px;">Could not identify monster.</span>';
+                return;
+            }
+
+            const zoneHrid = dataManager.getCombatZoneForMonster(monsterHrid);
+            if (!zoneHrid) {
+                container.innerHTML = '<span style="color:#f87171; font-size:11px;">No zone found for monster.</span>';
+                return;
+            }
+
+            container.innerHTML = '<span style="color:#888; font-size:11px;">⏳ Simulating…</span>';
+
+            try {
+                const gameData = buildGameDataPayload();
+                if (!gameData) throw new Error('No game data');
+
+                const { players } = await buildAllPlayerDTOs();
+                if (!players.length) throw new Error('No player data');
+
+                if (loadoutName) {
+                    applyLoadoutSnapshotToDTO(players[0], loadoutName, gameData);
+                }
+
+                // Single-monster mode: filter zone spawn table to only the target monster.
+                // Preserve all fields from the real spawn entry (rate, strength, difficultyTier, etc.)
+                // so the sim engine's weighted-selection logic works correctly.
+                const zoneAction = gameData.actionDetailMap[zoneHrid];
+                const allSpawns = zoneAction.combatZoneInfo?.fightInfo?.randomSpawnInfo?.spawns || [];
+                const monsterSpawn = allSpawns.find((s) => s.combatMonsterHrid === monsterHrid) || {
+                    combatMonsterHrid: monsterHrid,
+                    rate: 1,
+                    strength: 1,
+                    difficultyTier: 0,
+                };
+                const filteredGameData = {
+                    ...gameData,
+                    actionDetailMap: {
+                        ...gameData.actionDetailMap,
+                        [zoneHrid]: {
+                            ...zoneAction,
+                            combatZoneInfo: {
+                                ...zoneAction.combatZoneInfo,
+                                fightInfo: {
+                                    ...zoneAction.combatZoneInfo.fightInfo,
+                                    randomSpawnInfo: {
+                                        ...zoneAction.combatZoneInfo.fightInfo.randomSpawnInfo,
+                                        spawns: [monsterSpawn],
+                                    },
+                                    bossSpawns: [],
+                                },
+                            },
+                        },
+                    },
+                };
+
+                const SIM_HOURS = 1;
+                const simResult = await runSimulation({
+                    gameData: filteredGameData,
+                    playerDTOs: players,
+                    zoneHrid,
+                    difficultyTier: 0,
+                    hours: SIM_HOURS,
+                    communityBuffs: getCommunityBuffs(),
+                });
+
+                const kills = simResult.deaths?.[monsterHrid] ?? 0;
+                const killsPerHour = Math.round(kills / SIM_HOURS);
+                const remaining = Math.max((taskData.quantity ?? 0) - (taskData.currentProgress ?? 0), 0);
+                const completionSeconds = killsPerHour > 0 ? Math.round((remaining / killsPerHour) * 3600) : null;
+                const timeEstimate = completionSeconds !== null ? formatters_js.timeReadable(completionSeconds) : '???';
+
+                const playerHrid = players[0]?.hrid || 'player1';
+                const { netPerHour, dropEntries, consumableEntries } = calculateSimRevenue(
+                    simResult,
+                    filteredGameData,
+                    playerHrid,
+                    SIM_HOURS
+                );
+
+                // Task completion rewards (one-time: coins + token value + Purple's Gift)
+                const rewardValue = calculateTaskRewardValue(taskData.coinReward, taskData.taskTokenReward);
+
+                this._renderCombatEstimateResult(
+                    container,
+                    taskData,
+                    monsterName,
+                    killsPerHour,
+                    timeEstimate,
+                    completionSeconds,
+                    loadoutName,
+                    netPerHour,
+                    rewardValue,
+                    dropEntries,
+                    consumableEntries
+                );
+            } catch (e) {
+                console.error('[TaskProfit] Combat estimate failed:', e);
+                container.innerHTML = '<span style="color:#f87171; font-size:11px;">Estimate failed. </span>';
+                const retry = document.createElement('span');
+                retry.textContent = 'Retry';
+                retry.style.cssText = 'color:#4a9eff; cursor:pointer; font-size:11px;';
+                retry.addEventListener('click', () => this._renderCombatEstimateConfig(container, taskData));
+                container.appendChild(retry);
+            }
+        }
+
+        /**
+         * Render the result state after a combat sim estimate completes.
+         * @param {Element} container - Container element to render into
+         * @param {Object} taskData - Parsed task data
+         * @param {string} monsterName - Monster display name
+         * @param {number} killsPerHour - Kills per hour from sim
+         * @param {string} timeEstimate - Formatted time estimate string
+         * @param {number|null} completionSeconds - Seconds to completion (for task sorter)
+         * @param {string} loadoutName - Loadout name used (empty = current gear)
+         * @param {number} netGoldPerHour - Net gold/hr (drops - consumable costs)
+         * @param {Array} dropEntries - Array of {name, count, unitValue, totalValue} per drop
+         * @param {Array} consumableEntries - Array of {name, count, unitCost, totalCost} per consumable
+         * @private
+         */
+        _renderCombatEstimateResult(
+            container,
+            taskData,
+            monsterName,
+            killsPerHour,
+            timeEstimate,
+            completionSeconds,
+            loadoutName,
+            netPerHour,
+            rewardValue,
+            dropEntries,
+            consumableEntries
+        ) {
+            container.innerHTML = '';
+            if (completionSeconds !== null) {
+                container.dataset.completionSeconds = completionSeconds;
+            }
+
+            // Convert per-hour rates to totals for the task duration (matching skilling format)
+            const completionHours = completionSeconds > 0 ? completionSeconds / 3600 : 0;
+            const totalDropValue = dropEntries.reduce((s, d) => s + d.totalValue * completionHours, 0);
+            const totalConsumableCost = consumableEntries.reduce((s, c) => s + c.totalCost * completionHours, 0);
+            const totalProfit = Math.round(totalDropValue - totalConsumableCost + rewardValue.total);
+
+            const profitColor = totalProfit >= 0 ? '#4ade80' : config.COLOR_LOSS;
+
+            const mainLine = document.createElement('div');
+            mainLine.style.cssText = `color: ${profitColor}; cursor: pointer; user-select: none;`;
+            mainLine.innerHTML = `⚔ ${formatters_js.formatKMB(totalProfit)} | <span style="display:inline-block; margin-right:0.25em;">⏱</span> ${timeEstimate} ▸`;
+
+            const breakdown = document.createElement('div');
+            breakdown.className = 'mwi-task-profit-breakdown';
+            breakdown.style.cssText = `
+            display: none;
+            margin-top: 6px;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+            font-size: 0.7rem;
+            color: #ddd;
+        `;
+
+            const remaining = Math.max((taskData.quantity ?? 0) - (taskData.currentProgress ?? 0), 0);
+            const lines = [];
+            lines.push('<div style="font-weight: bold; margin-bottom: 4px;">Task Profit Breakdown</div>');
+            lines.push('<div style="border-bottom: 1px solid #555; margin-bottom: 4px;"></div>');
+            lines.push(
+                `<div style="margin-bottom: 2px; color: #aaa;">Monster: ${monsterName} × ${remaining.toLocaleString()} kills (${formatters_js.formatKMB(killsPerHour)}/hr)</div>`
+            );
+            lines.push(`<div style="margin-bottom: 4px; color: #aaa;">Loadout: ${loadoutName || 'Current Gear'}</div>`);
+
+            // Task Rewards — matching skilling section exactly
+            lines.push('<div style="margin-bottom: 4px; color: #aaa;">Task Rewards:</div>');
+            lines.push(`<div style="margin-left: 10px;">Coins: ${formatters_js.formatKMB(rewardValue.coins)}</div>`);
+            if (!rewardValue.error) {
+                lines.push(`<div style="margin-left: 10px;">Task Tokens: ${formatters_js.formatKMB(rewardValue.taskTokens)}</div>`);
+                lines.push(
+                    `<div style="margin-left: 20px; font-size: 0.65rem; color: #888;">(${rewardValue.breakdown.tokensReceived} tokens @ ${formatters_js.formatKMB(Math.round(rewardValue.breakdown.tokenValue))} each)</div>`
+                );
+                lines.push(`<div style="margin-left: 10px;">Purple's Gift: ${formatters_js.formatKMB(rewardValue.purpleGift)}</div>`);
+                lines.push(
+                    `<div style="margin-left: 20px; font-size: 0.65rem; color: #888;">(${formatters_js.formatKMB(Math.round(rewardValue.breakdown.giftPerTask))} per task)</div>`
+                );
+            }
+
+            // Drops — total over task duration
+            if (dropEntries.length > 0) {
+                lines.push(
+                    `<div style="margin-top: 6px; margin-bottom: 4px; color: #aaa;">Drops: ${formatters_js.formatKMB(Math.round(totalDropValue))}</div>`
+                );
+                for (const d of dropEntries.slice(0, 8)) {
+                    const taskCount = d.countPerHour * completionHours;
+                    const taskTotal = d.totalValue * completionHours;
+                    lines.push(
+                        `<div style="margin-left: 10px;">${d.name}: ${taskCount.toFixed(1)} @ ${formatters_js.formatKMB(Math.round(d.unitValue))} = ${formatters_js.formatKMB(Math.round(taskTotal))}</div>`
+                    );
+                }
+            }
+
+            // Consumables — total over task duration
+            if (consumableEntries.length > 0) {
+                lines.push(
+                    `<div style="margin-top: 6px; margin-bottom: 4px; color: #aaa;">Consumables: -${formatters_js.formatKMB(Math.round(totalConsumableCost))}</div>`
+                );
+                for (const c of consumableEntries) {
+                    const taskCount = c.countPerHour * completionHours;
+                    const taskTotal = c.totalCost * completionHours;
+                    lines.push(
+                        `<div style="margin-left: 10px;">${c.name}: ${taskCount.toFixed(1)} @ ${formatters_js.formatKMB(Math.round(c.unitCost))} = -${formatters_js.formatKMB(Math.round(taskTotal))}</div>`
+                    );
+                }
+            }
+
+            breakdown.innerHTML = lines.join('');
+
+            const rerunBtn = document.createElement('button');
+            rerunBtn.textContent = 'Re-run';
+            rerunBtn.style.cssText =
+                'margin-top:6px; font-size:11px; padding:2px 8px; background:#1a3a5c; color:#4a9eff; border:1px solid #4a9eff44; border-radius:3px; cursor:pointer;';
+            rerunBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._renderCombatEstimateConfig(container, taskData);
+            });
+            breakdown.appendChild(rerunBtn);
+
+            mainLine.addEventListener('click', () => {
+                const hidden = breakdown.style.display === 'none';
+                breakdown.style.display = hidden ? 'block' : 'none';
+                mainLine.innerHTML = `⚔ ${formatters_js.formatKMB(totalProfit)} | <span style="display:inline-block; margin-right:0.25em;">⏱</span> ${timeEstimate} ${hidden ? '▾' : '▸'}`;
+            });
+
+            container.appendChild(mainLine);
+            container.appendChild(breakdown);
         }
 
         /**
@@ -9868,8 +11547,10 @@ ${hideRules}
 
             // Update button state
             this.isHighlightActive = false;
-            this.highlightButton.textContent = 'Highlight Task Items';
-            this.highlightButton.style.backgroundColor = '';
+            if (this.highlightButton) {
+                this.highlightButton.textContent = 'Highlight Task Items';
+                this.highlightButton.style.backgroundColor = '';
+            }
         }
 
         /**
@@ -10931,15 +12612,15 @@ ${hideRules}
      */
 
 
-    const STORAGE_KEY_PREFIX$2 = 'taskProtectedHrids';
+    const STORAGE_KEY_PREFIX$1 = 'taskProtectedHrids';
 
     /**
      * Get character-scoped storage key.
      * @returns {string}
      */
-    function getStorageKey$2() {
+    function getStorageKey$1() {
         const charId = dataManager.getCurrentCharacterId() || 'default';
-        return `${STORAGE_KEY_PREFIX$2}_${charId}`;
+        return `${STORAGE_KEY_PREFIX$1}_${charId}`;
     }
 
     class TaskRerollProtection {
@@ -10957,7 +12638,7 @@ ${hideRules}
             this.isInitialized = true;
 
             // Load protected list from storage
-            const saved = await storage.getJSON(getStorageKey$2(), 'settings', []);
+            const saved = await storage.getJSON(getStorageKey$1(), 'settings', []);
             this.protectedHrids = new Set(saved);
 
             // Watch for task cards appearing
@@ -11280,7 +12961,7 @@ ${hideRules}
          * @private
          */
         async _save() {
-            await storage.setJSON(getStorageKey$2(), Array.from(this.protectedHrids), 'settings', true);
+            await storage.setJSON(getStorageKey$1(), Array.from(this.protectedHrids), 'settings', true);
         }
 
         /**
@@ -11834,7 +13515,7 @@ ${hideRules}
      */
 
 
-    const STORE_NAME$1 = 'xpHistory';
+    const STORE_NAME$2 = 'xpHistory';
     const WINDOW_10M$1 = 10 * 60 * 1000;
     const WINDOW_1H$1 = 60 * 60 * 1000;
     const WINDOW_1W$1 = 7 * 24 * 60 * 60 * 1000;
@@ -12052,7 +13733,7 @@ ${hideRules}
             this.characterId = charId;
 
             // Load persisted history for this character
-            const stored = await storage.get(`xpHistory_${charId}`, STORE_NAME$1, {});
+            const stored = await storage.get(`xpHistory_${charId}`, STORE_NAME$2, {});
             this.xpHistory = stored;
 
             const t = data.currentTimestamp ? +new Date(data.currentTimestamp) : Date.now();
@@ -12069,7 +13750,7 @@ ${hideRules}
                 pushXP$1(this.xpHistory[skillId], { t, xp: skillEntry.experience });
             });
 
-            await storage.set(`xpHistory_${charId}`, this.xpHistory, STORE_NAME$1);
+            await storage.set(`xpHistory_${charId}`, this.xpHistory, STORE_NAME$2);
 
             this._updateNavBars();
         }
@@ -12096,7 +13777,7 @@ ${hideRules}
                 pushXP$1(this.xpHistory[skillId], { t, xp: skillEntry.experience });
             });
 
-            storage.set(`xpHistory_${this.characterId}`, this.xpHistory, STORE_NAME$1);
+            storage.set(`xpHistory_${this.characterId}`, this.xpHistory, STORE_NAME$2);
 
             this._updateNavBars();
         }
@@ -14296,241 +15977,6 @@ ${hideRules}
     var settingsCSS = "/* Toolasha Settings UI Styles\n * Modern, compact design\n */\n\n/* CSS Variables */\n:root {\n    --toolasha-accent: #5b8def;\n    --toolasha-accent-hover: #7aa3f3;\n    --toolasha-accent-dim: rgba(91, 141, 239, 0.15);\n    --toolasha-secondary: #8A2BE2;\n    --toolasha-text: rgba(255, 255, 255, 0.9);\n    --toolasha-text-dim: rgba(255, 255, 255, 0.5);\n    --toolasha-bg: rgba(20, 25, 35, 0.6);\n    --toolasha-border: rgba(91, 141, 239, 0.2);\n    --toolasha-toggle-off: rgba(100, 100, 120, 0.4);\n    --toolasha-toggle-on: var(--toolasha-accent);\n}\n\n/* Settings Card Container */\n.toolasha-settings-card {\n    display: flex;\n    flex-direction: column;\n    padding: 12px 16px;\n    font-size: 12px;\n    line-height: 1.3;\n    color: var(--toolasha-text);\n    position: relative;\n    gap: 6px;\n}\n\n/* Top gradient line */\n.toolasha-settings-card::before {\n    display: none;\n}\n\n/* Collapsible Settings Groups */\n.toolasha-settings-group {\n    margin-bottom: 8px;\n}\n\n.toolasha-settings-group-header {\n    cursor: pointer;\n    user-select: none;\n    margin: 10px 0 4px 0;\n    color: var(--toolasha-accent);\n    font-weight: 600;\n    font-size: 13px;\n    display: flex;\n    align-items: center;\n    gap: 6px;\n    border-bottom: 1px solid var(--toolasha-border);\n    padding-bottom: 3px;\n    text-transform: uppercase;\n    letter-spacing: 0.5px;\n    transition: color 0.2s ease;\n}\n\n.toolasha-settings-group-header:hover {\n    color: var(--toolasha-accent-hover);\n}\n\n.toolasha-settings-group-header .collapse-icon {\n    font-size: 10px;\n    transition: transform 0.2s ease;\n}\n\n.toolasha-settings-group.collapsed .collapse-icon {\n    transform: rotate(-90deg);\n}\n\n.toolasha-settings-group-content {\n    max-height: 5000px;\n    overflow: hidden;\n    transition: max-height 0.3s ease-out;\n}\n\n.toolasha-settings-group.collapsed .toolasha-settings-group-content {\n    max-height: 0;\n}\n\n/* Section Headers */\n.toolasha-settings-card h3 {\n    margin: 10px 0 4px 0;\n    color: var(--toolasha-accent);\n    font-weight: 600;\n    font-size: 13px;\n    display: flex;\n    align-items: center;\n    gap: 6px;\n    border-bottom: 1px solid var(--toolasha-border);\n    padding-bottom: 3px;\n    text-transform: uppercase;\n    letter-spacing: 0.5px;\n}\n\n.toolasha-settings-card h3:first-child {\n    margin-top: 0;\n}\n\n.toolasha-settings-card h3 .icon {\n    font-size: 14px;\n}\n\n/* Individual Setting Row */\n.toolasha-setting {\n    display: flex;\n    align-items: center;\n    justify-content: space-between;\n    gap: 10px;\n    margin: 0;\n    padding: 6px 8px;\n    background: var(--toolasha-bg);\n    border: 1px solid var(--toolasha-border);\n    border-radius: 4px;\n    min-height: unset;\n    transition: all 0.2s ease;\n}\n\n.toolasha-setting:hover {\n    background: rgba(30, 35, 45, 0.7);\n    border-color: var(--toolasha-accent);\n}\n\n.toolasha-setting.disabled {\n    /* Visual darkening removed - dependencies still functional but not visually indicated */\n    pointer-events: none;\n}\n\n.toolasha-setting.not-implemented .toolasha-setting-label {\n    color: #ff6b6b;\n}\n\n.toolasha-setting.not-implemented .toolasha-setting-help {\n    color: rgba(255, 107, 107, 0.7);\n}\n\n.toolasha-setting-label {\n    text-align: left;\n    flex: 1;\n    margin-right: 10px;\n    line-height: 1.3;\n    font-size: 12px;\n}\n\n.toolasha-setting-help {\n    display: block;\n    font-size: 10px;\n    color: var(--toolasha-text-dim);\n    margin-top: 2px;\n    font-style: italic;\n}\n\n.toolasha-setting-input {\n    flex-shrink: 0;\n}\n\n/* Modern Toggle Switch */\n.toolasha-switch {\n    position: relative;\n    width: 38px;\n    height: 20px;\n    flex-shrink: 0;\n    display: inline-block;\n}\n\n.toolasha-switch input {\n    opacity: 0;\n    width: 0;\n    height: 0;\n    position: absolute;\n}\n\n.toolasha-slider {\n    position: absolute;\n    top: 0;\n    left: 0;\n    right: 0;\n    bottom: 0;\n    background: var(--toolasha-toggle-off);\n    border-radius: 20px;\n    cursor: pointer;\n    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);\n    border: 2px solid transparent;\n}\n\n.toolasha-slider:before {\n    content: \"\";\n    position: absolute;\n    height: 12px;\n    width: 12px;\n    left: 2px;\n    bottom: 2px;\n    background: white;\n    border-radius: 50%;\n    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);\n    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);\n}\n\n.toolasha-switch input:checked + .toolasha-slider {\n    background: var(--toolasha-toggle-on);\n    border-color: var(--toolasha-accent-hover);\n    box-shadow: 0 0 6px var(--toolasha-accent-dim);\n}\n\n.toolasha-switch input:checked + .toolasha-slider:before {\n    transform: translateX(18px);\n}\n\n.toolasha-switch:hover .toolasha-slider {\n    border-color: var(--toolasha-accent);\n}\n\n/* Text Input */\n.toolasha-text-input {\n    padding: 5px 8px;\n    border: 1px solid var(--toolasha-border);\n    border-radius: 3px;\n    background: rgba(0, 0, 0, 0.3);\n    color: var(--toolasha-text);\n    min-width: 100px;\n    font-size: 12px;\n    transition: all 0.2s ease;\n}\n\n.toolasha-text-input:focus {\n    outline: none;\n    border-color: var(--toolasha-accent);\n    box-shadow: 0 0 0 2px var(--toolasha-accent-dim);\n}\n\n/* Number Input */\n.toolasha-number-input {\n    padding: 5px 8px;\n    border: 1px solid var(--toolasha-border);\n    border-radius: 3px;\n    background: rgba(0, 0, 0, 0.3);\n    color: var(--toolasha-text);\n    min-width: 80px;\n    font-size: 12px;\n    transition: all 0.2s ease;\n}\n\n.toolasha-number-input:focus {\n    outline: none;\n    border-color: var(--toolasha-accent);\n    box-shadow: 0 0 0 2px var(--toolasha-accent-dim);\n}\n\n/* Select Dropdown */\n.toolasha-select-input {\n    padding: 5px 8px;\n    border: 1px solid var(--toolasha-border);\n    border-radius: 3px;\n    background: rgba(0, 0, 0, 0.3);\n    color: var(--toolasha-accent);\n    font-weight: 600;\n    min-width: 150px;\n    cursor: pointer;\n    font-size: 12px;\n    -webkit-appearance: none;\n    -moz-appearance: none;\n    appearance: none;\n    background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20width%3D%2220%22%20height%3D%2220%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M5%207l5%205%205-5z%22%20fill%3D%22%235b8def%22%2F%3E%3C%2Fsvg%3E');\n    background-repeat: no-repeat;\n    background-position: right 6px center;\n    background-size: 14px;\n    padding-right: 28px;\n    transition: all 0.2s ease;\n}\n\n.toolasha-select-input:focus {\n    outline: none;\n    border-color: var(--toolasha-accent);\n    box-shadow: 0 0 0 2px var(--toolasha-accent-dim);\n}\n\n.toolasha-select-input option {\n    background: #1a1a2e;\n    color: var(--toolasha-text);\n    padding: 8px;\n}\n\n/* Utility Buttons Container */\n.toolasha-utility-buttons {\n    display: flex;\n    gap: 8px;\n    margin-top: 12px;\n    padding-top: 10px;\n    border-top: 1px solid var(--toolasha-border);\n    flex-wrap: wrap;\n}\n\n.toolasha-utility-button {\n    background: linear-gradient(135deg, var(--toolasha-secondary), #6A1B9A);\n    border: 1px solid rgba(138, 43, 226, 0.4);\n    color: #ffffff;\n    padding: 6px 12px;\n    border-radius: 4px;\n    font-size: 11px;\n    font-weight: 600;\n    cursor: pointer;\n    transition: all 0.2s ease;\n    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);\n}\n\n.toolasha-utility-button:hover {\n    background: linear-gradient(135deg, #9A4BCF, var(--toolasha-secondary));\n    box-shadow: 0 0 10px rgba(138, 43, 226, 0.3);\n    transform: translateY(-1px);\n}\n\n.toolasha-utility-button:active {\n    transform: translateY(0);\n}\n\n/* Sync button - special styling for prominence */\n.toolasha-sync-button {\n    background: linear-gradient(135deg, #047857, #059669) !important;\n    border: 1px solid rgba(4, 120, 87, 0.4) !important;\n    flex: 1 1 auto; /* Allow it to grow and take more space */\n    min-width: 200px; /* Ensure it's wide enough for the text */\n}\n\n.toolasha-sync-button:hover {\n    background: linear-gradient(135deg, #059669, #10b981) !important;\n    box-shadow: 0 0 10px rgba(16, 185, 129, 0.3) !important;\n}\n\n/* Refresh Notice */\n.toolasha-refresh-notice {\n    background: rgba(255, 152, 0, 0.1);\n    border: 1px solid rgba(255, 152, 0, 0.3);\n    border-radius: 4px;\n    padding: 8px 12px;\n    margin-top: 10px;\n    color: #ffa726;\n    font-size: 11px;\n    display: flex;\n    align-items: center;\n    gap: 8px;\n}\n\n.toolasha-refresh-notice::before {\n    content: \"⚠️\";\n    font-size: 14px;\n}\n\n/* Dependency Indicator */\n.toolasha-setting.has-dependency::before {\n    content: \"↳\";\n    position: absolute;\n    left: -4px;\n    color: var(--toolasha-accent);\n    font-size: 14px;\n    opacity: 0.5;\n}\n\n.toolasha-setting.has-dependency {\n    margin-left: 16px;\n    position: relative;\n}\n\n/* Nested setting collapse icons */\n.setting-collapse-icon {\n    flex-shrink: 0;\n    color: var(--toolasha-accent);\n    opacity: 0.7;\n}\n\n.toolasha-setting.dependents-collapsed .setting-collapse-icon {\n    opacity: 1;\n}\n\n.toolasha-setting-label-container:hover .setting-collapse-icon {\n    opacity: 1;\n}\n\n/* Tab Panel Override (for game's settings panel) */\n.TabPanel_tabPanel__tXMJF#toolasha-settings {\n    display: block !important;\n}\n\n.TabPanel_tabPanel__tXMJF#toolasha-settings.TabPanel_hidden__26UM3 {\n    display: none !important;\n}\n";
 
     /**
-     * Loadout Snapshot
-     *
-     * Listens for `loadouts_updated` WebSocket messages to capture all loadout configurations
-     * (equipment, abilities, consumables, enhancement levels) in real time.
-     *
-     * Stored snapshots are used by profit calculators to apply the correct tool/equipment
-     * bonuses for a skill even when that loadout is not currently equipped.
-     *
-     * Skill matching: the loadout's actionTypeHrid (e.g. "/action_types/brewing") is compared
-     * to the action type of the profit calculation. An "All Skills" loadout (empty actionTypeHrid)
-     * is used as a fallback when no skill-specific snapshot is found.
-     *
-     * Priority: skill default > all skills default > skill non-default > all skills non-default
-     */
-
-
-    const STORAGE_KEY_PREFIX$1 = 'loadout_snapshots';
-
-    /**
-     * Get character-scoped storage key.
-     * @returns {string}
-     */
-    function getStorageKey$1() {
-        const charId = dataManager.getCurrentCharacterId() || 'default';
-        return `${STORAGE_KEY_PREFIX$1}_${charId}`;
-    }
-
-    /**
-     * Parse a wearable hash string into itemLocationHrid, itemHrid, and enhancementLevel.
-     * Format: "characterId::/item_locations/location::/items/item_hrid::enhancementLevel"
-     * Empty string means no item in that slot.
-     * @param {string} itemLocationHrid - The equipment slot key (e.g. "/item_locations/body")
-     * @param {string} wearableHash - The wearable hash value
-     * @returns {{ itemLocationHrid: string, itemHrid: string, enhancementLevel: number }|null}
-     */
-    function parseWearable(itemLocationHrid, wearableHash) {
-        if (!wearableHash) return null;
-
-        const parts = wearableHash.split('::');
-        const itemHrid = parts.find((p) => p.startsWith('/items/'));
-        if (!itemHrid) return null;
-
-        const lastPart = parts[parts.length - 1];
-        const enhancementLevel = !lastPart.startsWith('/') ? parseInt(lastPart, 10) || 0 : 0;
-
-        return { itemLocationHrid, itemHrid, enhancementLevel };
-    }
-
-    /**
-     * Convert a server loadout object into our snapshot format.
-     * @param {Object} loadout - A loadout entry from characterLoadoutMap
-     * @returns {Object} snapshot
-     */
-    function buildSnapshot(loadout) {
-        // Parse equipment from wearableMap
-        const equipment = [];
-        for (const [locationHrid, hash] of Object.entries(loadout.wearableMap || {})) {
-            const parsed = parseWearable(locationHrid, hash);
-            if (parsed) equipment.push(parsed);
-        }
-
-        // Parse drinks
-        const drinks = (loadout.drinkItemHrids || []).map((hrid) => ({
-            itemHrid: hrid || '',
-        }));
-
-        // Parse food
-        const food = (loadout.foodItemHrids || []).map((hrid) => ({
-            itemHrid: hrid || '',
-        }));
-
-        // Parse abilities
-        const abilities = [];
-        for (const [slot, hrid] of Object.entries(loadout.abilityMap || {})) {
-            if (hrid) abilities.push({ abilityHrid: hrid, slot: parseInt(slot, 10) });
-        }
-
-        return {
-            name: loadout.name,
-            actionTypeHrid: loadout.actionTypeHrid || '',
-            isDefault: !!loadout.isDefault,
-            equipment,
-            abilities,
-            food,
-            drinks,
-            abilityCombatTriggersMap: loadout.abilityCombatTriggersMap || {},
-            consumableCombatTriggersMap: loadout.consumableCombatTriggersMap || {},
-            savedAt: Date.now(),
-        };
-    }
-
-    class LoadoutSnapshot {
-        constructor() {
-            this.snapshots = {}; // In-memory cache: { [loadoutName]: snapshot }
-            this.loadoutsUpdatedHandler = null;
-            this.isInitialized = false;
-        }
-
-        async initialize() {
-            if (this.isInitialized) return;
-            this.isInitialized = true;
-
-            // Load existing snapshots into memory
-            this.snapshots = (await storage.getJSON(getStorageKey$1(), 'settings', null)) || {};
-            console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
-
-            // Listen for loadouts_updated WebSocket messages
-            this.loadoutsUpdatedHandler = (data) => this._onLoadoutsUpdated(data);
-            webSocketHook.on('loadouts_updated', this.loadoutsUpdatedHandler);
-        }
-
-        /**
-         * Handle a loadouts_updated WebSocket message.
-         * Replaces all snapshots with the server's current state.
-         * @param {Object} data - The WebSocket message payload
-         */
-        _onLoadoutsUpdated(data) {
-            console.log('[LoadoutSnapshot] loadouts_updated WebSocket message received');
-            const loadoutMap = data.characterLoadoutMap;
-            if (!loadoutMap) {
-                console.log('[LoadoutSnapshot] no characterLoadoutMap in message');
-                return;
-            }
-
-            const newSnapshots = {};
-            for (const [id, loadout] of Object.entries(loadoutMap)) {
-                if (!loadout.name) continue;
-                newSnapshots[id] = buildSnapshot(loadout);
-                console.log(
-                    `[LoadoutSnapshot]   → ${loadout.name} (id=${id}): type=${loadout.actionTypeHrid || 'All Skills'}, default=${loadout.isDefault}`
-                );
-            }
-
-            this.snapshots = newSnapshots;
-            storage.setJSON(getStorageKey$1(), this.snapshots, 'settings');
-            console.log(
-                `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
-                Object.values(newSnapshots).map((s) => s.name)
-            );
-        }
-
-        /**
-         * Find the best snapshot for a given action type.
-         * Priority: skill default > all skills default > skill non-default > all skills non-default
-         * @param {string} actionTypeHrid - e.g. "/action_types/brewing"
-         * @returns {Object|null} snapshot entry or null
-         */
-        _findSnapshot(actionTypeHrid) {
-            if (!config.getSetting('loadoutSnapshot')) return null;
-
-            let skillDefault = null;
-            let allSkillsDefault = null;
-            let skillNonDefault = null;
-            let allSkillsNonDefault = null;
-
-            for (const snapshot of Object.values(this.snapshots)) {
-                if (snapshot.actionTypeHrid === actionTypeHrid) {
-                    if (snapshot.isDefault) {
-                        skillDefault = snapshot;
-                    } else {
-                        skillNonDefault = snapshot;
-                    }
-                } else if (snapshot.actionTypeHrid === '') {
-                    if (snapshot.isDefault) {
-                        allSkillsDefault = snapshot;
-                    } else {
-                        allSkillsNonDefault = snapshot;
-                    }
-                }
-            }
-
-            return skillDefault || allSkillsDefault || skillNonDefault || allSkillsNonDefault || null;
-        }
-
-        /**
-         * Get a Map<itemLocationHrid, item> for the best loadout snapshot matching the given
-         * action type. Returns null if no snapshot exists or the feature is disabled.
-         * The returned Map has the same format as dataManager.getEquipment().
-         * @param {string} actionTypeHrid
-         * @returns {Map<string, Object>|null}
-         */
-        getSnapshotForSkill(actionTypeHrid) {
-            const snapshot = this._findSnapshot(actionTypeHrid);
-            if (!snapshot || !snapshot.equipment?.length) return null;
-            return new Map(snapshot.equipment.map((e) => [e.itemLocationHrid, e]));
-        }
-
-        /**
-         * Get the drink slots array for the best loadout snapshot matching the given
-         * action type. Returns null if no snapshot exists or the feature is disabled.
-         * The returned array has the same format as dataManager.getActionDrinkSlots().
-         * @param {string} actionTypeHrid
-         * @returns {Array<{itemHrid: string}>|null}
-         */
-        getSnapshotDrinksForSkill(actionTypeHrid) {
-            const snapshot = this._findSnapshot(actionTypeHrid);
-            if (!snapshot) return null;
-            // Filter out empty slots so callers get only actual items
-            const filled = (snapshot.drinks || []).filter((d) => d.itemHrid);
-            return filled.length > 0 ? filled : null;
-        }
-
-        /**
-         * Get all saved loadout snapshots as a flat array.
-         * @returns {Array<Object>} Array of snapshot objects
-         */
-        getAllSnapshots() {
-            return Object.values(this.snapshots);
-        }
-
-        /**
-         * Get the name and default status of the saved loadout being used for a given action type.
-         * Returns an object with name and isDefault, or null if no snapshot exists or feature is disabled.
-         * @param {string} actionTypeHrid
-         * @returns {{ name: string, isDefault: boolean }|null}
-         */
-        getSnapshotInfoForSkill(actionTypeHrid) {
-            const snapshot = this._findSnapshot(actionTypeHrid);
-            if (!snapshot) return null;
-            return { name: snapshot.name, isDefault: !!snapshot.isDefault };
-        }
-
-        disable() {
-            if (this.loadoutsUpdatedHandler) {
-                webSocketHook.off('loadouts_updated', this.loadoutsUpdatedHandler);
-                this.loadoutsUpdatedHandler = null;
-            }
-
-            this.isInitialized = false;
-        }
-    }
-
-    const loadoutSnapshot = new LoadoutSnapshot();
-
-    /**
      * Scroll Simulator
      * Manages per-loadout and global default scroll selections for profit/XP simulation.
      *
@@ -15195,7 +16641,7 @@ ${hideRules}
      */
 
 
-    const STORAGE_KEY$3 = 'Toolasha_customPriceOverrides';
+    const STORAGE_KEY$4 = 'Toolasha_customPriceOverrides';
 
     /** @type {Object|null} In-memory cache of overrides */
     let overridesCache = null;
@@ -15206,7 +16652,7 @@ ${hideRules}
      */
     async function loadOverrides() {
         if (overridesCache === null) {
-            overridesCache = (await storage.getJSON(STORAGE_KEY$3, 'settings', {})) || {};
+            overridesCache = (await storage.getJSON(STORAGE_KEY$4, 'settings', {})) || {};
         }
         return overridesCache;
     }
@@ -15259,7 +16705,7 @@ ${hideRules}
         }
 
         overridesCache = overrides;
-        await storage.setJSON(STORAGE_KEY$3, overrides, 'settings', true);
+        await storage.setJSON(STORAGE_KEY$4, overrides, 'settings', true);
     }
 
     /**
@@ -15272,7 +16718,7 @@ ${hideRules}
         const key = `${itemHrid}:${enhancementLevel}`;
         delete overrides[key];
         overridesCache = overrides;
-        await storage.setJSON(STORAGE_KEY$3, overrides, 'settings', true);
+        await storage.setJSON(STORAGE_KEY$4, overrides, 'settings', true);
     }
 
     /**
@@ -18226,9 +19672,9 @@ ${hideRules}
 
 
     const TRANSMUTE_ACTION_HRID = '/actions/alchemy/transmute';
-    const COIN_ITEM_HRID$1 = '/items/coin';
-    const STORAGE_KEY$2 = 'transmuteSessions';
-    const STORAGE_STORE$2 = 'alchemyHistory';
+    const COIN_ITEM_HRID$2 = '/items/coin';
+    const STORAGE_KEY$3 = 'transmuteSessions';
+    const STORAGE_STORE$3 = 'alchemyHistory';
 
     class TransmuteHistoryTracker {
         constructor() {
@@ -18244,7 +19690,7 @@ ${hideRules}
         }
 
         getStorageKey() {
-            return this.characterId ? `${STORAGE_KEY$2}_${this.characterId}` : STORAGE_KEY$2;
+            return this.characterId ? `${STORAGE_KEY$3}_${this.characterId}` : STORAGE_KEY$3;
         }
 
         /**
@@ -18349,7 +19795,7 @@ ${hideRules}
 
             // Exclude coins and items not in the drop table (incidental drops)
             const nonCoinItems = (data.endCharacterItems || []).filter(
-                (item) => item.itemHrid !== COIN_ITEM_HRID$1 && validOutputHrids.has(item.itemHrid)
+                (item) => item.itemHrid !== COIN_ITEM_HRID$2 && validOutputHrids.has(item.itemHrid)
             );
 
             // The game always sends one entry for the consumed input item.
@@ -18471,7 +19917,7 @@ ${hideRules}
                     sessions.push(this.activeSession);
                 }
 
-                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$2, true);
+                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$3, true);
             } catch (error) {
                 console.error('[TransmuteHistoryTracker] Failed to save session:', error);
             }
@@ -18483,7 +19929,7 @@ ${hideRules}
          */
         async loadSessions() {
             try {
-                return await storage.getJSON(this.getStorageKey(), STORAGE_STORE$2, []);
+                return await storage.getJSON(this.getStorageKey(), STORAGE_STORE$3, []);
             } catch (error) {
                 console.error('[TransmuteHistoryTracker] Failed to load sessions:', error);
                 return [];
@@ -18496,7 +19942,7 @@ ${hideRules}
         async clearHistory() {
             try {
                 this.activeSession = null;
-                await storage.setJSON(this.getStorageKey(), [], STORAGE_STORE$2, true);
+                await storage.setJSON(this.getStorageKey(), [], STORAGE_STORE$3, true);
             } catch (error) {
                 console.error('[TransmuteHistoryTracker] Failed to clear history:', error);
             }
@@ -18508,7 +19954,7 @@ ${hideRules}
          */
         async deleteSessions(sessions) {
             try {
-                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$2, true);
+                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$3, true);
             } catch (error) {
                 console.error('[TransmuteHistoryTracker] Failed to save sessions after delete:', error);
             }
@@ -19940,11 +21386,11 @@ ${hideRules}
 
 
     const COINIFY_ACTION_HRID = '/actions/alchemy/coinify';
-    const COIN_ITEM_HRID = '/items/coin';
+    const COIN_ITEM_HRID$1 = '/items/coin';
     const CATALYST_OF_COINIFICATION_HRID$1 = '/items/catalyst_of_coinification';
-    const PRIME_CATALYST_HRID$1 = '/items/prime_catalyst';
-    const STORAGE_KEY$1 = 'coinifySessions';
-    const STORAGE_STORE$1 = 'alchemyHistory';
+    const PRIME_CATALYST_HRID$3 = '/items/prime_catalyst';
+    const STORAGE_KEY$2 = 'coinifySessions';
+    const STORAGE_STORE$2 = 'alchemyHistory';
 
     class CoinifyHistoryTracker {
         constructor() {
@@ -19960,7 +21406,7 @@ ${hideRules}
         }
 
         getStorageKey() {
-            return this.characterId ? `${STORAGE_KEY$1}_${this.characterId}` : STORAGE_KEY$1;
+            return this.characterId ? `${STORAGE_KEY$2}_${this.characterId}` : STORAGE_KEY$2;
         }
 
         /**
@@ -20062,7 +21508,7 @@ ${hideRules}
             }
 
             // Count successes by number of coin entries (supports efficiency procs)
-            const coinEntries = (data.endCharacterItems || []).filter((item) => item.itemHrid === COIN_ITEM_HRID);
+            const coinEntries = (data.endCharacterItems || []).filter((item) => item.itemHrid === COIN_ITEM_HRID$1);
             const successCount = coinEntries.length;
 
             this.activeSession.totalAttempts += Math.max(successCount, 1);
@@ -20076,7 +21522,7 @@ ${hideRules}
             const secondaryHrid = this.extractItemHrid(action.secondaryItemHash);
             if (secondaryHrid === CATALYST_OF_COINIFICATION_HRID$1) {
                 this.activeSession.catalystOfCoinificationUsed += successCount;
-            } else if (secondaryHrid === PRIME_CATALYST_HRID$1) {
+            } else if (secondaryHrid === PRIME_CATALYST_HRID$3) {
                 this.activeSession.primeCatalystUsed += successCount;
             }
 
@@ -20165,7 +21611,7 @@ ${hideRules}
                     sessions.push(this.activeSession);
                 }
 
-                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$1, true);
+                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$2, true);
             } catch (error) {
                 console.error('[CoinifyHistoryTracker] Failed to save session:', error);
             }
@@ -20177,7 +21623,7 @@ ${hideRules}
          */
         async loadSessions() {
             try {
-                return await storage.getJSON(this.getStorageKey(), STORAGE_STORE$1, []);
+                return await storage.getJSON(this.getStorageKey(), STORAGE_STORE$2, []);
             } catch (error) {
                 console.error('[CoinifyHistoryTracker] Failed to load sessions:', error);
                 return [];
@@ -20190,7 +21636,7 @@ ${hideRules}
         async clearHistory() {
             try {
                 this.activeSession = null;
-                await storage.setJSON(this.getStorageKey(), [], STORAGE_STORE$1, true);
+                await storage.setJSON(this.getStorageKey(), [], STORAGE_STORE$2, true);
             } catch (error) {
                 console.error('[CoinifyHistoryTracker] Failed to clear history:', error);
             }
@@ -20202,7 +21648,7 @@ ${hideRules}
          */
         async deleteSessions(sessions) {
             try {
-                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$1, true);
+                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$2, true);
             } catch (error) {
                 console.error('[CoinifyHistoryTracker] Failed to save sessions after delete:', error);
             }
@@ -20269,7 +21715,7 @@ ${hideRules}
 
 
     const CATALYST_OF_COINIFICATION_HRID = '/items/catalyst_of_coinification';
-    const PRIME_CATALYST_HRID = '/items/prime_catalyst';
+    const PRIME_CATALYST_HRID$2 = '/items/prime_catalyst';
 
     class CoinifyHistoryViewer {
         constructor() {
@@ -20701,7 +22147,7 @@ ${hideRules}
                 } else if (isCatalystCol) {
                     // Render icon as header with item name as tooltip
                     const hrid =
-                        col.key === '_catalystOfCoinification' ? CATALYST_OF_COINIFICATION_HRID : PRIME_CATALYST_HRID;
+                        col.key === '_catalystOfCoinification' ? CATALYST_OF_COINIFICATION_HRID : PRIME_CATALYST_HRID$2;
                     labelSpan.title = col.label;
                     labelSpan.style.cursor = 'default';
                     this.appendItemIcon(labelSpan, hrid, 20);
@@ -20824,7 +22270,7 @@ ${hideRules}
                     // Prime Catalyst
                     const pcCell = document.createElement('td');
                     pcCell.style.cssText = 'padding: 6px 10px;';
-                    this.renderCatalystCell(pcCell, PRIME_CATALYST_HRID, session.primeCatalystUsed || 0);
+                    this.renderCatalystCell(pcCell, PRIME_CATALYST_HRID$2, session.primeCatalystUsed || 0);
                     row.appendChild(pcCell);
 
                     // Delete
@@ -21593,6 +23039,1850 @@ ${hideRules}
         name: 'Coinify History Viewer',
         initialize: () => coinifyHistoryViewer.initialize(),
         cleanup: () => coinifyHistoryViewer.disable(),
+    };
+
+    /**
+     * Decompose History Tracker
+     * Records decompose sessions via WebSocket and persists to IndexedDB.
+     *
+     * Session lifecycle:
+     * - Start: actions_updated with actionHrid === '/actions/alchemy/decompose'
+     * - Result: action_completed with same actionHrid
+     * - End: actions_updated with no decompose action, or different input item/enhancement level
+     *
+     * Result detection:
+     * - Success: endCharacterItems contains items listed in the input item's decomposeItems
+     * - Failure: no items from decomposeItems appear in endCharacterItems
+     * - Incidental drops (essences, artisan's crates) are excluded
+     *   because they are not listed in the input item's decomposeItems
+     */
+
+
+    const DECOMPOSE_ACTION_HRID = '/actions/alchemy/decompose';
+    const CATALYST_OF_DECOMPOSITION_HRID$1 = '/items/catalyst_of_decomposition';
+    const PRIME_CATALYST_HRID$1 = '/items/prime_catalyst';
+    const COIN_ITEM_HRID = '/items/coin';
+    const STORAGE_KEY$1 = 'decomposeSessions';
+    const STORAGE_STORE$1 = 'alchemyHistory';
+
+    class DecomposeHistoryTracker {
+        constructor() {
+            this.isInitialized = false;
+            this.characterId = null;
+            this.activeSession = null; // Current in-progress session object
+            this.handlers = {
+                actionsUpdated: (data) => this.handleActionsUpdated(data),
+                actionCompleted: (data) => this.handleActionCompleted(data),
+                initCharacterData: () => this.handleReconnect(),
+                characterSwitched: (data) => this.handleCharacterSwitched(data),
+            };
+        }
+
+        getStorageKey() {
+            return this.characterId ? `${STORAGE_KEY$1}_${this.characterId}` : STORAGE_KEY$1;
+        }
+
+        /**
+         * Initialize the tracker
+         */
+        initialize() {
+            if (this.isInitialized) {
+                return;
+            }
+
+            if (!config.getSetting('alchemy_decomposeHistory')) {
+                return;
+            }
+
+            this.isInitialized = true;
+            this.characterId = dataManager.getCurrentCharacterId();
+
+            webSocketHook.on('actions_updated', this.handlers.actionsUpdated);
+            webSocketHook.on('action_completed', this.handlers.actionCompleted);
+            webSocketHook.on('init_character_data', this.handlers.initCharacterData);
+            dataManager.on('character_switched', this.handlers.characterSwitched);
+        }
+
+        /**
+         * Disable the tracker
+         */
+        disable() {
+            webSocketHook.off('actions_updated', this.handlers.actionsUpdated);
+            webSocketHook.off('action_completed', this.handlers.actionCompleted);
+            webSocketHook.off('init_character_data', this.handlers.initCharacterData);
+            dataManager.off('character_switched', this.handlers.characterSwitched);
+
+            if (this.activeSession) {
+                this.endSession();
+            }
+
+            this.isInitialized = false;
+            this.characterId = null;
+        }
+
+        /**
+         * Handle actions_updated — detect session start or end
+         * @param {Object} data - WebSocket message data
+         */
+        async handleActionsUpdated(data) {
+            const actions = data.endCharacterActions || [];
+            const decomposeAction = actions.find((a) => a.actionHrid === DECOMPOSE_ACTION_HRID);
+
+            if (decomposeAction) {
+                const inputItemHrid = this.extractItemHrid(decomposeAction.primaryItemHash);
+                const enhancementLevel = this.extractEnhancementLevel(decomposeAction.primaryItemHash);
+
+                if (!inputItemHrid) {
+                    return;
+                }
+
+                if (!this.activeSession) {
+                    // No active session — start one
+                    await this.startSession(inputItemHrid, enhancementLevel, Date.now());
+                } else if (
+                    this.activeSession.inputItemHrid !== inputItemHrid ||
+                    this.activeSession.enhancementLevel !== enhancementLevel
+                ) {
+                    // Different item or enhancement level — end current session and start new one
+                    await this.endSession();
+                    await this.startSession(inputItemHrid, enhancementLevel, Date.now());
+                }
+                // Same item and level and active session — nothing to do
+            } else if (this.activeSession) {
+                // No decompose action in the update — end any active session
+                await this.endSession();
+            }
+        }
+
+        /**
+         * Handle action_completed — record one attempt result
+         * @param {Object} data - WebSocket message data
+         */
+        async handleActionCompleted(data) {
+            const action = data.endCharacterAction;
+            if (!action || action.actionHrid !== DECOMPOSE_ACTION_HRID) {
+                return;
+            }
+
+            const inputItemHrid = this.extractItemHrid(action.primaryItemHash);
+            const enhancementLevel = this.extractEnhancementLevel(action.primaryItemHash);
+
+            if (!inputItemHrid) {
+                return;
+            }
+
+            // Ensure we have an active session for this item and level
+            if (
+                !this.activeSession ||
+                this.activeSession.inputItemHrid !== inputItemHrid ||
+                this.activeSession.enhancementLevel !== enhancementLevel
+            ) {
+                await this.startSession(inputItemHrid, enhancementLevel, Date.now());
+            }
+
+            const itemDetails = dataManager.getItemDetails(inputItemHrid);
+            const bulkMultiplier = itemDetails?.alchemyDetail?.bulkMultiplier ?? 1;
+
+            // Build a Set of valid output HRIDs from the input item's decompose items.
+            // This filters out incidental drops (essences, artisan's crates).
+            const decomposeItems = itemDetails?.alchemyDetail?.decomposeItems || [];
+            const validOutputHrids = new Set(decomposeItems.map((entry) => entry.itemHrid));
+
+            // Build a map of expected count per output for value calculation
+            const expectedCountMap = {};
+            for (const entry of decomposeItems) {
+                expectedCountMap[entry.itemHrid] = entry.count || 1;
+            }
+
+            // Filter to only valid decompose outputs (exclude coins and incidentals)
+            const validOutputItems = (data.endCharacterItems || []).filter(
+                (item) => item.itemHrid !== COIN_ITEM_HRID && validOutputHrids.has(item.itemHrid)
+            );
+
+            // Decompose outputs: each unique output item entry represents one successful action.
+            // Unlike transmute, there is no self-return — the input is always consumed.
+            // Group by unique output sets to count successes correctly.
+            // For efficiency procs, multiple entries of the same output item may appear.
+            // Count distinct entries of any valid output as one success each.
+            const successCount =
+                validOutputItems.length > 0
+                    ? Math.max(
+                          ...Array.from(new Set(validOutputItems.map((i) => i.itemHrid))).map(
+                              (hrid) => validOutputItems.filter((i) => i.itemHrid === hrid).length
+                          )
+                      )
+                    : 0;
+
+            this.activeSession.totalAttempts += Math.max(successCount, 1);
+
+            if (successCount > 0) {
+                this.activeSession.totalSuccesses += successCount;
+
+                for (const outputItem of validOutputItems) {
+                    const outputItemHrid = outputItem.itemHrid;
+                    const expectedCount = expectedCountMap[outputItemHrid] || 1;
+
+                    if (!this.activeSession.results[outputItemHrid]) {
+                        this.activeSession.results[outputItemHrid] = {
+                            count: 0,
+                            totalValue: 0,
+                            priceEach: 0,
+                        };
+                    }
+
+                    // Each entry represents bulkMultiplier × expectedCount items received
+                    this.activeSession.results[outputItemHrid].count += bulkMultiplier * expectedCount;
+
+                    // Record market price at time of result
+                    const price = marketData_js.getItemPrice(outputItemHrid, { context: 'profit', side: 'sell' }) || 0;
+                    this.activeSession.results[outputItemHrid].priceEach = price;
+                    this.activeSession.results[outputItemHrid].totalValue += price * bulkMultiplier * expectedCount;
+                }
+            }
+
+            // Track catalyst usage — catalysts are only consumed on success
+            if (successCount > 0) {
+                const secondaryHrid = this.extractItemHrid(action.secondaryItemHash);
+                if (secondaryHrid === CATALYST_OF_DECOMPOSITION_HRID$1) {
+                    this.activeSession.catalystOfDecompositionUsed += successCount;
+                } else if (secondaryHrid === PRIME_CATALYST_HRID$1) {
+                    this.activeSession.primeCatalystUsed += successCount;
+                }
+            }
+
+            await this.saveActiveSession();
+        }
+
+        /**
+         * Handle reconnect — finalize any open session
+         */
+        async handleReconnect() {
+            if (this.activeSession) {
+                await this.endSession();
+            }
+        }
+
+        /**
+         * Handle character switch — update character ID and clear active session
+         * @param {Object} data - { newId, newName }
+         */
+        async handleCharacterSwitched(data) {
+            if (this.activeSession) {
+                await this.endSession();
+            }
+            this.characterId = data.newId || null;
+        }
+
+        /**
+         * Start a new session
+         * @param {string} inputItemHrid - Input item HRID
+         * @param {number} enhancementLevel - Enhancement level of input item
+         * @param {number} timestamp - Start timestamp in ms
+         */
+        async startSession(inputItemHrid, enhancementLevel, timestamp) {
+            this.activeSession = {
+                id: `decompose_${timestamp}`,
+                startTime: timestamp,
+                inputItemHrid,
+                enhancementLevel,
+                totalAttempts: 0,
+                totalSuccesses: 0,
+                catalystOfDecompositionUsed: 0,
+                primeCatalystUsed: 0,
+                results: {},
+            };
+
+            await this.saveActiveSession();
+        }
+
+        /**
+         * End the active session
+         */
+        async endSession() {
+            if (!this.activeSession) {
+                return;
+            }
+
+            await this.saveActiveSession();
+            this.activeSession = null;
+        }
+
+        /**
+         * Save the active session to storage (upsert by id)
+         */
+        async saveActiveSession() {
+            if (!this.activeSession) {
+                return;
+            }
+
+            try {
+                const sessions = await this.loadSessions();
+                const index = sessions.findIndex((s) => s.id === this.activeSession.id);
+
+                if (index !== -1) {
+                    sessions[index] = this.activeSession;
+                } else {
+                    sessions.push(this.activeSession);
+                }
+
+                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$1, true);
+            } catch (error) {
+                console.error('[DecomposeHistoryTracker] Failed to save session:', error);
+            }
+        }
+
+        /**
+         * Load all sessions from storage
+         * @returns {Promise<Array>} Array of session objects
+         */
+        async loadSessions() {
+            try {
+                return await storage.getJSON(this.getStorageKey(), STORAGE_STORE$1, []);
+            } catch (error) {
+                console.error('[DecomposeHistoryTracker] Failed to load sessions:', error);
+                return [];
+            }
+        }
+
+        /**
+         * Clear all history from storage
+         */
+        async clearHistory() {
+            try {
+                this.activeSession = null;
+                await storage.setJSON(this.getStorageKey(), [], STORAGE_STORE$1, true);
+            } catch (error) {
+                console.error('[DecomposeHistoryTracker] Failed to clear history:', error);
+            }
+        }
+
+        /**
+         * Persist a caller-supplied sessions array (used by viewer for single-row delete)
+         * @param {Array} sessions - Updated sessions array to persist
+         */
+        async deleteSessions(sessions) {
+            try {
+                await storage.setJSON(this.getStorageKey(), sessions, STORAGE_STORE$1, true);
+            } catch (error) {
+                console.error('[DecomposeHistoryTracker] Failed to save sessions after delete:', error);
+            }
+        }
+
+        /**
+         * Extract item HRID from a primaryItemHash string
+         * Format: "characterId::/item_locations/inventory::/items/item_name::N"
+         * @param {string} hash - Primary item hash
+         * @returns {string|null} Item HRID or null
+         */
+        extractItemHrid(hash) {
+            if (!hash) {
+                return null;
+            }
+
+            const parts = hash.split('::');
+            if (parts.length < 3) {
+                return null;
+            }
+
+            const hrid = parts[2];
+            return hrid.startsWith('/items/') ? hrid : null;
+        }
+
+        /**
+         * Extract enhancement level from a primaryItemHash string
+         * The level is the last segment after :: if it is a non-negative integer
+         * @param {string} hash - Primary item hash
+         * @returns {number} Enhancement level (0 if not present or not a number)
+         */
+        extractEnhancementLevel(hash) {
+            if (!hash) {
+                return 0;
+            }
+
+            const parts = hash.split('::');
+            const last = parts[parts.length - 1];
+
+            if (last && !last.startsWith('/')) {
+                const parsed = parseInt(last, 10);
+                if (!isNaN(parsed) && parsed >= 0) {
+                    return parsed;
+                }
+            }
+
+            return 0;
+        }
+
+        /**
+         * Get the item name from HRID via dataManager
+         * @param {string} itemHrid - Item HRID
+         * @returns {string} Item display name
+         */
+        getItemName(itemHrid) {
+            const details = dataManager.getItemDetails(itemHrid);
+            return details?.name || itemHrid.split('/').pop().replace(/_/g, ' ');
+        }
+    }
+
+    const decomposeHistoryTracker = new DecomposeHistoryTracker();
+
+    var decomposeHistoryTracker$1 = {
+        name: 'Decompose History Tracker',
+        initialize: () => decomposeHistoryTracker.initialize(),
+        cleanup: () => decomposeHistoryTracker.disable(),
+    };
+
+    /**
+     * Decompose History Viewer
+     * Modal UI for browsing decompose session history.
+     * Injected as a tab in the alchemy panel tab bar.
+     */
+
+
+    const CATALYST_OF_DECOMPOSITION_HRID = '/items/catalyst_of_decomposition';
+    const PRIME_CATALYST_HRID = '/items/prime_catalyst';
+
+    class DecomposeHistoryViewer {
+        constructor() {
+            this.isInitialized = false;
+            this.modal = null;
+            this.sessions = [];
+            this.filteredSessions = [];
+            this.currentPage = 1;
+            this.rowsPerPage = 50;
+            this.showAll = false;
+            this.sortColumn = 'startTime';
+            this.sortDirection = 'desc';
+
+            // Column filters
+            this.filters = {
+                dateFrom: null,
+                dateTo: null,
+                selectedInputItems: [], // Array of itemHrids
+                resultsSearch: '', // Text search for result item names
+            };
+
+            this.activeFilterPopup = null;
+            this.activeFilterButton = null;
+            this.popupCloseHandler = null;
+
+            // Tab injection
+            this.alchemyTab = null;
+            this.tabWatcher = null;
+
+            // Caches
+            this.itemNameCache = new Map();
+            this.itemsSpriteUrl = null;
+            this.cachedDateRange = null;
+
+            this.timerRegistry = timerRegistry_js.createTimerRegistry();
+        }
+
+        /**
+         * Initialize the viewer
+         */
+        initialize() {
+            if (this.isInitialized) {
+                return;
+            }
+
+            if (!config.getSetting('alchemy_decomposeHistory')) {
+                return;
+            }
+
+            this.isInitialized = true;
+            this.addAlchemyTab();
+        }
+
+        /**
+         * Disable the viewer
+         */
+        disable() {
+            if (this.tabWatcher) {
+                this.tabWatcher();
+                this.tabWatcher = null;
+            }
+            if (this.alchemyTab && this.alchemyTab.parentNode) {
+                this.alchemyTab.remove();
+                this.alchemyTab = null;
+            }
+            if (this.modal) {
+                this.modal.remove();
+                this.modal = null;
+            }
+            this.timerRegistry.clearAll();
+            this.isInitialized = false;
+        }
+
+        // ─── Tab Injection ───────────────────────────────────────────────────────
+
+        /**
+         * Inject "Decompose History" tab into the alchemy tab bar.
+         * The alchemy tab bar contains Coinify, Decompose, Transmute, Unrefine, Current Action.
+         * We identify it by the presence of a "Decompose" tab text.
+         */
+        addAlchemyTab() {
+            const ensureTabExists = () => {
+                const tablist = document.querySelector('[role="tablist"]');
+                if (!tablist) return;
+
+                // Verify this is the alchemy tablist by checking for "Decompose" tab
+                const hasDecompose = Array.from(tablist.children).some(
+                    (btn) => btn.textContent.includes('Decompose') && !btn.dataset.mwiDecomposeHistoryTab
+                );
+                if (!hasDecompose) return;
+
+                // Already injected?
+                if (tablist.querySelector('[data-mwi-decompose-history-tab="true"]')) return;
+
+                // Clone an existing tab for structure
+                const referenceTab = Array.from(tablist.children).find(
+                    (btn) => btn.textContent.includes('Decompose') && !btn.dataset.mwiDecomposeHistoryTab
+                );
+                if (!referenceTab) return;
+
+                const tab = referenceTab.cloneNode(true);
+                tab.setAttribute('data-mwi-decompose-history-tab', 'true');
+                tab.classList.remove('Mui-selected');
+                tab.setAttribute('aria-selected', 'false');
+                tab.setAttribute('tabindex', '-1');
+
+                // Set label
+                const badge = tab.querySelector('.TabsComponent_badge__1Du26');
+                if (badge) {
+                    // Replace first text node (the label) while keeping badge span
+                    const badgeSpan = badge.querySelector('.MuiBadge-badge');
+                    badge.textContent = '';
+                    badge.appendChild(document.createTextNode('Decompose History'));
+                    if (badgeSpan) badge.appendChild(badgeSpan);
+                } else {
+                    tab.textContent = 'Decompose History';
+                }
+
+                tab.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.openModal();
+                });
+
+                tablist.appendChild(tab);
+                tablist.style.overflowX = 'auto';
+                tablist.style.flexWrap = 'nowrap';
+                this.alchemyTab = tab;
+            };
+
+            // Watch for DOM changes that recreate the tablist
+            if (!this.tabWatcher) {
+                this.tabWatcher = domObserverHelpers_js.createMutationWatcher(
+                    document.body,
+                    () => {
+                        // If our tab was removed from DOM, clear reference
+                        if (this.alchemyTab && !document.body.contains(this.alchemyTab)) {
+                            this.alchemyTab = null;
+                        }
+                        ensureTabExists();
+                    },
+                    { childList: true, subtree: true }
+                );
+            }
+
+            ensureTabExists();
+        }
+
+        // ─── Modal ───────────────────────────────────────────────────────────────
+
+        /**
+         * Open the modal — load sessions and render
+         */
+        async openModal() {
+            this.sessions = await decomposeHistoryTracker.loadSessions();
+            this.cachedDateRange = null;
+            this.applyFilters();
+
+            if (!this.modal) {
+                this.createModal();
+            }
+
+            this.modal.style.display = 'flex';
+            this.renderTable();
+        }
+
+        /**
+         * Close the modal
+         */
+        closeModal() {
+            if (this.modal) {
+                this.modal.style.display = 'none';
+            }
+            this.closeActiveFilterPopup();
+        }
+
+        /**
+         * Create modal DOM structure
+         */
+        createModal() {
+            this.modal = document.createElement('div');
+            this.modal.className = 'mwi-decompose-history-modal';
+            this.modal.style.cssText = `
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 10000;
+        `;
+
+            const content = document.createElement('div');
+            content.className = 'mwi-decompose-history-content';
+            content.style.cssText = `
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            width: fit-content;
+            min-width: 500px;
+            max-width: 95vw;
+            max-height: 90%;
+            overflow: auto;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        `;
+
+            // Header
+            const header = document.createElement('div');
+            header.style.cssText = `
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        `;
+
+            const title = document.createElement('h2');
+            title.textContent = 'Decompose History';
+            title.style.cssText = 'margin: 0; color: #fff;';
+
+            const closeBtn = document.createElement('button');
+            closeBtn.textContent = '\u2715';
+            closeBtn.style.cssText = `
+            background: none; border: none; color: #fff;
+            font-size: 24px; cursor: pointer; padding: 0;
+            width: 30px; height: 30px;
+        `;
+            closeBtn.addEventListener('click', () => this.closeModal());
+
+            header.appendChild(title);
+            header.appendChild(closeBtn);
+
+            // Controls
+            const controls = document.createElement('div');
+            controls.className = 'mwi-decompose-history-controls';
+            controls.style.cssText = `
+            display: flex;
+            gap: 10px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+        `;
+
+            // Active filter badges row
+            const badges = document.createElement('div');
+            badges.className = 'mwi-decompose-history-badges';
+            badges.style.cssText = `
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+            min-height: 28px;
+            margin-bottom: 10px;
+        `;
+
+            // Table container
+            const tableContainer = document.createElement('div');
+            tableContainer.className = 'mwi-decompose-history-table-container';
+            tableContainer.style.cssText = 'overflow-x: auto;';
+
+            // Pagination
+            const pagination = document.createElement('div');
+            pagination.className = 'mwi-decompose-history-pagination';
+            pagination.style.cssText = `
+            margin-top: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        `;
+
+            content.appendChild(header);
+            content.appendChild(controls);
+            content.appendChild(badges);
+            content.appendChild(tableContainer);
+            content.appendChild(pagination);
+            this.modal.appendChild(content);
+            document.body.appendChild(this.modal);
+
+            // Close on backdrop click
+            this.modal.addEventListener('click', (e) => {
+                if (e.target === this.modal) this.closeModal();
+            });
+        }
+
+        // ─── Filtering ───────────────────────────────────────────────────────────
+
+        /**
+         * Apply all active filters to this.sessions → this.filteredSessions
+         */
+        applyFilters() {
+            this.cachedDateRange = null;
+
+            const hasDateFilter = !!(this.filters.dateFrom || this.filters.dateTo);
+            let dateToEndOfDay = null;
+            if (hasDateFilter && this.filters.dateTo) {
+                dateToEndOfDay = new Date(this.filters.dateTo);
+                dateToEndOfDay.setHours(23, 59, 59, 999);
+            }
+
+            const hasItemFilter = this.filters.selectedInputItems.length > 0;
+            const itemFilterSet = hasItemFilter ? new Set(this.filters.selectedInputItems) : null;
+
+            const hasResultsFilter = !!this.filters.resultsSearch.trim();
+            const resultsSearch = hasResultsFilter ? this.filters.resultsSearch.trim().toLowerCase() : '';
+
+            const filtered = this.sessions.filter((session) => {
+                // Date filter
+                if (hasDateFilter) {
+                    const d = new Date(session.startTime);
+                    if (this.filters.dateFrom && d < this.filters.dateFrom) return false;
+                    if (dateToEndOfDay && d > dateToEndOfDay) return false;
+                }
+
+                // Input item filter
+                if (hasItemFilter && !itemFilterSet.has(session.inputItemHrid)) return false;
+
+                // Results text search
+                if (hasResultsFilter) {
+                    const resultNames = Object.keys(session.results || {}).map((hrid) =>
+                        this.getItemName(hrid).toLowerCase()
+                    );
+                    if (!resultNames.some((name) => name.includes(resultsSearch))) return false;
+                }
+
+                return true;
+            });
+
+            // Sort
+            filtered.sort((a, b) => {
+                const aVal = a[this.sortColumn] ?? 0;
+                const bVal = b[this.sortColumn] ?? 0;
+                return this.sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+            });
+
+            this.filteredSessions = filtered;
+            this.currentPage = 1;
+        }
+
+        /**
+         * Check if a column has an active filter
+         * @param {string} col
+         * @returns {boolean}
+         */
+        hasActiveFilter(col) {
+            switch (col) {
+                case 'startTime':
+                    return !!(this.filters.dateFrom || this.filters.dateTo);
+                case 'inputItemHrid':
+                    return this.filters.selectedInputItems.length > 0;
+                case 'results':
+                    return !!this.filters.resultsSearch.trim();
+                default:
+                    return false;
+            }
+        }
+
+        /**
+         * Returns true if any filter is active
+         */
+        hasAnyFilter() {
+            return (
+                this.hasActiveFilter('startTime') ||
+                this.hasActiveFilter('inputItemHrid') ||
+                this.hasActiveFilter('results')
+            );
+        }
+
+        /**
+         * Clear all filters
+         */
+        clearAllFilters() {
+            this.filters.dateFrom = null;
+            this.filters.dateTo = null;
+            this.filters.selectedInputItems = [];
+            this.filters.resultsSearch = '';
+            this.applyFilters();
+            this.renderTable();
+        }
+
+        // ─── Rendering ───────────────────────────────────────────────────────────
+
+        /**
+         * Full render: controls + badges + table + pagination
+         */
+        renderTable() {
+            this.renderControls();
+            this.renderBadges();
+
+            const tableContainer = this.modal.querySelector('.mwi-decompose-history-table-container');
+            while (tableContainer.firstChild) tableContainer.removeChild(tableContainer.firstChild);
+
+            const table = document.createElement('table');
+            table.style.cssText = 'width: max-content; border-collapse: collapse; color: #fff; white-space: nowrap;';
+
+            // Header
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            headerRow.style.background = '#1a1a1a';
+
+            const columns = [
+                { key: 'startTime', label: 'Session Start', filterable: true },
+                { key: 'inputItemHrid', label: 'Input Item', filterable: true },
+                { key: 'enhancementLevel', label: 'Enh. Level', filterable: false },
+                { key: 'totalAttempts', label: 'Attempts', filterable: false },
+                { key: 'totalSuccesses', label: 'Successes', filterable: false },
+                { key: '_successRate', label: 'Success Rate', filterable: false },
+                { key: 'results', label: 'Results', filterable: true },
+                { key: '_catalystOfDecomposition', label: 'Catalyst of Decomposition', filterable: false },
+                { key: '_primeCatalyst', label: 'Prime Catalyst', filterable: false },
+                { key: '_delete', label: '', filterable: false },
+            ];
+
+            columns.forEach((col) => {
+                const th = document.createElement('th');
+                th.style.cssText = `
+                padding: 10px;
+                text-align: left;
+                border-bottom: 2px solid #555;
+                user-select: none;
+                white-space: nowrap;
+            `;
+
+                const headerContent = document.createElement('div');
+                headerContent.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+                const labelSpan = document.createElement('span');
+                labelSpan.style.cursor = 'pointer';
+
+                // Columns starting with _ are computed, not directly sortable by field
+                const isSortable = !col.key.startsWith('_');
+                const isCatalystCol = col.key === '_catalystOfDecomposition' || col.key === '_primeCatalyst';
+
+                if (isSortable) {
+                    if (this.sortColumn === col.key) {
+                        labelSpan.textContent = col.label + (this.sortDirection === 'asc' ? ' \u25B2' : ' \u25BC');
+                    } else {
+                        labelSpan.textContent = col.label;
+                    }
+                    labelSpan.addEventListener('click', () => {
+                        if (this.sortColumn === col.key) {
+                            this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+                        } else {
+                            this.sortColumn = col.key;
+                            this.sortDirection = 'desc';
+                        }
+                        this.applyFilters();
+                        this.renderTable();
+                    });
+                } else if (isCatalystCol) {
+                    // Render icon as header with item name as tooltip
+                    const hrid =
+                        col.key === '_catalystOfDecomposition' ? CATALYST_OF_DECOMPOSITION_HRID : PRIME_CATALYST_HRID;
+                    labelSpan.title = col.label;
+                    labelSpan.style.cursor = 'default';
+                    this.appendItemIcon(labelSpan, hrid, 20);
+                } else {
+                    labelSpan.textContent = col.label;
+                    labelSpan.style.cursor = 'default';
+                }
+
+                headerContent.appendChild(labelSpan);
+
+                if (col.filterable) {
+                    const filterBtn = document.createElement('button');
+                    filterBtn.textContent = '\u22EE';
+                    filterBtn.style.cssText = `
+                    background: none; border: none;
+                    color: ${this.hasActiveFilter(col.key) ? '#4a90e2' : '#aaa'};
+                    cursor: pointer; font-size: 16px;
+                    padding: 2px 4px; font-weight: bold;
+                `;
+                    filterBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.showFilterPopup(col.key, filterBtn);
+                    });
+                    headerContent.appendChild(filterBtn);
+                }
+
+                th.appendChild(headerContent);
+                headerRow.appendChild(th);
+            });
+
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+
+            // Body
+            const tbody = document.createElement('tbody');
+            const paginated = this.getPaginatedSessions();
+
+            if (paginated.length === 0) {
+                const row = document.createElement('tr');
+                const cell = document.createElement('td');
+                cell.colSpan = columns.length;
+                cell.textContent =
+                    this.sessions.length === 0
+                        ? 'No decompose history recorded yet.'
+                        : 'No sessions match the current filters.';
+                cell.style.cssText = 'padding: 20px; text-align: center; color: #888;';
+                row.appendChild(cell);
+                tbody.appendChild(row);
+            } else {
+                paginated.forEach((session, index) => {
+                    const row = document.createElement('tr');
+                    row.style.cssText = `
+                    border-bottom: 1px solid #333;
+                    background: ${index % 2 === 0 ? '#2a2a2a' : '#252525'};
+                `;
+
+                    // Session Start
+                    const dateCell = document.createElement('td');
+                    dateCell.textContent = new Date(session.startTime).toLocaleString();
+                    dateCell.style.padding = '6px 10px';
+                    row.appendChild(dateCell);
+
+                    // Input Item
+                    const inputCell = document.createElement('td');
+                    inputCell.style.cssText = 'padding: 6px 10px; display: flex; align-items: center; gap: 8px;';
+                    this.appendItemIcon(inputCell, session.inputItemHrid, 20);
+                    const inputName = document.createElement('span');
+                    inputName.textContent = this.getItemName(session.inputItemHrid);
+                    inputCell.appendChild(inputName);
+                    row.appendChild(inputCell);
+
+                    // Enhancement Level
+                    const enhCell = document.createElement('td');
+                    enhCell.textContent = session.enhancementLevel > 0 ? `+${session.enhancementLevel}` : '0';
+                    enhCell.style.cssText = 'padding: 6px 10px; text-align: center;';
+                    row.appendChild(enhCell);
+
+                    // Attempts
+                    const attemptsCell = document.createElement('td');
+                    attemptsCell.textContent = session.totalAttempts;
+                    attemptsCell.style.padding = '6px 10px';
+                    row.appendChild(attemptsCell);
+
+                    // Successes
+                    const successCell = document.createElement('td');
+                    const failures = session.totalAttempts - session.totalSuccesses;
+                    successCell.textContent = `${session.totalSuccesses} (${failures} failed)`;
+                    successCell.style.cssText = `
+                    padding: 6px 10px;
+                    color: ${failures > 0 ? '#fbbf24' : '#4ade80'};
+                `;
+                    row.appendChild(successCell);
+
+                    // Success Rate
+                    const rateCell = document.createElement('td');
+                    const rate =
+                        session.totalAttempts > 0
+                            ? ((session.totalSuccesses / session.totalAttempts) * 100).toFixed(1)
+                            : '0.0';
+                    rateCell.textContent = `${rate}%`;
+                    rateCell.style.padding = '6px 10px';
+                    row.appendChild(rateCell);
+
+                    // Results
+                    const resultsCell = document.createElement('td');
+                    resultsCell.style.cssText = 'padding: 6px 10px;';
+                    this.renderResultsCell(resultsCell, session);
+                    row.appendChild(resultsCell);
+
+                    // Catalyst of Decomposition
+                    const cocCell = document.createElement('td');
+                    cocCell.style.cssText = 'padding: 6px 10px; text-align: center;';
+                    this.renderCatalystCell(
+                        cocCell,
+                        CATALYST_OF_DECOMPOSITION_HRID,
+                        session.catalystOfDecompositionUsed || 0
+                    );
+                    row.appendChild(cocCell);
+
+                    // Prime Catalyst
+                    const pcCell = document.createElement('td');
+                    pcCell.style.cssText = 'padding: 6px 10px; text-align: center;';
+                    this.renderCatalystCell(pcCell, PRIME_CATALYST_HRID, session.primeCatalystUsed || 0);
+                    row.appendChild(pcCell);
+
+                    // Delete
+                    const deleteCell = document.createElement('td');
+                    deleteCell.style.cssText = 'padding: 6px 4px; text-align: center;';
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.textContent = '\u2715';
+                    deleteBtn.title = 'Delete this session';
+                    deleteBtn.style.cssText = `
+                    background: none; border: none; color: #dc2626;
+                    cursor: pointer; font-size: 14px; padding: 2px 6px;
+                    border-radius: 3px; line-height: 1;
+                `;
+                    deleteBtn.addEventListener('mouseenter', () => {
+                        deleteBtn.style.background = 'rgba(220,38,38,0.15)';
+                    });
+                    deleteBtn.addEventListener('mouseleave', () => {
+                        deleteBtn.style.background = 'none';
+                    });
+                    deleteBtn.addEventListener('click', () => this.deleteSession(session.id));
+                    deleteCell.appendChild(deleteBtn);
+                    row.appendChild(deleteCell);
+
+                    tbody.appendChild(row);
+                });
+            }
+
+            table.appendChild(tbody);
+            tableContainer.appendChild(table);
+            this.renderPagination();
+        }
+
+        /**
+         * Render the results cell for a session
+         * Results sorted by totalValue desc
+         * @param {HTMLElement} cell
+         * @param {Object} session
+         */
+        renderResultsCell(cell, session) {
+            const results = session.results || {};
+            const entries = Object.entries(results);
+
+            if (entries.length === 0) {
+                const span = document.createElement('span');
+                span.textContent = '\u2014';
+                span.style.color = '#888';
+                cell.appendChild(span);
+                return;
+            }
+
+            // Sort by totalValue desc
+            const sortedEntries = entries.sort(([, a], [, b]) => (b.totalValue || 0) - (a.totalValue || 0));
+
+            sortedEntries.forEach(([itemHrid, result]) => {
+                const line = document.createElement('div');
+                line.style.cssText = 'display: flex; align-items: center; gap: 6px; margin-bottom: 2px;';
+
+                this.appendItemIcon(line, itemHrid, 16);
+
+                const text = document.createElement('span');
+                const name = this.getItemName(itemHrid);
+                const total = formatters_js.formatKMB(result.totalValue || 0, 1);
+                const each = formatters_js.formatKMB(result.priceEach || 0, 1);
+                text.textContent = `${name} x${result.count} = ${total} (${each} each)`;
+
+                line.appendChild(text);
+                cell.appendChild(line);
+            });
+        }
+
+        /**
+         * Render a catalyst cell: icon + count, or — if zero
+         * @param {HTMLElement} cell
+         * @param {string} catalystHrid
+         * @param {number} count
+         */
+        renderCatalystCell(cell, catalystHrid, count) {
+            if (count === 0) {
+                const dash = document.createElement('span');
+                dash.textContent = '\u2014';
+                dash.style.color = '#888';
+                cell.appendChild(dash);
+                return;
+            }
+
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = 'display: flex; align-items: center; gap: 4px;';
+
+            this.appendItemIcon(wrapper, catalystHrid, 18);
+
+            const countSpan = document.createElement('span');
+            countSpan.textContent = count.toLocaleString();
+            wrapper.appendChild(countSpan);
+            cell.appendChild(wrapper);
+        }
+
+        /**
+         * Render controls bar (stats + clear history button)
+         */
+        renderControls() {
+            const controls = this.modal.querySelector('.mwi-decompose-history-controls');
+            while (controls.firstChild) controls.removeChild(controls.firstChild);
+
+            // Stats
+            const stats = document.createElement('span');
+            stats.style.cssText = 'color: #aaa; font-size: 14px;';
+            stats.textContent = `${this.filteredSessions.length} session${this.filteredSessions.length !== 1 ? 's' : ''}`;
+            controls.appendChild(stats);
+
+            const rightGroup = document.createElement('div');
+            rightGroup.style.cssText = 'display: flex; gap: 8px; align-items: center;';
+
+            // Clear All Filters button (only when filters active)
+            if (this.hasAnyFilter()) {
+                const clearFiltersBtn = document.createElement('button');
+                clearFiltersBtn.textContent = 'Clear All Filters';
+                clearFiltersBtn.style.cssText = `
+                padding: 6px 12px; background: #e67e22; color: white;
+                border: none; border-radius: 4px; cursor: pointer;
+            `;
+                clearFiltersBtn.addEventListener('click', () => this.clearAllFilters());
+                rightGroup.appendChild(clearFiltersBtn);
+            }
+
+            // Export button
+            const exportBtn = document.createElement('button');
+            exportBtn.textContent = 'Export';
+            exportBtn.style.cssText = `
+            padding: 6px 12px; background: #2563eb; color: white;
+            border: none; border-radius: 4px; cursor: pointer;
+        `;
+            exportBtn.addEventListener('click', () => this.exportHistory());
+            rightGroup.appendChild(exportBtn);
+
+            // Clear History button
+            const clearBtn = document.createElement('button');
+            clearBtn.textContent = 'Clear History';
+            clearBtn.style.cssText = `
+            padding: 6px 12px; background: #dc2626; color: white;
+            border: none; border-radius: 4px; cursor: pointer;
+        `;
+            clearBtn.addEventListener('click', () => this.clearHistory());
+            rightGroup.appendChild(clearBtn);
+
+            controls.appendChild(rightGroup);
+        }
+
+        /**
+         * Render active filter badges
+         */
+        renderBadges() {
+            const container = this.modal.querySelector('.mwi-decompose-history-badges');
+            while (container.firstChild) container.removeChild(container.firstChild);
+
+            const badges = [];
+
+            if (this.filters.dateFrom || this.filters.dateTo) {
+                const parts = [];
+                if (this.filters.dateFrom) parts.push(this.filters.dateFrom.toLocaleDateString());
+                if (this.filters.dateTo) parts.push(this.filters.dateTo.toLocaleDateString());
+                badges.push({
+                    label: `Date: ${parts.join(' - ')}`,
+                    onRemove: () => {
+                        this.filters.dateFrom = null;
+                        this.filters.dateTo = null;
+                        this.applyFilters();
+                        this.renderTable();
+                    },
+                });
+            }
+
+            if (this.filters.selectedInputItems.length > 0) {
+                const label =
+                    this.filters.selectedInputItems.length === 1
+                        ? this.getItemName(this.filters.selectedInputItems[0])
+                        : `${this.filters.selectedInputItems.length} input items`;
+                badges.push({
+                    label: `Input: ${label}`,
+                    icon: this.filters.selectedInputItems[0],
+                    onRemove: () => {
+                        this.filters.selectedInputItems = [];
+                        this.applyFilters();
+                        this.renderTable();
+                    },
+                });
+            }
+
+            if (this.filters.resultsSearch.trim()) {
+                badges.push({
+                    label: `Results: "${this.filters.resultsSearch.trim()}"`,
+                    onRemove: () => {
+                        this.filters.resultsSearch = '';
+                        this.applyFilters();
+                        this.renderTable();
+                    },
+                });
+            }
+
+            badges.forEach((badge) => {
+                const el = document.createElement('div');
+                el.style.cssText = `
+                display: flex; align-items: center; gap: 6px;
+                padding: 4px 8px; background: #3a3a3a;
+                border: 1px solid #555; border-radius: 4px;
+                color: #aaa; font-size: 13px;
+            `;
+
+                if (badge.icon) {
+                    this.appendItemIcon(el, badge.icon, 14);
+                }
+
+                const labelSpan = document.createElement('span');
+                labelSpan.textContent = badge.label;
+                el.appendChild(labelSpan);
+
+                const removeBtn = document.createElement('button');
+                removeBtn.textContent = '\u2715';
+                removeBtn.style.cssText = `
+                background: none; border: none; color: #aaa;
+                cursor: pointer; padding: 0; font-size: 13px; line-height: 1;
+            `;
+                removeBtn.addEventListener('click', badge.onRemove);
+                el.appendChild(removeBtn);
+
+                container.appendChild(el);
+            });
+        }
+
+        /**
+         * Render pagination controls
+         */
+        renderPagination() {
+            const pagination = this.modal.querySelector('.mwi-decompose-history-pagination');
+            while (pagination.firstChild) pagination.removeChild(pagination.firstChild);
+
+            const leftSide = document.createElement('div');
+            leftSide.style.cssText = 'display: flex; gap: 8px; align-items: center; color: #aaa;';
+
+            const label = document.createElement('span');
+            label.textContent = 'Rows per page:';
+
+            const rowsInput = document.createElement('input');
+            rowsInput.type = 'number';
+            rowsInput.value = this.rowsPerPage;
+            rowsInput.min = '1';
+            rowsInput.disabled = this.showAll;
+            rowsInput.style.cssText = `
+            width: 60px; padding: 4px 8px;
+            border: 1px solid #555; border-radius: 4px;
+            background: ${this.showAll ? '#333' : '#1a1a1a'};
+            color: ${this.showAll ? '#666' : '#fff'};
+        `;
+            rowsInput.addEventListener('change', (e) => {
+                this.rowsPerPage = Math.max(1, parseInt(e.target.value) || 50);
+                this.currentPage = 1;
+                this.renderTable();
+            });
+
+            const showAllLabel = document.createElement('label');
+            showAllLabel.style.cssText = 'cursor: pointer; color: #aaa; display: flex; align-items: center; gap: 4px;';
+
+            const showAllCheckbox = document.createElement('input');
+            showAllCheckbox.type = 'checkbox';
+            showAllCheckbox.checked = this.showAll;
+            showAllCheckbox.style.cursor = 'pointer';
+            showAllCheckbox.addEventListener('change', (e) => {
+                this.showAll = e.target.checked;
+                rowsInput.disabled = this.showAll;
+                rowsInput.style.background = this.showAll ? '#333' : '#1a1a1a';
+                rowsInput.style.color = this.showAll ? '#666' : '#fff';
+                this.currentPage = 1;
+                this.renderTable();
+            });
+
+            showAllLabel.appendChild(showAllCheckbox);
+            showAllLabel.appendChild(document.createTextNode('Show All'));
+
+            leftSide.appendChild(label);
+            leftSide.appendChild(rowsInput);
+            leftSide.appendChild(showAllLabel);
+
+            const rightSide = document.createElement('div');
+            rightSide.style.cssText = 'display: flex; gap: 8px; align-items: center; color: #aaa;';
+
+            if (!this.showAll) {
+                const totalPages = this.getTotalPages();
+
+                const prevBtn = document.createElement('button');
+                prevBtn.textContent = '\u25C0';
+                prevBtn.disabled = this.currentPage === 1;
+                prevBtn.style.cssText = `
+                padding: 4px 12px;
+                background: ${this.currentPage === 1 ? '#333' : '#4a90e2'};
+                color: ${this.currentPage === 1 ? '#666' : 'white'};
+                border: none; border-radius: 4px;
+                cursor: ${this.currentPage === 1 ? 'default' : 'pointer'};
+            `;
+                prevBtn.addEventListener('click', () => {
+                    if (this.currentPage > 1) {
+                        this.currentPage--;
+                        this.renderTable();
+                    }
+                });
+
+                const pageInfo = document.createElement('span');
+                pageInfo.textContent = `Page ${this.currentPage} of ${totalPages || 1}`;
+
+                const nextBtn = document.createElement('button');
+                nextBtn.textContent = '\u25B6';
+                nextBtn.disabled = this.currentPage >= totalPages;
+                nextBtn.style.cssText = `
+                padding: 4px 12px;
+                background: ${this.currentPage >= totalPages ? '#333' : '#4a90e2'};
+                color: ${this.currentPage >= totalPages ? '#666' : 'white'};
+                border: none; border-radius: 4px;
+                cursor: ${this.currentPage >= totalPages ? 'default' : 'pointer'};
+            `;
+                nextBtn.addEventListener('click', () => {
+                    if (this.currentPage < totalPages) {
+                        this.currentPage++;
+                        this.renderTable();
+                    }
+                });
+
+                rightSide.appendChild(prevBtn);
+                rightSide.appendChild(pageInfo);
+                rightSide.appendChild(nextBtn);
+            } else {
+                const info = document.createElement('span');
+                info.textContent = `Showing all ${this.filteredSessions.length} sessions`;
+                rightSide.appendChild(info);
+            }
+
+            pagination.appendChild(leftSide);
+            pagination.appendChild(rightSide);
+        }
+
+        // ─── Filter Popups ───────────────────────────────────────────────────────
+
+        /**
+         * Show the appropriate filter popup for a column
+         * @param {string} columnKey
+         * @param {HTMLElement} buttonElement
+         */
+        showFilterPopup(columnKey, buttonElement) {
+            // Toggle behavior
+            if (this.activeFilterPopup && this.activeFilterButton === buttonElement) {
+                this.closeActiveFilterPopup();
+                return;
+            }
+
+            this.closeActiveFilterPopup();
+
+            let popup;
+            switch (columnKey) {
+                case 'startTime':
+                    popup = this.createDateFilterPopup();
+                    break;
+                case 'inputItemHrid':
+                    popup = this.createInputItemFilterPopup();
+                    break;
+                case 'results':
+                    popup = this.createResultsFilterPopup();
+                    break;
+                default:
+                    return;
+            }
+
+            const rect = buttonElement.getBoundingClientRect();
+            popup.style.position = 'fixed';
+            popup.style.top = `${rect.bottom + 5}px`;
+            popup.style.left = `${rect.left}px`;
+            popup.style.zIndex = '10002';
+
+            document.body.appendChild(popup);
+            this.activeFilterPopup = popup;
+            this.activeFilterButton = buttonElement;
+
+            this.popupCloseHandler = (e) => {
+                if (e.target.type === 'date' || e.target.closest?.('input[type="date"]')) return;
+                if (!popup.contains(e.target) && e.target !== buttonElement) {
+                    this.closeActiveFilterPopup();
+                }
+            };
+            const t = setTimeout(() => document.addEventListener('click', this.popupCloseHandler), 10);
+            this.timerRegistry.registerTimeout(t);
+        }
+
+        /**
+         * Close and clean up the active filter popup
+         */
+        closeActiveFilterPopup() {
+            if (this.activeFilterPopup) {
+                this.activeFilterPopup.remove();
+                this.activeFilterPopup = null;
+            }
+            if (this.popupCloseHandler) {
+                document.removeEventListener('click', this.popupCloseHandler);
+                this.popupCloseHandler = null;
+            }
+            this.activeFilterButton = null;
+        }
+
+        /**
+         * Create date range filter popup
+         * @returns {HTMLElement}
+         */
+        createDateFilterPopup() {
+            const popup = this.createPopupBase('Filter by Date');
+
+            // Compute available range
+            if (!this.cachedDateRange) {
+                const timestamps = this.sessions.map((s) => s.startTime).filter(Boolean);
+                if (timestamps.length > 0) {
+                    this.cachedDateRange = {
+                        minDate: new Date(Math.min(...timestamps)),
+                        maxDate: new Date(Math.max(...timestamps)),
+                    };
+                } else {
+                    this.cachedDateRange = { minDate: null, maxDate: null };
+                }
+            }
+
+            const { minDate, maxDate } = this.cachedDateRange;
+
+            if (minDate && maxDate) {
+                const rangeInfo = document.createElement('div');
+                rangeInfo.style.cssText = `
+                color: #aaa; font-size: 11px; margin-bottom: 10px;
+                padding: 6px; background: #1a1a1a; border-radius: 3px;
+            `;
+                rangeInfo.textContent = `Available: ${minDate.toLocaleDateString()} - ${maxDate.toLocaleDateString()}`;
+                popup.appendChild(rangeInfo);
+            }
+
+            const fromInput = this.createDateInput(
+                'From:',
+                this.filters.dateFrom ? this.filters.dateFrom.toISOString().split('T')[0] : '',
+                minDate,
+                maxDate
+            );
+            const toInput = this.createDateInput(
+                'To:',
+                this.filters.dateTo ? this.filters.dateTo.toISOString().split('T')[0] : '',
+                minDate,
+                maxDate
+            );
+
+            popup.appendChild(fromInput.label);
+            popup.appendChild(fromInput.input);
+            popup.appendChild(toInput.label);
+            popup.appendChild(toInput.input);
+
+            const btnRow = this.createPopupButtonRow(
+                () => {
+                    this.filters.dateFrom = fromInput.input.value ? new Date(fromInput.input.value) : null;
+                    this.filters.dateTo = toInput.input.value ? new Date(toInput.input.value) : null;
+                    this.applyFilters();
+                    this.renderTable();
+                    this.closeActiveFilterPopup();
+                },
+                () => {
+                    this.filters.dateFrom = null;
+                    this.filters.dateTo = null;
+                    this.applyFilters();
+                    this.renderTable();
+                    this.closeActiveFilterPopup();
+                }
+            );
+            popup.appendChild(btnRow);
+
+            return popup;
+        }
+
+        /**
+         * Create input item filter popup (checkbox list with search)
+         * @returns {HTMLElement}
+         */
+        createInputItemFilterPopup() {
+            const popup = this.createPopupBase('Filter by Input Item');
+            popup.style.minWidth = '220px';
+
+            // Gather unique input items from all sessions
+            const itemSet = new Map();
+            this.sessions.forEach((s) => {
+                if (!itemSet.has(s.inputItemHrid)) {
+                    itemSet.set(s.inputItemHrid, this.getItemName(s.inputItemHrid));
+                }
+            });
+            const allItems = Array.from(itemSet.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+
+            // Track pending selection (local to this popup)
+            const pending = new Set(this.filters.selectedInputItems);
+
+            // Search box
+            const searchInput = document.createElement('input');
+            searchInput.type = 'text';
+            searchInput.placeholder = 'Search items...';
+            searchInput.style.cssText = `
+            width: 100%; padding: 6px; margin-bottom: 8px;
+            background: #1a1a1a; border: 1px solid #555;
+            border-radius: 3px; color: #fff; box-sizing: border-box;
+        `;
+
+            const listContainer = document.createElement('div');
+            listContainer.style.cssText = 'max-height: 200px; overflow-y: auto;';
+
+            const renderList = (filterText) => {
+                while (listContainer.firstChild) listContainer.removeChild(listContainer.firstChild);
+                const term = filterText.toLowerCase();
+                const visible = term ? allItems.filter(([, name]) => name.toLowerCase().includes(term)) : allItems;
+
+                visible.forEach(([hrid, name]) => {
+                    const row = document.createElement('label');
+                    row.style.cssText = `
+                    display: flex; align-items: center; gap: 8px;
+                    padding: 4px 2px; cursor: pointer; color: #ddd;
+                `;
+
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.checked = pending.has(hrid);
+                    cb.style.cursor = 'pointer';
+                    cb.addEventListener('change', () => {
+                        if (cb.checked) pending.add(hrid);
+                        else pending.delete(hrid);
+                    });
+
+                    this.appendItemIcon(row, hrid, 16);
+
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = name;
+
+                    row.appendChild(cb);
+                    row.appendChild(nameSpan);
+                    listContainer.appendChild(row);
+                });
+            };
+
+            searchInput.addEventListener('input', () => renderList(searchInput.value));
+            renderList('');
+
+            popup.appendChild(searchInput);
+            popup.appendChild(listContainer);
+
+            const btnRow = this.createPopupButtonRow(
+                () => {
+                    this.filters.selectedInputItems = Array.from(pending);
+                    this.applyFilters();
+                    this.renderTable();
+                    this.closeActiveFilterPopup();
+                },
+                () => {
+                    this.filters.selectedInputItems = [];
+                    this.applyFilters();
+                    this.renderTable();
+                    this.closeActiveFilterPopup();
+                }
+            );
+            popup.appendChild(btnRow);
+
+            return popup;
+        }
+
+        /**
+         * Create results text search popup
+         * @returns {HTMLElement}
+         */
+        createResultsFilterPopup() {
+            const popup = this.createPopupBase('Filter by Result Item');
+            popup.style.minWidth = '220px';
+
+            const searchInput = document.createElement('input');
+            searchInput.type = 'text';
+            searchInput.placeholder = 'Item name...';
+            searchInput.value = this.filters.resultsSearch;
+            searchInput.style.cssText = `
+            width: 100%; padding: 6px; margin-bottom: 10px;
+            background: #1a1a1a; border: 1px solid #555;
+            border-radius: 3px; color: #fff; box-sizing: border-box;
+        `;
+
+            popup.appendChild(searchInput);
+
+            const btnRow = this.createPopupButtonRow(
+                () => {
+                    this.filters.resultsSearch = searchInput.value;
+                    this.applyFilters();
+                    this.renderTable();
+                    this.closeActiveFilterPopup();
+                },
+                () => {
+                    this.filters.resultsSearch = '';
+                    this.applyFilters();
+                    this.renderTable();
+                    this.closeActiveFilterPopup();
+                }
+            );
+            popup.appendChild(btnRow);
+
+            return popup;
+        }
+
+        // ─── Popup Helpers ───────────────────────────────────────────────────────
+
+        /**
+         * Create a styled popup base div with a title
+         * @param {string} titleText
+         * @returns {HTMLElement}
+         */
+        createPopupBase(titleText) {
+            const popup = document.createElement('div');
+            popup.style.cssText = `
+            background: #2a2a2a; border: 1px solid #555;
+            border-radius: 4px; padding: 12px; min-width: 200px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        `;
+
+            const title = document.createElement('div');
+            title.textContent = titleText;
+            title.style.cssText = 'color: #fff; font-weight: bold; margin-bottom: 10px;';
+            popup.appendChild(title);
+
+            return popup;
+        }
+
+        /**
+         * Create a date input with label
+         * @param {string} labelText
+         * @param {string} value
+         * @param {Date|null} minDate
+         * @param {Date|null} maxDate
+         * @returns {{ label: HTMLElement, input: HTMLInputElement }}
+         */
+        createDateInput(labelText, value, minDate, maxDate) {
+            const label = document.createElement('label');
+            label.textContent = labelText;
+            label.style.cssText = 'display: block; color: #aaa; margin-bottom: 4px; font-size: 12px;';
+
+            const input = document.createElement('input');
+            input.type = 'date';
+            input.value = value;
+            if (minDate) input.min = minDate.toISOString().split('T')[0];
+            if (maxDate) input.max = maxDate.toISOString().split('T')[0];
+            input.style.cssText = `
+            width: 100%; padding: 6px; background: #1a1a1a;
+            border: 1px solid #555; border-radius: 3px; color: #fff; margin-bottom: 10px;
+        `;
+
+            return { label, input };
+        }
+
+        /**
+         * Create Apply + Clear button row for filter popups
+         * @param {Function} onApply
+         * @param {Function} onClear
+         * @returns {HTMLElement}
+         */
+        createPopupButtonRow(onApply, onClear) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display: flex; gap: 8px; margin-top: 10px;';
+
+            const applyBtn = document.createElement('button');
+            applyBtn.textContent = 'Apply';
+            applyBtn.style.cssText = `
+            flex: 1; padding: 6px; background: #4a90e2; color: white;
+            border: none; border-radius: 3px; cursor: pointer;
+        `;
+            applyBtn.addEventListener('click', onApply);
+
+            const clearBtn = document.createElement('button');
+            clearBtn.textContent = 'Clear';
+            clearBtn.style.cssText = `
+            flex: 1; padding: 6px; background: #666; color: white;
+            border: none; border-radius: 3px; cursor: pointer;
+        `;
+            clearBtn.addEventListener('click', onClear);
+
+            row.appendChild(applyBtn);
+            row.appendChild(clearBtn);
+            return row;
+        }
+
+        // ─── Utilities ───────────────────────────────────────────────────────────
+
+        /**
+         * Append a 16×16 or 20×20 SVG item icon to an element
+         * @param {HTMLElement} parent
+         * @param {string} itemHrid
+         * @param {number} size
+         */
+        appendItemIcon(parent, itemHrid, size = 20) {
+            const spriteUrl = this.getItemsSpriteUrl();
+            if (!spriteUrl) return;
+
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', String(size));
+            svg.setAttribute('height', String(size));
+            svg.style.flexShrink = '0';
+
+            const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+            use.setAttribute('href', `${spriteUrl}#${itemHrid.split('/').pop()}`);
+            svg.appendChild(use);
+            parent.appendChild(svg);
+        }
+
+        /**
+         * Get items sprite URL from DOM (cached)
+         * @returns {string|null}
+         */
+        getItemsSpriteUrl() {
+            if (!this.itemsSpriteUrl) {
+                const el = document.querySelector('use[href*="items_sprite"]');
+                if (el) {
+                    const href = el.getAttribute('href');
+                    this.itemsSpriteUrl = href ? href.split('#')[0] : null;
+                }
+            }
+            return this.itemsSpriteUrl;
+        }
+
+        /**
+         * Get item display name from HRID (cached)
+         * @param {string} itemHrid
+         * @returns {string}
+         */
+        getItemName(itemHrid) {
+            if (this.itemNameCache.has(itemHrid)) {
+                return this.itemNameCache.get(itemHrid);
+            }
+            const details = dataManager.getItemDetails(itemHrid);
+            const name = details?.name || itemHrid.split('/').pop().replace(/_/g, ' ');
+            this.itemNameCache.set(itemHrid, name);
+            return name;
+        }
+
+        /**
+         * Get paginated sessions for current page
+         * @returns {Array}
+         */
+        getPaginatedSessions() {
+            if (this.showAll) return this.filteredSessions;
+            const start = (this.currentPage - 1) * this.rowsPerPage;
+            return this.filteredSessions.slice(start, start + this.rowsPerPage);
+        }
+
+        /**
+         * Get total number of pages
+         * @returns {number}
+         */
+        getTotalPages() {
+            if (this.showAll) return 1;
+            return Math.ceil(this.filteredSessions.length / this.rowsPerPage);
+        }
+
+        /**
+         * Delete a single session by ID
+         * @param {string} sessionId
+         */
+        async deleteSession(sessionId) {
+            this.sessions = this.sessions.filter((s) => s.id !== sessionId);
+
+            try {
+                await decomposeHistoryTracker.deleteSessions(this.sessions);
+            } catch (error) {
+                console.error('[DecomposeHistoryViewer] Failed to delete session:', error);
+            }
+
+            this.applyFilters();
+            this.renderTable();
+        }
+
+        /**
+         * Export all sessions to a CSV file download
+         */
+        exportHistory() {
+            const escape = (val) => `"${String(val === null || val === undefined ? '' : val).replace(/"/g, '""')}"`;
+
+            const headers = [
+                'Session Start',
+                'Input Item',
+                'Enh. Level',
+                'Attempts',
+                'Successes',
+                'Failures',
+                'Success Rate',
+                'Results',
+                'Catalyst of Decomposition',
+                'Prime Catalyst',
+            ];
+
+            const rows = this.sessions.map((session) => {
+                const start = new Date(session.startTime).toLocaleString();
+                const inputName = this.getItemName(session.inputItemHrid);
+                const failures = session.totalAttempts - session.totalSuccesses;
+                const rate =
+                    session.totalAttempts > 0
+                        ? ((session.totalSuccesses / session.totalAttempts) * 100).toFixed(1) + '%'
+                        : '0.0%';
+
+                const resultParts = Object.entries(session.results || {})
+                    .sort(([, a], [, b]) => (b.totalValue || 0) - (a.totalValue || 0))
+                    .map(([hrid, result]) => {
+                        const name = this.getItemName(hrid);
+                        const total = formatters_js.formatKMB(result.totalValue || 0, 1);
+                        const each = formatters_js.formatKMB(result.priceEach || 0, 1);
+                        return `${name} x${result.count} = ${total} (${each} each)`;
+                    });
+
+                return [
+                    start,
+                    inputName,
+                    session.enhancementLevel,
+                    session.totalAttempts,
+                    session.totalSuccesses,
+                    failures,
+                    rate,
+                    resultParts.join('; '),
+                    session.catalystOfDecompositionUsed || 0,
+                    session.primeCatalystUsed || 0,
+                ]
+                    .map(escape)
+                    .join(',');
+            });
+
+            const csv = [headers.map(escape).join(','), ...rows].join('\n');
+            const date = new Date().toISOString().slice(0, 10);
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `decompose-history-${date}.csv`;
+            a.click();
+
+            URL.revokeObjectURL(url);
+        }
+
+        /**
+         * Clear all history after confirmation
+         */
+        async clearHistory() {
+            const confirmed = confirm(
+                `\u26A0\uFE0F This will permanently delete ALL decompose history (${this.sessions.length} sessions).\nThis cannot be undone.\n\nAre you sure?`
+            );
+            if (!confirmed) return;
+
+            try {
+                await decomposeHistoryTracker.clearHistory();
+                this.sessions = [];
+                this.filteredSessions = [];
+                alert('Decompose history cleared.');
+                this.applyFilters();
+                this.renderTable();
+            } catch (error) {
+                console.error('[DecomposeHistoryViewer] Failed to clear history:', error);
+                alert(`Failed to clear history: ${error.message}`);
+            }
+        }
+    }
+
+    const decomposeHistoryViewer = new DecomposeHistoryViewer();
+
+    var decomposeHistoryViewer$1 = {
+        name: 'Decompose History Viewer',
+        initialize: () => decomposeHistoryViewer.initialize(),
+        cleanup: () => decomposeHistoryViewer.disable(),
     };
 
     /**
@@ -24492,7 +27782,7 @@ ${hideRules}
      */
 
 
-    const PANEL_ID = 'mwi-xph-calc-panel';
+    const PANEL_ID$1 = 'mwi-xph-calc-panel';
     const BTN_CLASS = 'mwi-xph-calc-btn';
 
     /**
@@ -24651,7 +27941,7 @@ ${hideRules}
 
         _buildPanel() {
             this.panel = document.createElement('div');
-            this.panel.id = PANEL_ID;
+            this.panel.id = PANEL_ID$1;
             this.panel.style.cssText = `
             position: fixed;
             top: 60px;
@@ -24934,7 +28224,7 @@ ${hideRules}
      */
 
 
-    const STORE_NAME = 'guildHistory';
+    const STORE_NAME$1 = 'guildHistory';
     const WINDOW_10M = 10 * 60 * 1000;
     const WINDOW_1H = 60 * 60 * 1000;
     const WINDOW_1D = 24 * 60 * 60 * 1000;
@@ -25174,7 +28464,7 @@ ${hideRules}
             }
 
             // Load persisted player leaderboard history
-            this.playerXPHistory = await storage.get('playerXP_leaderboard', STORE_NAME, {});
+            this.playerXPHistory = await storage.get('playerXP_leaderboard', STORE_NAME$1, {});
 
             this.initialized = true;
         }
@@ -25215,9 +28505,9 @@ ${hideRules}
             }
 
             // Load persisted histories
-            this.guildXPHistory = await storage.get(`guildXP_${guildName}`, STORE_NAME, {});
+            this.guildXPHistory = await storage.get(`guildXP_${guildName}`, STORE_NAME$1, {});
             if (this.ownGuildID) {
-                this.memberXPHistory = await storage.get(`memberXP_${this.ownGuildID}`, STORE_NAME, {});
+                this.memberXPHistory = await storage.get(`memberXP_${this.ownGuildID}`, STORE_NAME$1, {});
             }
 
             const t = data.currentTimestamp ? +new Date(data.currentTimestamp) : Date.now();
@@ -25237,9 +28527,9 @@ ${hideRules}
             }
 
             // Persist
-            await storage.set(`guildXP_${guildName}`, this.guildXPHistory, STORE_NAME);
+            await storage.set(`guildXP_${guildName}`, this.guildXPHistory, STORE_NAME$1);
             if (this.ownGuildID) {
-                await storage.set(`memberXP_${this.ownGuildID}`, this.memberXPHistory, STORE_NAME);
+                await storage.set(`memberXP_${this.ownGuildID}`, this.memberXPHistory, STORE_NAME$1);
             }
         }
 
@@ -25261,7 +28551,7 @@ ${hideRules}
 
             const t = Date.now();
             pushXP(this.guildXPHistory[name], { t, xp: guild.experience });
-            storage.set(`guildXP_${name}`, this.guildXPHistory, STORE_NAME);
+            storage.set(`guildXP_${name}`, this.guildXPHistory, STORE_NAME$1);
         }
 
         /**
@@ -25278,7 +28568,7 @@ ${hideRules}
 
             if (newGuildID && this.ownGuildID && newGuildID !== this.ownGuildID) {
                 // Guild switched — clear stale member data and load fresh from storage
-                this.memberXPHistory = await storage.get(`memberXP_${newGuildID}`, STORE_NAME, {});
+                this.memberXPHistory = await storage.get(`memberXP_${newGuildID}`, STORE_NAME$1, {});
                 this.memberMeta = {};
             }
 
@@ -25308,7 +28598,7 @@ ${hideRules}
             }
 
             if (this.ownGuildID) {
-                storage.set(`memberXP_${this.ownGuildID}`, this.memberXPHistory, STORE_NAME);
+                storage.set(`memberXP_${this.ownGuildID}`, this.memberXPHistory, STORE_NAME$1);
             }
         }
 
@@ -25337,7 +28627,7 @@ ${hideRules}
 
                 // Persist using own guild name as key (all guild histories stored together)
                 if (this.ownGuildName) {
-                    storage.set(`guildXP_${this.ownGuildName}`, this.guildXPHistory, STORE_NAME);
+                    storage.set(`guildXP_${this.ownGuildName}`, this.guildXPHistory, STORE_NAME$1);
                 }
             } else {
                 for (const row of rows) {
@@ -25351,7 +28641,7 @@ ${hideRules}
                     pushXP(this.playerXPHistory[name], { t, xp });
                 }
 
-                storage.set('playerXP_leaderboard', this.playerXPHistory, STORE_NAME);
+                storage.set('playerXP_leaderboard', this.playerXPHistory, STORE_NAME$1);
             }
         }
 
@@ -25479,7 +28769,7 @@ ${hideRules}
         async resetMemberData() {
             if (!this.ownGuildID) return;
             this.memberXPHistory = {};
-            await storage.set(`memberXP_${this.ownGuildID}`, {}, STORE_NAME);
+            await storage.set(`memberXP_${this.ownGuildID}`, {}, STORE_NAME$1);
         }
 
         /**
@@ -26527,6 +29817,502 @@ ${hideRules}
     const emptyQueueNotification = new EmptyQueueNotification();
 
     /**
+     * Queue Snapshot
+     * Captures queue state on character switch for cross-character monitoring.
+     * Pre-computes per-action times while the departing character's data is still live.
+     */
+
+
+    const STORE_NAME = 'queueSnapshots';
+
+    class QueueSnapshot {
+        constructor() {
+            this.snapshots = new Map(); // characterId -> snapshot
+            this._boundOnSwitching = null;
+        }
+
+        /**
+         * Initialize snapshot listener.
+         * The character_switching listener is registered once and never removed,
+         * because feature-registry disables all features during character_switching
+         * which would remove the listener before it can fire.
+         */
+        initialize() {
+            if (!this._boundOnSwitching) {
+                this._boundOnSwitching = this._onCharacterSwitching.bind(this);
+                dataManager.on('character_switching', this._boundOnSwitching);
+            }
+
+            // Load existing snapshots from storage
+            this._loadSnapshots();
+        }
+
+        /**
+         * Disable — UI cleanup only. The switching listener persists intentionally.
+         */
+        disable() {
+            // Intentionally keep the character_switching listener alive.
+            // It must fire during the switch to capture the departing character's queue.
+        }
+
+        /**
+         * Handle character_switching event — snapshot departing character's queue
+         * At this point, departing character's data is still live in dataManager
+         * @param {Object} event - { oldId, newId, oldName, newName }
+         */
+        _onCharacterSwitching(event) {
+            try {
+                const { oldId, oldName } = event;
+                if (!oldId) return;
+
+                const actions = dataManager.getCurrentActions();
+                const skills = dataManager.getSkills();
+                const equipment = dataManager.getEquipment();
+                const initData = dataManager.getInitClientData();
+                const itemDetailMap = initData?.itemDetailMap;
+
+                if (!actions || !skills || !itemDetailMap) {
+                    return;
+                }
+
+                const snapshotActions = [];
+                let totalQueueSeconds = 0;
+                let hasInfiniteAction = false;
+
+                for (const action of actions) {
+                    if (action.isDone) continue;
+
+                    const actionDetails = dataManager.getActionDetails(action.actionHrid);
+                    if (!actionDetails) continue;
+
+                    const actionName = actionDetails.name || action.actionHrid;
+                    const isInfinite = !action.hasMaxCount;
+
+                    let estimatedSeconds = null;
+
+                    if (!isInfinite) {
+                        // Finite action — compute remaining time
+                        const stats = actionCalculator_js.calculateActionStats(actionDetails, {
+                            skills,
+                            equipment,
+                            itemDetailMap,
+                            actionHrid: action.actionHrid,
+                            includeCommunityBuff: true,
+                        });
+
+                        if (stats) {
+                            const remainingCount = Math.max(0, action.maxCount - action.currentCount);
+                            // Each action produces ceil(1 + efficiency/100) items on average
+                            // Time = remaining / effectiveRate * actionTime
+                            const effectiveRate = 1 + stats.totalEfficiency / 100;
+                            estimatedSeconds = Math.ceil(remainingCount / effectiveRate) * stats.actionTime;
+                            totalQueueSeconds += estimatedSeconds;
+                        }
+                    } else {
+                        hasInfiniteAction = true;
+                    }
+
+                    snapshotActions.push({
+                        actionHrid: action.actionHrid,
+                        actionName,
+                        maxCount: action.maxCount || null,
+                        currentCount: action.currentCount || 0,
+                        hasMaxCount: action.hasMaxCount,
+                        estimatedSeconds,
+                        isInfinite,
+                    });
+                }
+
+                const snapshot = {
+                    characterId: oldId,
+                    characterName: oldName,
+                    timestamp: Date.now(),
+                    actions: snapshotActions,
+                    totalQueueSeconds,
+                    hasInfiniteAction,
+                };
+
+                this.snapshots.set(oldId, snapshot);
+
+                // Persist to IndexedDB
+                storage.set(`queueSnapshot_${oldId}`, snapshot, STORE_NAME);
+            } catch (error) {
+                console.error('[QueueSnapshot] Failed to create snapshot:', error);
+            }
+        }
+
+        /**
+         * Load all snapshots from IndexedDB
+         */
+        async _loadSnapshots() {
+            try {
+                const keys = await storage.getAllKeys(STORE_NAME);
+                for (const key of keys) {
+                    const snapshot = await storage.get(key, STORE_NAME);
+                    if (snapshot?.characterId) {
+                        this.snapshots.set(snapshot.characterId, snapshot);
+                    }
+                }
+            } catch (error) {
+                console.error('[QueueSnapshot] Failed to load snapshots:', error);
+            }
+        }
+
+        /**
+         * Get all snapshots for characters other than the current one
+         * @returns {Array<Object>} Array of snapshot objects
+         */
+        getOtherCharacterSnapshots() {
+            const currentId = dataManager.getCurrentCharacterId();
+            const results = [];
+            for (const [id, snapshot] of this.snapshots) {
+                if (id !== currentId) {
+                    results.push(snapshot);
+                }
+            }
+            return results;
+        }
+
+        /**
+         * Get a specific character's snapshot
+         * @param {string} characterId
+         * @returns {Object|null}
+         */
+        getSnapshot(characterId) {
+            return this.snapshots.get(characterId) || null;
+        }
+
+        /**
+         * Delete a snapshot
+         * @param {string} characterId
+         */
+        async deleteSnapshot(characterId) {
+            this.snapshots.delete(characterId);
+            await storage.delete(`queueSnapshot_${characterId}`, STORE_NAME);
+        }
+    }
+
+    const queueSnapshot = new QueueSnapshot();
+
+    /**
+     * Queue Monitor UI
+     * Floating widget showing estimated queue time remaining for other characters.
+     * Countdown ticks every 30 seconds. Color-coded: green > 1hr, yellow < 30min, red = 0.
+     */
+
+
+    const PANEL_ID = 'toolasha-queue-monitor';
+    const UPDATE_INTERVAL = 30_000; // 30 seconds
+    const STALE_THRESHOLD = 24 * 60 * 60 * 1000; // 24 hours
+
+    const ACCENT = '#4a9eff';
+    const ACCENT_BORDER = 'rgba(74, 158, 255, 0.5)';
+    const ACCENT_BG = 'rgba(74, 158, 255, 0.12)';
+
+    class QueueMonitorUI {
+        constructor() {
+            this.panel = null;
+            this.bodyEl = null;
+            this.timers = timerRegistry_js.createTimerRegistry();
+            this.collapsed = false;
+            this.isDragging = false;
+            this.dragOffset = { x: 0, y: 0 };
+            this._expandedChars = new Set();
+        }
+
+        /**
+         * Initialize the UI
+         */
+        async initialize() {
+            // Load collapse state
+            this.collapsed = await storage.get('queueMonitor_collapsed', 'settings', false);
+
+            this._buildPanel();
+            this._updateDisplay();
+
+            // Refresh display periodically
+            this.timers.registerInterval(setInterval(() => this._updateDisplay(), UPDATE_INTERVAL));
+
+            // Also refresh when switching characters (new snapshot available after re-init)
+            this._boundOnInit = () => {
+                // Delay slightly to allow snapshot to be saved
+                setTimeout(() => this._updateDisplay(), 500);
+            };
+            dataManager.on('character_initialized', this._boundOnInit);
+        }
+
+        /**
+         * Disable and clean up
+         */
+        disable() {
+            this.timers.clearAll();
+            if (this._boundOnInit) {
+                dataManager.off('character_initialized', this._boundOnInit);
+                this._boundOnInit = null;
+            }
+            if (this.panel) {
+                unregisterFloatingPanel(this.panel);
+                this.panel.remove();
+                this.panel = null;
+            }
+        }
+
+        /**
+         * Build the floating panel
+         */
+        _buildPanel() {
+            if (this.panel) return;
+
+            this.panel = document.createElement('div');
+            this.panel.id = PANEL_ID;
+            this.panel.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: ${config.Z_FLOATING_PANEL};
+            background: rgba(10, 10, 20, 0.95);
+            border: 1px solid ${ACCENT_BORDER};
+            border-radius: 8px;
+            min-width: 220px;
+            max-width: 320px;
+            font-family: 'Segoe UI', sans-serif;
+            color: #e0e0e0;
+            font-size: 12px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+        `;
+
+            // Header
+            const header = document.createElement('div');
+            header.style.cssText = `
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 10px;
+            cursor: grab;
+            background: ${ACCENT_BG};
+            border-bottom: 1px solid ${ACCENT_BORDER};
+            border-radius: 7px 7px 0 0;
+            user-select: none;
+        `;
+            header.innerHTML = `
+            <span style="font-weight:600; font-size:12px; color:${ACCENT};">Queue Monitor</span>
+            <button id="toolasha-qm-toggle" style="
+                background:none; border:none; color:#aaa; font-size:16px;
+                cursor:pointer; padding:0; line-height:1;">${this.collapsed ? '+' : '−'}</button>
+        `;
+            this._setupDrag(header);
+
+            // Body
+            this.bodyEl = document.createElement('div');
+            this.bodyEl.style.cssText = `
+            padding: 8px 10px;
+            display: ${this.collapsed ? 'none' : 'block'};
+            max-height: 300px;
+            overflow-y: auto;
+        `;
+
+            this.panel.appendChild(header);
+            this.panel.appendChild(this.bodyEl);
+            document.body.appendChild(this.panel);
+
+            registerFloatingPanel(this.panel);
+
+            // Bring to front on click
+            this.panel.addEventListener('mousedown', () => bringPanelToFront(this.panel));
+
+            // Toggle collapse
+            header.querySelector('#toolasha-qm-toggle').addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.collapsed = !this.collapsed;
+                this.bodyEl.style.display = this.collapsed ? 'none' : 'block';
+                e.target.textContent = this.collapsed ? '+' : '−';
+                storage.set('queueMonitor_collapsed', this.collapsed, 'settings');
+            });
+        }
+
+        /**
+         * Setup dragging on header
+         * @param {HTMLElement} header
+         */
+        _setupDrag(header) {
+            const onMouseDown = (e) => {
+                if (e.target.tagName === 'BUTTON') return;
+                this.isDragging = true;
+                this.dragOffset.x = e.clientX - this.panel.getBoundingClientRect().left;
+                this.dragOffset.y = e.clientY - this.panel.getBoundingClientRect().top;
+                header.style.cursor = 'grabbing';
+                e.preventDefault();
+            };
+
+            const onMouseMove = (e) => {
+                if (!this.isDragging) return;
+                const x = e.clientX - this.dragOffset.x;
+                const y = e.clientY - this.dragOffset.y;
+                this.panel.style.left = `${x}px`;
+                this.panel.style.top = `${y}px`;
+                this.panel.style.right = 'auto';
+                this.panel.style.bottom = 'auto';
+            };
+
+            const onMouseUp = () => {
+                if (this.isDragging) {
+                    this.isDragging = false;
+                    header.style.cursor = 'grab';
+                }
+            };
+
+            header.addEventListener('mousedown', onMouseDown);
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        }
+
+        /**
+         * Update the display with current snapshot data
+         */
+        _updateDisplay() {
+            if (!this.bodyEl) return;
+
+            const snapshots = queueSnapshot.getOtherCharacterSnapshots();
+
+            if (snapshots.length === 0) {
+                this.bodyEl.innerHTML = `<div style="color:#666; font-size:11px; text-align:center; padding:4px 0;">
+                No other character data yet.<br>Switch characters to capture queue state.
+            </div>`;
+                return;
+            }
+
+            // Sort by character name
+            snapshots.sort((a, b) => a.characterName.localeCompare(b.characterName));
+
+            let html = '';
+            for (const snap of snapshots) {
+                const elapsed = (Date.now() - snap.timestamp) / 1000;
+                const remaining = Math.max(0, snap.totalQueueSeconds - elapsed);
+                const isStale = Date.now() - snap.timestamp > STALE_THRESHOLD;
+                const isExpanded = this._expandedChars.has(String(snap.characterId));
+
+                // Color coding
+                let dotColor;
+                if (snap.actions.length === 0) {
+                    dotColor = '#666'; // No actions = grey
+                } else if (remaining <= 0 && !snap.hasInfiniteAction) {
+                    dotColor = '#e74c3c'; // Red — likely idle
+                } else if (remaining < 1800 && !snap.hasInfiniteAction) {
+                    dotColor = '#f39c12'; // Yellow — less than 30 min
+                } else {
+                    dotColor = '#2ecc71'; // Green — more than 30 min or infinite
+                }
+
+                // Time display
+                let timeDisplay;
+                if (snap.actions.length === 0) {
+                    timeDisplay = 'Idle';
+                } else if (snap.hasInfiniteAction && remaining <= 0) {
+                    timeDisplay = '∞';
+                } else if (remaining <= 0) {
+                    timeDisplay = 'Done';
+                } else {
+                    timeDisplay = formatters_js.timeReadable(remaining);
+                    if (snap.hasInfiniteAction) {
+                        timeDisplay += ' + ∞';
+                    }
+                }
+
+                html += `<div style="margin-bottom:6px;">`;
+                html += `<div style="display:flex; align-items:center; gap:6px; cursor:pointer;" data-char-id="${snap.characterId}">`;
+                html += `<span style="width:8px; height:8px; border-radius:50%; background:${dotColor}; flex-shrink:0;"></span>`;
+                html += `<span style="font-weight:600; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${this._escapeHtml(snap.characterName)}</span>`;
+                html += `<span style="color:#aaa; font-size:11px; white-space:nowrap;">${timeDisplay}</span>`;
+                html += `<span style="color:#555; font-size:10px;">${isExpanded ? '▾' : '▸'}</span>`;
+                html += `</div>`;
+
+                if (isStale) {
+                    html += `<div style="color:#f39c12; font-size:10px; margin-left:14px; margin-top:2px;">Stale (>${Math.round((Date.now() - snap.timestamp) / 3600000)}h ago)</div>`;
+                }
+
+                // Expanded action details
+                if (isExpanded && snap.actions.length > 0) {
+                    html += `<div style="margin-left:14px; margin-top:4px; font-size:11px; color:#999;">`;
+                    for (const action of snap.actions) {
+                        const actionElapsed = elapsed;
+                        let actionTimeStr;
+                        if (action.isInfinite) {
+                            actionTimeStr = '∞';
+                        } else if (action.estimatedSeconds !== null) {
+                            const actionRemaining = Math.max(0, action.estimatedSeconds - Math.max(0, actionElapsed));
+                            actionTimeStr = actionRemaining <= 0 ? 'Done' : formatters_js.timeReadable(actionRemaining);
+                        } else {
+                            actionTimeStr = '?';
+                        }
+
+                        const countStr = action.hasMaxCount ? `${action.currentCount}/${action.maxCount}` : '';
+
+                        html += `<div style="display:flex; justify-content:space-between; gap:8px; padding:1px 0;">`;
+                        html += `<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${this._escapeHtml(action.actionName)}</span>`;
+                        html += `<span style="white-space:nowrap; color:#777;">${countStr ? countStr + ' · ' : ''}${actionTimeStr}</span>`;
+                        html += `</div>`;
+                    }
+                    html += `</div>`;
+                }
+
+                html += `</div>`;
+            }
+
+            this.bodyEl.innerHTML = html;
+
+            // Attach click handlers for expand/collapse
+            const charRows = this.bodyEl.querySelectorAll('[data-char-id]');
+            for (const row of charRows) {
+                row.addEventListener('click', () => {
+                    const charId = row.dataset.charId;
+                    if (this._expandedChars.has(charId)) {
+                        this._expandedChars.delete(charId);
+                    } else {
+                        this._expandedChars.add(charId);
+                    }
+                    this._updateDisplay();
+                });
+            }
+        }
+
+        /**
+         * Escape HTML special characters
+         * @param {string} str
+         * @returns {string}
+         */
+        _escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+    }
+
+    const queueMonitorUI = new QueueMonitorUI();
+
+    /**
+     * Queue Monitor
+     * Cross-character queue monitor — shows estimated queue time remaining
+     * for other characters by snapshotting queue state on character switch.
+     */
+
+
+    var queueMonitor = {
+        name: 'Queue Monitor',
+
+        initialize: () => {
+            queueSnapshot.initialize();
+            queueMonitorUI.initialize();
+        },
+
+        disable: () => {
+            queueSnapshot.disable();
+            queueMonitorUI.disable();
+        },
+    };
+
+    /**
      * UI Library
      * UI enhancements, tasks, skills, house, settings, and misc features
      *
@@ -26576,13 +30362,16 @@ ${hideRules}
         transmuteHistoryViewer: transmuteHistoryViewer$1,
         coinifyHistoryTracker: coinifyHistoryTracker$1,
         coinifyHistoryViewer: coinifyHistoryViewer$1,
+        decomposeHistoryTracker: decomposeHistoryTracker$1,
+        decomposeHistoryViewer: decomposeHistoryViewer$1,
         enhancementFeature,
         xphCalculator,
         guildXPTracker: guildXPTracker$1,
         guildXPDisplay: guildXPDisplay$1,
         emptyQueueNotification,
+        queueMonitor,
     };
 
     console.log('[Toolasha] UI library loaded');
 
-})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Utils.formatters, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Utils.dom, Toolasha.Core.storage, Toolasha.Core.marketAPI, Toolasha.Utils.efficiency, Toolasha.Core.webSocketHook, Toolasha.Utils.reactInput, Toolasha.Utils.actionPanelHelper, Toolasha.Market.expectedValueCalculator, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.profitConstants, Toolasha.Utils.profitHelpers, Toolasha.Market.profitCalculator, Toolasha.Utils.selectors, Toolasha.Utils.cleanupRegistry, Toolasha.Core, Toolasha.Core.settingsStorage, Toolasha.Utils.materialCalculator, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.enhancementConfig, Toolasha.Utils.teaParser);
+})(Toolasha.Core.config, Toolasha.Core.dataManager, Toolasha.Core.domObserver, Toolasha.Utils.formatters, Toolasha.Utils.timerRegistry, Toolasha.Utils.domObserverHelpers, Toolasha.Utils.dom, Toolasha.Core.storage, Toolasha.Core.marketAPI, Toolasha.Utils.efficiency, Toolasha.Core.webSocketHook, Toolasha.Utils.reactInput, Toolasha.Utils.actionPanelHelper, Toolasha.Market.expectedValueCalculator, Toolasha.Utils.bonusRevenueCalculator, Toolasha.Utils.marketData, Toolasha.Utils.profitConstants, Toolasha.Utils.profitHelpers, Toolasha.Market.profitCalculator, Toolasha.Utils.selectors, Toolasha.Core.profileManager, Toolasha.Utils.cleanupRegistry, Toolasha.Core, Toolasha.Core.settingsStorage, Toolasha.Utils.materialCalculator, Toolasha.Utils.enhancementCalculator, Toolasha.Utils.enhancementConfig, Toolasha.Utils.teaParser, Toolasha.Utils.actionCalculator);

@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.23.0
+ * Version: 2.24.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -8842,11 +8842,9 @@ self.onmessage = function (e) {
          * Disable the listing price display
          */
         disable() {
-            // Cleanup all MutationObservers
-            for (const observer of this.tbodyObservers.values()) {
-                observer.disconnect();
-            }
-            this.tbodyObservers.clear();
+            // Cleanup all MutationObservers (tbodyObservers is a WeakMap, not iterable)
+            // WeakMap entries are GC'd automatically, just reset the reference
+            this.tbodyObservers = new WeakMap();
 
             this.cleanupRegistry.cleanupAll();
             this.clearDisplays();
@@ -9133,7 +9131,7 @@ self.onmessage = function (e) {
          */
         disable() {
             this.clearDisplays();
-            this.cleanupRegistry.cleanup();
+            this.cleanupRegistry.cleanupAll();
             this.isInitialized = false;
         }
 
@@ -23716,7 +23714,9 @@ self.onmessage = function (e) {
                 dataManager.off('items_updated', this._onItemsUpdated);
                 this._onItemsUpdated = null;
             }
-            for (const unreg of this._unregisterHandlers) unreg();
+            for (const unreg of this._unregisterHandlers) {
+                if (typeof unreg === 'function') unreg();
+            }
             this._unregisterHandlers = [];
 
             this._tabBtn?.remove();

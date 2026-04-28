@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.23.0
+ * Version: 2.24.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -21,7 +21,7 @@
             this.db = null;
             this.available = false;
             this.dbName = 'ToolashaDB';
-            this.dbVersion = 14; // Bumped for collections store
+            this.dbVersion = 15; // Bumped for queueSnapshots store
             this.saveDebounceTimers = new Map(); // Per-key debounce timers
             this.pendingWrites = new Map(); // Per-key pending write data: {value, storeName}
             this.SAVE_DEBOUNCE_DELAY = 3000; // 3 seconds
@@ -165,6 +165,11 @@
                     // Create collections store if it doesn't exist (for collection filters feature)
                     if (!db.objectStoreNames.contains('collections')) {
                         db.createObjectStore('collections');
+                    }
+
+                    // Create queueSnapshots store if it doesn't exist (for cross-character queue monitor)
+                    if (!db.objectStoreNames.contains('queueSnapshots')) {
+                        db.createObjectStore('queueSnapshots');
                     }
                 };
             });
@@ -524,6 +529,13 @@
                     default: true,
                     help: 'Adds View Action and Item Dictionary buttons when clicking collection items',
                 },
+                queueMonitor: {
+                    id: 'queueMonitor',
+                    label: 'Cross-character queue monitor',
+                    type: 'checkbox',
+                    default: false,
+                    help: 'Shows estimated queue time remaining for your other characters in a floating widget',
+                },
             },
         },
 
@@ -666,6 +678,13 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Records coinify sessions and displays history in a viewer tab in the Alchemy panel',
+                },
+                alchemy_decomposeHistory: {
+                    id: 'alchemy_decomposeHistory',
+                    label: 'Alchemy panel: Track and view decompose session history',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Records decompose sessions and displays history in a viewer tab in the Alchemy panel',
                 },
                 actions_missingMaterialsButton: {
                     id: 'actions_missingMaterialsButton',

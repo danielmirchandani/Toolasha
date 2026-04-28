@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Toolasha
 // @namespace    http://tampermonkey.net/
-// @version      2.23.0
+// @version      2.24.0
 // @downloadURL  https://greasyfork.org/scripts/562662-toolasha/code/Toolasha.user.js
 // @updateURL    https://greasyfork.org/scripts/562662-toolasha/code/Toolasha.meta.js
 // @description  Toolasha - Enhanced tools for Milky Way Idle.
@@ -21,12 +21,12 @@
 // @require      https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.4.2/math.js
 // @require      https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js
 // @require      https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0/dist/chartjs-plugin-datalabels.min.js
-// @require      https://cdn.jsdelivr.net/gh/Celasha/Toolasha@b7a70601344fbe10b5cdd559cda92f9f04351794/dist/libraries/toolasha-core.js
-// @require      https://cdn.jsdelivr.net/gh/Celasha/Toolasha@b7a70601344fbe10b5cdd559cda92f9f04351794/dist/libraries/toolasha-utils.js
-// @require      https://cdn.jsdelivr.net/gh/Celasha/Toolasha@b7a70601344fbe10b5cdd559cda92f9f04351794/dist/libraries/toolasha-market.js
-// @require      https://cdn.jsdelivr.net/gh/Celasha/Toolasha@b7a70601344fbe10b5cdd559cda92f9f04351794/dist/libraries/toolasha-actions.js
-// @require      https://cdn.jsdelivr.net/gh/Celasha/Toolasha@b7a70601344fbe10b5cdd559cda92f9f04351794/dist/libraries/toolasha-combat.js
-// @require      https://cdn.jsdelivr.net/gh/Celasha/Toolasha@b7a70601344fbe10b5cdd559cda92f9f04351794/dist/libraries/toolasha-ui.js
+// @require      https://UPDATE-THIS-URL/toolasha-core.js
+// @require      https://UPDATE-THIS-URL/toolasha-utils.js
+// @require      https://UPDATE-THIS-URL/toolasha-market.js
+// @require      https://UPDATE-THIS-URL/toolasha-actions.js
+// @require      https://UPDATE-THIS-URL/toolasha-combat.js
+// @require      https://UPDATE-THIS-URL/toolasha-ui.js
 // ==/UserScript==
 // Note: Combat Sim auto-import requires Tampermonkey for cross-domain storage. Not available on Steam (use manual clipboard copy/paste instead).
 
@@ -601,6 +601,20 @@
                 async: false,
             },
             {
+                key: 'alchemy_decomposeHistory',
+                name: 'Decompose History Tracker',
+                category: 'Alchemy',
+                module: UI.decomposeHistoryTracker,
+                async: false,
+            },
+            {
+                key: 'alchemy_decomposeHistoryViewer',
+                name: 'Decompose History Viewer',
+                category: 'Alchemy',
+                module: UI.decomposeHistoryViewer,
+                async: false,
+            },
+            {
                 key: 'enhancementFeature',
                 name: 'Enhancement Tracker',
                 category: 'Enhancement',
@@ -633,6 +647,13 @@
                 name: 'Empty Queue Notification',
                 category: 'Notifications',
                 module: UI.emptyQueueNotification,
+                async: false,
+            },
+            {
+                key: 'queueMonitor',
+                name: 'Queue Monitor',
+                category: 'General',
+                module: UI.queueMonitor,
                 async: false,
             },
         ];
