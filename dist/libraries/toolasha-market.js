@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.24.4
+ * Version: 2.24.5
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -15751,16 +15751,50 @@ self.onmessage = function (e) {
         constructor() {
             this.snapshots = {}; // In-memory cache: { [loadoutName]: snapshot }
             this.loadoutsUpdatedHandler = null;
+            this.characterInitializedHandler = null;
+            this.updateListeners = [];
             this.isInitialized = false;
+        }
+
+        /**
+         * Register a callback to be called whenever snapshots are updated.
+         * @param {Function} fn
+         */
+        onUpdate(fn) {
+            this.updateListeners.push(fn);
+        }
+
+        /**
+         * Remove a previously registered update callback.
+         * @param {Function} fn
+         */
+        offUpdate(fn) {
+            this.updateListeners = this.updateListeners.filter((l) => l !== fn);
+        }
+
+        _emitUpdate() {
+            this.updateListeners.forEach((fn) => fn());
         }
 
         async initialize() {
             if (this.isInitialized) return;
             this.isInitialized = true;
 
-            // Load existing snapshots into memory
+            // Load existing snapshots into memory.
+            // NOTE: getCurrentCharacterId() may be null at this point (before init_character_data
+            // arrives), so getStorageKey() may return 'loadout_snapshots_default'. We will reload
+            // from the correct key once character_initialized fires.
             this.snapshots = (await storage.getJSON(getStorageKey$1(), 'settings', null)) || {};
-            console.log(`[LoadoutSnapshot] initialize() — loaded ${Object.keys(this.snapshots).length} existing snapshots`);
+
+            // Reload from the correct character-scoped key once character data is available
+            this.characterInitializedHandler = async () => {
+                const fresh = (await storage.getJSON(getStorageKey$1(), 'settings', null)) || {};
+                if (Object.keys(fresh).length > 0) {
+                    this.snapshots = fresh;
+                    this._emitUpdate();
+                }
+            };
+            dataManager.on('character_initialized', this.characterInitializedHandler);
 
             // Listen for loadouts_updated WebSocket messages
             this.loadoutsUpdatedHandler = (data) => this._onLoadoutsUpdated(data);
@@ -15773,10 +15807,8 @@ self.onmessage = function (e) {
          * @param {Object} data - The WebSocket message payload
          */
         _onLoadoutsUpdated(data) {
-            console.log('[LoadoutSnapshot] loadouts_updated WebSocket message received');
             const loadoutMap = data.characterLoadoutMap;
             if (!loadoutMap) {
-                console.log('[LoadoutSnapshot] no characterLoadoutMap in message');
                 return;
             }
 
@@ -15784,17 +15816,11 @@ self.onmessage = function (e) {
             for (const [id, loadout] of Object.entries(loadoutMap)) {
                 if (!loadout.name) continue;
                 newSnapshots[id] = buildSnapshot(loadout);
-                console.log(
-                    `[LoadoutSnapshot]   → ${loadout.name} (id=${id}): type=${loadout.actionTypeHrid || 'All Skills'}, default=${loadout.isDefault}`
-                );
             }
 
             this.snapshots = newSnapshots;
             storage.setJSON(getStorageKey$1(), this.snapshots, 'settings');
-            console.log(
-                `[LoadoutSnapshot] Synced ${Object.keys(newSnapshots).length} snapshots:`,
-                Object.values(newSnapshots).map((s) => s.name)
-            );
+            this._emitUpdate();
         }
 
         /**
@@ -15884,6 +15910,12 @@ self.onmessage = function (e) {
                 this.loadoutsUpdatedHandler = null;
             }
 
+            if (this.characterInitializedHandler) {
+                dataManager.off('character_initialized', this.characterInitializedHandler);
+                this.characterInitializedHandler = null;
+            }
+
+            this.updateListeners = [];
             this.isInitialized = false;
         }
     }
