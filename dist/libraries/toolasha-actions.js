@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.24.2
+ * Version: 2.24.3
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -8279,9 +8279,18 @@
         injectButtons(panel) {
             let actionDetails = null;
             try {
-                // Check if already injected
+                // Check if already injected for this same action
+                const actionNameElement = panel.querySelector('[class*="SkillActionDetail_name"]');
+                const currentActionName = actionNameElement?.textContent?.trim() || '';
+                const previousActionName = panel.dataset.mwiInjectedAction || '';
+
                 if (panel.querySelector('.mwi-collapsible-section')) {
-                    return;
+                    if (currentActionName && currentActionName === previousActionName) {
+                        return;
+                    }
+                    // Action changed (React reused the panel) — remove old injections
+                    panel.querySelectorAll('.mwi-collapsible-section').forEach((el) => el.remove());
+                    panel.querySelectorAll('.mwi-quick-input-btn').forEach((el) => el.remove());
                 }
 
                 // Find the number input field first to skip panels that don't have queue inputs
@@ -8308,18 +8317,20 @@
                 }
 
                 // Get action details for time-based calculations
-                const actionNameElement = panel.querySelector('[class*="SkillActionDetail_name"]');
                 if (!actionNameElement) {
                     console.warn('[Quick Input Buttons] No action name element found');
                     return;
                 }
 
-                const actionName = actionNameElement.textContent.trim();
+                const actionName = currentActionName;
                 actionDetails = this.getActionDetailsByName(actionName, gameData);
                 if (!actionDetails) {
                     console.warn('[Quick Input Buttons] No action details found for:', actionName);
                     return;
                 }
+
+                // Stamp panel so we can detect when React swaps the action content
+                panel.dataset.mwiInjectedAction = actionName;
 
                 // Check if this action has normal XP gain (skip speed section for combat)
                 const experienceGain = actionDetails.experienceGain;
@@ -8786,21 +8797,35 @@
                     );
                     activePresetValues.forEach((value) => {
                         const button = this.createButton(formatters_js.formatKMB(value), () => {
+                            const currentInput =
+                                panel.querySelector('[class*="maxActionCountInput"] input') ||
+                                panel.querySelector('input[type="number"]') ||
+                                numberInput;
                             if (this.addMode) {
-                                const current = parseInt(numberInput.value) || 0;
-                                this.setInputValue(numberInput, current + value);
+                                const current = parseInt(currentInput.value) || 0;
+                                this.setInputValue(currentInput, current + value);
                             } else {
-                                this.setInputValue(numberInput, value);
+                                this.setInputValue(currentInput, value);
                             }
                         });
                         queueContent.appendChild(button);
                     });
 
                     const maxButton = this.createButton('Max', () => {
-                        const maxValue = this.calculateMaxValue(panel, actionDetails, gameData);
+                        const currentInput =
+                            panel.querySelector('[class*="maxActionCountInput"] input') ||
+                            panel.querySelector('input[type="number"]') ||
+                            numberInput;
+                        const nameEl = panel.querySelector('[class*="SkillActionDetail_name"]');
+                        const currentName = nameEl?.textContent?.trim();
+                        const currentDetails =
+                            currentName && currentName !== actionDetails.name
+                                ? this.getActionDetailsByName(currentName, gameData) || actionDetails
+                                : actionDetails;
+                        const maxValue = this.calculateMaxValue(panel, currentDetails, gameData);
                         // Handle both infinity symbol and numeric values
                         if (maxValue === '∞' || maxValue > 0) {
-                            this.setInputValue(numberInput, maxValue);
+                            this.setInputValue(currentInput, maxValue);
                         }
                     });
                     queueContent.appendChild(maxButton);
