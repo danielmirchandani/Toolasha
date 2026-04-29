@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.24.7
+ * Version: 2.24.8
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -5832,17 +5832,22 @@ ${hideRules}
     function parseTaskDescription(taskDescription, taskType, quantity, currentProgress) {
         const gameData = dataManager.getInitClientData();
         if (!gameData) {
+            console.warn('[TaskProfit] parseTaskDescription: initClientData is null', { taskDescription, taskType });
             return null;
         }
 
         const actionDetailMap = gameData.actionDetailMap;
         if (!actionDetailMap) {
+            console.warn('[TaskProfit] parseTaskDescription: actionDetailMap missing from initClientData', {
+                taskDescription,
+            });
             return null;
         }
 
         // Extract action name from "Skill - Action" format
         const match = taskDescription.match(/^[^-]+\s*-\s*(.+)$/);
         if (!match) {
+            console.warn('[TaskProfit] parseTaskDescription: regex did not match description', { taskDescription });
             return null;
         }
 
@@ -5855,6 +5860,12 @@ ${hideRules}
             }
         }
 
+        console.warn('[TaskProfit] parseTaskDescription: no actionHrid found for action name', {
+            taskDescription,
+            extractedActionName: actionName,
+            taskType,
+            actionDetailMapSize: Object.keys(actionDetailMap).length,
+        });
         return null;
     }
 
@@ -8040,6 +8051,15 @@ ${hideRules}
                 currentProgress,
             };
 
+            console.log('[TaskProfit] parseTaskData:', {
+                description,
+                descriptionCharCodes: [...description].map((c) => c.charCodeAt(0)),
+                quantity,
+                currentProgress,
+                coinReward,
+                taskTokenReward,
+            });
+
             return taskData;
         }
 
@@ -8103,8 +8123,36 @@ ${hideRules}
             // Extract monster name from "Defeat - Monster Name" description
             const match = taskData.description.match(/^Defeat\s*-\s*(.+)$/i);
             const monsterName = match?.[1]?.trim();
+            console.log(
+                '[TaskProfit] Combat estimate — raw description:',
+                JSON.stringify(taskData.description),
+                '| regex match:',
+                match ? JSON.stringify(match[0]) : 'null',
+                '| extracted name:',
+                JSON.stringify(monsterName)
+            );
+
+            const initClientData = dataManager.getInitClientData();
+            const monsterMap = initClientData?.combatMonsterDetailMap;
             const monsterHrid = monsterName ? dataManager.getMonsterHridFromName(monsterName) : null;
+
             if (!monsterHrid) {
+                const knownNames = monsterMap
+                    ? Object.values(monsterMap)
+                          .map((m) => m.name)
+                          .sort()
+                    : null;
+                console.warn('[TaskProfit] Could not identify monster', {
+                    description: taskData.description,
+                    extractedName: monsterName,
+                    initClientDataLoaded: !!initClientData,
+                    monsterMapSize: monsterMap ? Object.keys(monsterMap).length : 0,
+                    closeMatches: knownNames
+                        ? knownNames.filter(
+                              (n) => monsterName && n.toLowerCase().includes(monsterName.toLowerCase().split(' ')[0])
+                          )
+                        : [],
+                });
                 container.innerHTML = '<span style="color:#f87171; font-size:11px;">Could not identify monster.</span>';
                 return;
             }
