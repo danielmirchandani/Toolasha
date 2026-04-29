@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.24.8
+ * Version: 2.25.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -8121,8 +8121,9 @@ ${hideRules}
          */
         async _runCombatSimEstimate(container, taskData, loadoutName) {
             // Extract monster name from "Defeat - Monster Name" description
+            // Strip trailing zone suffix e.g. "PorcupineZ1" → "Porcupine"
             const match = taskData.description.match(/^Defeat\s*-\s*(.+)$/i);
-            const monsterName = match?.[1]?.trim();
+            const monsterName = match?.[1]?.trim().replace(/Z\d+$/i, '') || null;
             console.log(
                 '[TaskProfit] Combat estimate — raw description:',
                 JSON.stringify(taskData.description),
