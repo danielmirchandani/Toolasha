@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.24.1
+ * Version: 2.24.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -21577,8 +21577,6 @@ ${hideRules}
                 coinsPerSuccess,
                 bulkMultiplier,
             };
-
-            await this.saveActiveSession();
         }
 
         /**
@@ -21594,10 +21592,11 @@ ${hideRules}
         }
 
         /**
-         * Save the active session to storage (upsert by id)
+         * Save the active session to storage (upsert by id).
+         * Skips persist if no attempts recorded yet (avoids empty sessions from queue changes).
          */
         async saveActiveSession() {
-            if (!this.activeSession) {
+            if (!this.activeSession || this.activeSession.totalAttempts === 0) {
                 return;
             }
 
@@ -23291,8 +23290,6 @@ ${hideRules}
                 primeCatalystUsed: 0,
                 results: {},
             };
-
-            await this.saveActiveSession();
         }
 
         /**
@@ -23308,10 +23305,11 @@ ${hideRules}
         }
 
         /**
-         * Save the active session to storage (upsert by id)
+         * Save the active session to storage (upsert by id).
+         * Skips persist if no attempts recorded yet (avoids empty sessions from queue changes).
          */
         async saveActiveSession() {
-            if (!this.activeSession) {
+            if (!this.activeSession || this.activeSession.totalAttempts === 0) {
                 return;
             }
 

@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 2.24.1
+ * Version: 2.24.2
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -7232,6 +7232,14 @@
             this.updateHandler = () => this.refreshAll();
             labyrinthTracker.onUpdate(this.updateHandler);
 
+            // Widen the labyrinth automation section to accommodate badge text
+            this.styleEl = document.createElement('style');
+            this.styleEl.id = 'mwi-labyrinth-best-style';
+            this.styleEl.textContent = `
+            [class*="LabyrinthPanel_automationContent"] { max-width: 36rem !important; }
+        `;
+            document.head.appendChild(this.styleEl);
+
             this.isInitialized = true;
         }
 
@@ -7259,6 +7267,11 @@
             this.unregisterHandlers = [];
 
             document.querySelectorAll('.mwi-labyrinth-best').forEach((el) => el.remove());
+
+            if (this.styleEl) {
+                this.styleEl.remove();
+                this.styleEl = null;
+            }
 
             this.isInitialized = false;
         }
@@ -7389,13 +7402,13 @@
             const badge = document.createElement('span');
             badge.className = 'mwi-labyrinth-best';
             badge.textContent = text;
-            badge.style.cssText = 'font-size:0.75rem;opacity:0.75;margin-right:6px;';
+            badge.style.cssText = 'font-size:0.75rem;opacity:0.75;margin-left:6px;';
             if (tooltip) {
                 badge.title = tooltip;
                 badge.style.cursor = 'help';
             }
 
-            cell.insertBefore(badge, cell.firstChild);
+            cell.appendChild(badge);
         }
 
         /**
