@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 2.25.1
+ * Version: 2.26.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -10120,6 +10120,18 @@
     }
 
     /**
+     * Build a player DTO from profile_shared data for the combat sim UI.
+     * @param {Object} profileData - Profile data from profile_shared (with .profile and .characterID)
+     * @returns {Object|null} Player DTO in sim engine format, or null if unavailable
+     */
+    function buildPlayerDTOFromProfile(profileData) {
+        if (!profileData?.profile) return null;
+        const clientData = dataManager.getInitClientData();
+        if (!clientData) return null;
+        return buildPartyMemberDTO(profileData, clientData, null);
+    }
+
+    /**
      * Build a player DTO from a cached party member profile.
      * @param {Object} profile - Profile data with .profile sub-object
      * @param {Object} clientData - initClientData
@@ -13216,6 +13228,35 @@
                 document.addEventListener('mousemove', onMove);
                 document.addEventListener('mouseup', onUp);
             });
+        }
+
+        /**
+         * Open the sim panel pre-loaded with an external player DTO.
+         * Used by the profile page "Sim Character" button.
+         * @param {Object} dto - Player DTO in sim engine format
+         * @param {string} playerName - Display name for the player tab
+         */
+        openWithExternalDTO(dto, playerName) {
+            if (!this.panel) {
+                this.buildPanel();
+            }
+
+            dto.hrid = 'player1';
+
+            const dtoMap = { player1: structuredClone(dto) };
+            this._originalDTOs = structuredClone(dtoMap);
+            this._editedDTOs = structuredClone(dtoMap);
+            this._editedPlayerInfo = [{ hrid: 'player1', name: playerName }];
+            this._selfHrid = 'player1';
+            this._activeEditPlayer = 'player1';
+            this._missingMembers = [];
+            this._editorInitialized = true;
+
+            this.panel.style.display = 'flex';
+            bringPanelToFront(this.panel);
+            this.populateZones();
+            this._switchTab('configure');
+            this._renderEditor();
         }
 
         /**
@@ -18504,6 +18545,17 @@ self.onmessage = function (e) {
                         overflow-y: auto;
                     "></div>
                 </div>
+                <button id="mwi-sim-character-btn" style="
+                    padding: 8px 12px;
+                    background: linear-gradient(135deg, #3a7bd5, #5f3dc4);
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-weight: bold;
+                    font-size: 0.85rem;
+                    width: 100%;
+                ">Sim Character</button>
                 <button id="mwi-milkonomy-export-btn" style="
                     padding: 8px 12px;
                     background: ${config.COLOR_ACCENT};
@@ -18663,6 +18715,32 @@ self.onmessage = function (e) {
                 });
                 combatSimBtn.addEventListener('mouseleave', () => {
                     combatSimBtn.style.opacity = '1';
+                });
+            }
+
+            // Sim Character button - opens combat sim UI with profile data
+            const simCharBtn = panel.querySelector('#mwi-sim-character-btn');
+            if (simCharBtn) {
+                simCharBtn.addEventListener('click', () => {
+                    const playerName = profileData?.profile?.sharableCharacter?.name || 'Player';
+                    const dto = buildPlayerDTOFromProfile(profileData);
+                    if (!dto) {
+                        simCharBtn.textContent = '\u2717 No Data';
+                        simCharBtn.style.background = config.COLOR_LOSS;
+                        const resetTimeout = setTimeout(() => {
+                            simCharBtn.textContent = 'Sim Character';
+                            simCharBtn.style.background = 'linear-gradient(135deg, #3a7bd5, #5f3dc4)';
+                        }, 3000);
+                        this.timerRegistry.registerTimeout(resetTimeout);
+                        return;
+                    }
+                    combatSimUI.openWithExternalDTO(dto, playerName);
+                });
+                simCharBtn.addEventListener('mouseenter', () => {
+                    simCharBtn.style.opacity = '0.8';
+                });
+                simCharBtn.addEventListener('mouseleave', () => {
+                    simCharBtn.style.opacity = '1';
                 });
             }
 
@@ -18877,7 +18955,7 @@ self.onmessage = function (e) {
 
             // Create panel HTML
             panel.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-shrink: 0;">
+            <div id="mwi-abilities-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-shrink: 0; cursor: move; user-select: none;">
                 <div style="font-weight: bold; color: ${config.COLOR_ACCENT}; font-size: 0.9rem;">${playerName} - Abilities & Triggers</div>
                 <span id="mwi-abilities-close-btn" style="
                     cursor: pointer;
@@ -18915,34 +18993,18 @@ self.onmessage = function (e) {
          */
         positionAbilitiesPanel(panel, modal) {
             const modalRect = modal.getBoundingClientRect();
-            const gap = 8;
+            const viewportHeight = window.innerHeight;
+            const panelWidth = panel.offsetWidth || 300;
+            const panelHeight = panel.offsetHeight || 200;
 
             // Center panel horizontally under modal
-            const panelWidth = panel.offsetWidth || 300;
             const modalCenter = modalRect.left + modalRect.width / 2;
             const panelLeft = modalCenter - panelWidth / 2;
-
             panel.style.left = Math.max(10, panelLeft) + 'px';
 
-            // Position below modal, but ensure it doesn't go off screen
-            const topPosition = modalRect.bottom + gap;
-            const viewportHeight = window.innerHeight;
-            const panelHeight = panel.offsetHeight || 300;
-
-            // If panel would go off bottom of screen, adjust position or reduce height
-            if (topPosition + panelHeight > viewportHeight - 10) {
-                const availableHeight = viewportHeight - topPosition - 10;
-                if (availableHeight < 200) {
-                    // Not enough space below - position above modal instead
-                    panel.style.top = Math.max(10, modalRect.top - panelHeight - gap) + 'px';
-                } else {
-                    // Limit height to fit available space
-                    panel.style.top = topPosition + 'px';
-                    panel.style.maxHeight = availableHeight + 'px';
-                }
-            } else {
-                panel.style.top = topPosition + 'px';
-            }
+            // Anchor to bottom of screen
+            const bottomGap = 10;
+            panel.style.top = Math.max(10, viewportHeight - panelHeight - bottomGap) + 'px';
         }
 
         /**
@@ -18973,6 +19035,32 @@ self.onmessage = function (e) {
                     const isCollapsed = details.style.display === 'none';
                     details.style.display = isCollapsed ? 'block' : 'none';
                     toggleBtn.textContent = (isCollapsed ? '- ' : '+ ') + (isCollapsed ? 'Hide Details' : 'Show Details');
+                    // Re-anchor to bottom after size change
+                    requestAnimationFrame(() => {
+                        const bottomGap = 10;
+                        panel.style.top = Math.max(10, window.innerHeight - panel.offsetHeight - bottomGap) + 'px';
+                    });
+                });
+            }
+
+            // Drag to move
+            const header = panel.querySelector('#mwi-abilities-header');
+            if (header) {
+                const dragOffset = { x: 0, y: 0 };
+                const onMove = (e) => {
+                    panel.style.left = e.clientX - dragOffset.x + 'px';
+                    panel.style.top = e.clientY - dragOffset.y + 'px';
+                };
+                const onUp = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                };
+                header.addEventListener('mousedown', (e) => {
+                    if (e.target.id === 'mwi-abilities-close-btn') return;
+                    dragOffset.x = e.clientX - panel.offsetLeft;
+                    dragOffset.y = e.clientY - panel.offsetTop;
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
                 });
             }
         }
