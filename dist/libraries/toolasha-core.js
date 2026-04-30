@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.26.0
+ * Version: 2.27.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -636,6 +636,13 @@
                     type: 'checkbox',
                     default: true,
                     help: 'Displays the profitability breakdown section inside gathering, production, and alchemy action panels',
+                },
+                actionPanel_showLevelProgress: {
+                    id: 'actionPanel_showLevelProgress',
+                    label: 'Action panel: Show level progress',
+                    type: 'checkbox',
+                    default: true,
+                    help: 'Displays XP and level progress estimates inside action panels',
                 },
                 actionPanel_showExpPerHour: {
                     id: 'actionPanel_showExpPerHour',

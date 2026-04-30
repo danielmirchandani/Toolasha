@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.26.0
+ * Version: 2.27.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -8897,19 +8897,23 @@
 
                 // Insert sections into DOM
                 const hideActionStats = !config.getSetting('actionPanel_showProfitDetail');
+                const hideLevelProgress = !config.getSetting('actionPanel_showLevelProgress');
                 if (queueContent) {
                     // Non-combat: Insert queueContent first
                     inputContainer.insertAdjacentElement('afterend', queueContent);
 
+                    // Anchor: last element inserted after queueContent so far
+                    let lastInserted = queueContent;
+
                     if (speedSection && !hideActionStats) {
-                        queueContent.insertAdjacentElement('afterend', speedSection);
-                        if (levelProgressSection) {
-                            speedSection.insertAdjacentElement('afterend', levelProgressSection);
-                        }
-                    } else if (levelProgressSection && !hideActionStats) {
-                        queueContent.insertAdjacentElement('afterend', levelProgressSection);
+                        lastInserted.insertAdjacentElement('afterend', speedSection);
+                        lastInserted = speedSection;
                     }
-                } else if (levelProgressSection && !hideActionStats) {
+
+                    if (levelProgressSection && !hideLevelProgress) {
+                        lastInserted.insertAdjacentElement('afterend', levelProgressSection);
+                    }
+                } else if (levelProgressSection && !hideLevelProgress) {
                     // Combat: Insert levelProgressSection directly after inputContainer
                     inputContainer.insertAdjacentElement('afterend', levelProgressSection);
                 }

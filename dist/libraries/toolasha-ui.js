@@ -1,7 +1,7 @@
 /**
  * Toolasha UI Library
  * UI enhancements, tasks, skills, and misc features
- * Version: 2.26.0
+ * Version: 2.27.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2119,6 +2119,7 @@ ${hideRules}
             this.isInitialized = false;
             this.flags = buildFlags();
             this.collections = {};
+            this.collectionsLastUpdated = null;
             this.favorites = {};
             this.showUncollected = false;
             this.sortMode = 'default'; // 'default' | 'items-needed' | 'gold-cost' | 'time-to-next-tier'
@@ -2229,11 +2230,12 @@ ${hideRules}
             // Reset flags to defaults before loading saved state
             this.flags = buildFlags();
 
-            const [savedFlags, savedFavorites, savedCollections, savedShowUncollected] = await Promise.all([
+            const [savedFlags, savedFavorites, savedCollections, savedShowUncollected, savedTimestamp] = await Promise.all([
                 storage.getJSON(this._charKey('flags'), 'collections', {}),
                 storage.getJSON(this._charKey('favorites'), 'collections', {}),
                 storage.getJSON(this._charKey('collections'), 'collections', {}),
                 storage.getJSON(this._charKey('showUncollected'), 'collections', false),
+                storage.get(this._charKey('collectionsUpdatedAt'), 'collections', null),
             ]);
 
             // Apply saved flag states
@@ -2249,6 +2251,7 @@ ${hideRules}
 
             this.favorites = savedFavorites;
             this.collections = savedCollections;
+            this.collectionsLastUpdated = savedTimestamp;
             this.showUncollected = savedShowUncollected;
         }
 
@@ -2356,8 +2359,10 @@ ${hideRules}
                 }
             });
 
-            // Persist the scanned counts
+            // Persist the scanned counts and update timestamp
             this._saveCollections();
+            this.collectionsLastUpdated = Date.now();
+            storage.set(this._charKey('collectionsUpdatedAt'), this.collectionsLastUpdated, 'collections');
 
             // --- Inject checkboxes ---
             // Remove old Toolasha checkboxes (but not stars, which are inside catsEl)
@@ -2647,10 +2652,41 @@ ${hideRules}
         // -------------------------------------------------------------------------
 
         /**
+         * Get staleness color override for collection badges.
+         * Returns null when data is fresh enough to use the normal tier color.
+         * @returns {string|null}
+         * @private
+         */
+        _getBadgeStalenessColor() {
+            if (!this.collectionsLastUpdated) return '#999999'; // gray — never scanned
+            const hours = (Date.now() - this.collectionsLastUpdated) / 3_600_000;
+            if (hours < 4) return null; // fresh — use tier color
+            if (hours < 12) return '#FFAA00'; // yellow — getting stale
+            return '#FF6600'; // orange — stale
+        }
+
+        /**
+         * Get tooltip text for a collection badge showing count and freshness.
+         * @param {number} count
+         * @returns {string}
+         * @private
+         */
+        _getBadgeStalenessTooltip(count) {
+            if (!this.collectionsLastUpdated) {
+                return 'Collection data not yet loaded \u2014 visit Collections page to refresh';
+            }
+            const age = Date.now() - this.collectionsLastUpdated;
+            const relativeTime = formatters_js.formatRelativeTime(age);
+            return `${formatCount(count)} collected \u2014 updated ${relativeTime} ago`;
+        }
+
+        /**
          * Overlay collection count badges on skilling action tiles.
          * @param {Element} containerEl — the .SkillActionGrid_skillActionGrid__... element
          */
         _addSkillingBadges(containerEl) {
+            const stalenessColor = this._getBadgeStalenessColor();
+
             containerEl.querySelectorAll('.SkillAction_skillAction__1esCp').forEach((el) => {
                 const useEl = el.querySelector('use');
                 if (!useEl) return;
@@ -2671,10 +2707,14 @@ ${hideRules}
                 // Remove old badge
                 el.querySelector('.toolasha-cf.collection-badge')?.remove();
 
+                const tooltip = this._getBadgeStalenessTooltip(n);
+                const colorStyle = stalenessColor ? ` style="color:${stalenessColor}"` : '';
+
                 nameEl.insertAdjacentHTML(
                     'beforeend',
-                    `<span class="toolasha-cf collection-badge Collection_collection__3H6c8 ${tierColorClass(n)}">` +
-                        `<span class="Collection_count__3oj-t">${formatCount(n)}</span></span>`
+                    `<span class="toolasha-cf collection-badge Collection_collection__3H6c8 ${tierColorClass(n)}"` +
+                        ` title="${tooltip}">` +
+                        `<span class="Collection_count__3oj-t"${colorStyle}>${formatCount(n)}</span></span>`
                 );
             });
         }
@@ -19918,9 +19958,17 @@ ${hideRules}
             const outputItems = [...selfReturnEntries, ...otherOutputs];
 
             // Each entry corresponds to one successful action; failures produce no output.
-            // Use the output count as the attempt count so efficiency procs are recorded accurately.
-            // Fall back to 1 for a plain failure.
-            this.activeSession.totalAttempts += Math.max(outputItems.length, 1);
+            // Derive actual attempt count from currentCount delta (handles batched efficiency procs)
+            const currentCount = action.currentCount || 0;
+            let attemptCount;
+            if (this.lastCurrentCount !== null && currentCount > this.lastCurrentCount) {
+                attemptCount = currentCount - this.lastCurrentCount;
+            } else {
+                attemptCount = Math.max(outputItems.length, 1);
+            }
+            this.lastCurrentCount = currentCount;
+
+            this.activeSession.totalAttempts += attemptCount;
 
             if (outputItems.length > 0) {
                 this.activeSession.totalSuccesses += outputItems.length;
@@ -19988,6 +20036,7 @@ ${hideRules}
                 totalSuccesses: 0,
                 results: {},
             };
+            this.lastCurrentCount = null;
 
             await this.saveActiveSession();
         }
@@ -21616,7 +21665,18 @@ ${hideRules}
             const coinEntries = (data.endCharacterItems || []).filter((item) => item.itemHrid === COIN_ITEM_HRID$1);
             const successCount = coinEntries.length;
 
-            this.activeSession.totalAttempts += Math.max(successCount, 1);
+            // Derive actual attempt count from currentCount delta (handles batched efficiency procs)
+            const currentCount = action.currentCount || 0;
+            let attemptCount;
+            if (this.lastCurrentCount !== null && currentCount > this.lastCurrentCount) {
+                attemptCount = currentCount - this.lastCurrentCount;
+            } else {
+                // First tick or counter reset — fall back to at least the success count
+                attemptCount = Math.max(successCount, 1);
+            }
+            this.lastCurrentCount = currentCount;
+
+            this.activeSession.totalAttempts += attemptCount;
 
             if (successCount > 0) {
                 this.activeSession.totalSuccesses += successCount;
@@ -21682,6 +21742,7 @@ ${hideRules}
                 coinsPerSuccess,
                 bulkMultiplier,
             };
+            this.lastCurrentCount = null;
         }
 
         /**
@@ -23317,7 +23378,17 @@ ${hideRules}
                       )
                     : 0;
 
-            this.activeSession.totalAttempts += Math.max(successCount, 1);
+            // Derive actual attempt count from currentCount delta (handles batched efficiency procs)
+            const currentCount = action.currentCount || 0;
+            let attemptCount;
+            if (this.lastCurrentCount !== null && currentCount > this.lastCurrentCount) {
+                attemptCount = currentCount - this.lastCurrentCount;
+            } else {
+                attemptCount = Math.max(successCount, 1);
+            }
+            this.lastCurrentCount = currentCount;
+
+            this.activeSession.totalAttempts += attemptCount;
 
             if (successCount > 0) {
                 this.activeSession.totalSuccesses += successCount;
@@ -23395,6 +23466,7 @@ ${hideRules}
                 primeCatalystUsed: 0,
                 results: {},
             };
+            this.lastCurrentCount = null;
         }
 
         /**
