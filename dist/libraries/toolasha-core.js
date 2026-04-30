@@ -1,7 +1,7 @@
 /**
  * Toolasha Core Library
  * Core infrastructure and API clients
- * Version: 2.27.0
+ * Version: 2.28.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -2903,7 +2903,6 @@
                     // Save as JSON string for Combat Sim export
                     const clientDataStr = JSON.stringify(clientDataObj);
                     await this.saveToStorage('toolasha_init_client_data', clientDataStr);
-                    console.log('[Toolasha] Client data captured from localStorage via official API');
                     this.clearClientDataRetry();
                 }
             } catch (error) {

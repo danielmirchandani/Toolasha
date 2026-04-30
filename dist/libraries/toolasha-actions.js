@@ -1,7 +1,7 @@
 /**
  * Toolasha Actions Library
  * Production, gathering, and alchemy features
- * Version: 2.27.0
+ * Version: 2.28.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -6037,6 +6037,120 @@
     }
 
     /**
+     * Tooltip Observer
+     * Centralized observer for tooltip/popper appearances
+     * Any feature can subscribe to be notified when tooltips appear
+     */
+
+
+    class TooltipObserver {
+        constructor() {
+            this.subscribers = new Map(); // name -> callback
+            this.unregisterObserver = null;
+            this.isInitialized = false;
+        }
+
+        /**
+         * Initialize the observer (call once)
+         */
+        initialize() {
+            if (this.isInitialized) {
+                return;
+            }
+
+            this.isInitialized = true;
+
+            // Watch for tooltip/popper elements appearing
+            // These are the common classes used by MUI tooltips/poppers
+            this.unregisterObserver = domObserver.onClass('TooltipObserver', ['MuiPopper', 'MuiTooltip'], (element) => {
+                this.notifySubscribers(element);
+            });
+        }
+
+        /**
+         * Subscribe to tooltip appearance events
+         * @param {string} name - Unique subscriber name
+         * @param {Function} callback - Function(element) to call when tooltip appears
+         */
+        subscribe(name, callback) {
+            this.subscribers.set(name, callback);
+
+            // Auto-initialize if first subscriber
+            if (!this.isInitialized) {
+                this.initialize();
+            }
+        }
+
+        /**
+         * Unsubscribe from tooltip events
+         * @param {string} name - Subscriber name
+         */
+        unsubscribe(name) {
+            this.subscribers.delete(name);
+
+            // If no subscribers left, could optionally stop observing
+            // For now, keep observer active for simplicity
+        }
+
+        /**
+         * Notify all subscribers that a tooltip appeared
+         * @param {Element} element - The tooltip/popper element
+         * @private
+         */
+        notifySubscribers(element) {
+            // Set up observer to detect when this specific tooltip is removed
+            const removalObserver = new MutationObserver((mutations) => {
+                for (const mutation of mutations) {
+                    for (const removedNode of mutation.removedNodes) {
+                        if (removedNode === element) {
+                            // Notify subscribers that tooltip closed
+                            for (const [name, callback] of this.subscribers.entries()) {
+                                try {
+                                    callback(element, 'closed');
+                                } catch (error) {
+                                    console.error(`[TooltipObserver] Error in subscriber "${name}" (close):`, error);
+                                }
+                            }
+                            removalObserver.disconnect();
+                            return;
+                        }
+                    }
+                }
+            });
+
+            // Watch the parent for removal of this tooltip
+            if (element.parentNode) {
+                removalObserver.observe(element.parentNode, {
+                    childList: true,
+                });
+            }
+
+            // Notify subscribers that tooltip opened
+            for (const [name, callback] of this.subscribers.entries()) {
+                try {
+                    callback(element, 'opened');
+                } catch (error) {
+                    console.error(`[TooltipObserver] Error in subscriber "${name}" (open):`, error);
+                }
+            }
+        }
+
+        /**
+         * Cleanup and disable
+         */
+        disable() {
+            if (this.unregisterObserver) {
+                this.unregisterObserver();
+                this.unregisterObserver = null;
+            }
+            this.subscribers.clear();
+            this.isInitialized = false;
+        }
+    }
+
+    const tooltipObserver = new TooltipObserver();
+
+    /**
      * Action Time Display Module
      *
      * Displays estimated completion time for queued actions.
@@ -6163,6 +6277,9 @@
             // Initialize queue tooltip observer
             this.initializeQueueObserver();
 
+            // Initialize queue hover tooltip observer
+            this.initializeQueueTooltipObserver();
+
             this.isInitialized = true;
         }
 
@@ -6187,6 +6304,320 @@
                     this.unregisterQueueObserver = null;
                 }
             });
+        }
+
+        /**
+         * Initialize observer for queue hover tooltip (the MUI Tooltip that appears on hover over "+N Queued Actions")
+         */
+        initializeQueueTooltipObserver() {
+            tooltipObserver.subscribe('queue-tooltip-timing', (element, eventType) => {
+                if (eventType !== 'opened') return;
+
+                // Identify queue tooltip by its unique class
+                const tooltipContent = element.querySelector('[class*="QueuedActions_queuedActionsTooltip"]');
+                if (!tooltipContent) return;
+
+                this.injectQueueTimesTooltip(tooltipContent);
+            });
+
+            this.cleanupRegistry.registerCleanup(() => {
+                tooltipObserver.unsubscribe('queue-tooltip-timing');
+            });
+        }
+
+        /**
+         * Inject time display into queue hover tooltip
+         * Reuses matchActionFromDiv and calculation logic from injectQueueTimes,
+         * but simplified (no mutation observer, no async profit).
+         * @param {HTMLElement} tooltipContent - The QueuedActions_queuedActionsTooltip container
+         */
+        injectQueueTimesTooltip(tooltipContent) {
+            try {
+                const currentActions = dataManager.getCurrentActions();
+                if (!currentActions || currentActions.length === 0) return;
+
+                const actionDivs = tooltipContent.querySelectorAll('[class^="QueuedActions_action__"]');
+                if (actionDivs.length === 0) return;
+
+                // Prevent duplicate injection
+                if (tooltipContent.querySelector('.mwi-queue-action-time')) return;
+
+                const inventoryLookup = this.buildInventoryLookup(dataManager.getInventory());
+
+                let accumulatedTime = 0;
+                let hasInfinite = false;
+
+                // Include current action time in total (same as edit menu)
+                const currentActionTime = this.calculateCurrentActionTime(currentActions, inventoryLookup);
+                if (currentActionTime) {
+                    accumulatedTime += currentActionTime.totalTime;
+                    if (currentActionTime.hasInfinite) hasInfinite = true;
+                }
+
+                // Track used action IDs to prevent duplicate matching
+                const usedActionIds = new Set();
+                if (currentActionTime?.actionId) {
+                    usedActionIds.add(currentActionTime.actionId);
+                }
+
+                for (const actionDiv of actionDivs) {
+                    const actionObj = this.matchActionFromDiv(actionDiv, currentActions, usedActionIds);
+
+                    if (!actionObj) {
+                        this.appendTimeToActionDiv(actionDiv, '[Unknown action]');
+                        continue;
+                    }
+
+                    usedActionIds.add(actionObj.id);
+
+                    const actionDetails = dataManager.getActionDetails(actionObj.actionHrid);
+                    if (!actionDetails) continue;
+
+                    const result = this.calculateSingleQueueActionTime(actionObj, actionDetails, inventoryLookup);
+
+                    if (result.isTrulyInfinite) {
+                        hasInfinite = true;
+                    } else {
+                        accumulatedTime += result.actionTimeSeconds;
+                    }
+
+                    // Format time text
+                    let timeText;
+                    if (result.isTrulyInfinite) {
+                        timeText = '[∞]';
+                    } else if (result.isInfinite && result.materialLimit !== null) {
+                        const timeStr = formatters_js.timeReadable(result.totalTime);
+                        timeText = `[${timeStr} · ${result.limitLabel}: ${this.formatLargeNumber(result.materialLimit)}]`;
+                    } else {
+                        const timeStr = formatters_js.timeReadable(result.totalTime);
+                        timeText = `[${timeStr}]`;
+                    }
+
+                    // Add completion time
+                    if (!hasInfinite && !result.isTrulyInfinite) {
+                        const completionDate = new Date();
+                        completionDate.setSeconds(completionDate.getSeconds() + accumulatedTime);
+                        const hours = String(completionDate.getHours()).padStart(2, '0');
+                        const minutes = String(completionDate.getMinutes()).padStart(2, '0');
+                        const seconds = String(completionDate.getSeconds()).padStart(2, '0');
+                        timeText += ` Complete at ${hours}:${minutes}:${seconds}`;
+                    }
+
+                    this.appendTimeToActionDiv(actionDiv, timeText);
+                }
+
+                // Add total time at bottom of tooltip
+                const actionsContainer = tooltipContent.querySelector('[class*="QueuedActions_actions"]');
+                if (actionsContainer) {
+                    const totalDiv = document.createElement('div');
+                    totalDiv.className = 'mwi-queue-tooltip-total';
+                    totalDiv.style.cssText = `
+                    color: ${config.COLOR_TOOLTIP_INFO};
+                    font-weight: bold;
+                    margin-top: 8px;
+                    padding-top: 6px;
+                    border-top: 1px solid rgba(0, 0, 0, 0.2);
+                    text-align: center;
+                    font-size: 0.85em;
+                `;
+
+                    let totalText;
+                    if (hasInfinite) {
+                        totalText = accumulatedTime > 0 ? `Total: ${formatters_js.timeReadable(accumulatedTime)} + [∞]` : 'Total: [∞]';
+                    } else {
+                        totalText = `Total: ${formatters_js.timeReadable(accumulatedTime)}`;
+                    }
+                    totalDiv.textContent = totalText;
+                    actionsContainer.appendChild(totalDiv);
+                }
+            } catch (error) {
+                console.error('[Action Time Display] Error injecting queue tooltip times:', error);
+            }
+        }
+
+        /**
+         * Append a time display div to an action div in the queue tooltip
+         * @param {HTMLElement} actionDiv - The action container div
+         * @param {string} text - Time text to display
+         */
+        appendTimeToActionDiv(actionDiv, text) {
+            const timeDiv = document.createElement('div');
+            timeDiv.className = 'mwi-queue-action-time';
+            timeDiv.style.cssText = `
+            color: ${config.COLOR_TOOLTIP_INFO};
+            font-size: 0.85em;
+            margin-top: 2px;
+        `;
+            timeDiv.textContent = text;
+
+            const actionTextContainer = actionDiv.querySelector('[class*="QueuedActions_actionText"]');
+            if (actionTextContainer) {
+                actionTextContainer.appendChild(timeDiv);
+            } else {
+                actionDiv.appendChild(timeDiv);
+            }
+        }
+
+        /**
+         * Calculate time for the currently active action (for total time calculation)
+         * @param {Array} currentActions - All current actions from dataManager
+         * @param {Object} inventoryLookup - Inventory lookup map
+         * @returns {Object|null} { totalTime, hasInfinite, actionId } or null
+         */
+        calculateCurrentActionTime(currentActions, inventoryLookup) {
+            // Detect current action from DOM
+            const actionNameElement = document.querySelector('div[class*="Header_actionName"]');
+            if (!actionNameElement || !actionNameElement.textContent) return null;
+
+            const actionNameText = this.getCleanActionName(actionNameElement);
+            const actionNameMatch = actionNameText.match(/^(.+?)(?:\s*\([^)]+\))?$/);
+            const fullNameFromDom = actionNameMatch ? actionNameMatch[1].trim() : actionNameText;
+
+            let actionNameFromDom, itemNameFromDom;
+            if (fullNameFromDom.includes(':')) {
+                const parts = fullNameFromDom.split(':');
+                actionNameFromDom = parts[0].trim();
+                itemNameFromDom = parts.slice(1).join(':').trim();
+            } else {
+                actionNameFromDom = fullNameFromDom;
+                itemNameFromDom = null;
+            }
+
+            const currentAction = currentActions.find((a) => {
+                const actionDetails = dataManager.getActionDetails(a.actionHrid);
+                if (!actionDetails || actionDetails.name !== actionNameFromDom) return false;
+                if (itemNameFromDom && a.primaryItemHash) {
+                    const itemHrid = '/items/' + itemNameFromDom.toLowerCase().replace(/\s+/g, '_');
+                    return a.primaryItemHash.includes(itemHrid);
+                }
+                return true;
+            });
+
+            if (!currentAction) return null;
+
+            const actionDetails = dataManager.getActionDetails(currentAction.actionHrid);
+            if (!actionDetails) return null;
+
+            const result = this.calculateSingleQueueActionTime(currentAction, actionDetails, inventoryLookup);
+
+            return {
+                totalTime: result.actionTimeSeconds,
+                hasInfinite: result.isTrulyInfinite,
+                actionId: currentAction.id,
+            };
+        }
+
+        /**
+         * Calculate time for a single queued action
+         * @param {Object} actionObj - Action object from dataManager cache
+         * @param {Object} actionDetails - Action details from dataManager
+         * @param {Object} inventoryLookup - Inventory lookup map
+         * @returns {Object} { totalTime, actionTimeSeconds, count, baseActionsNeeded, isTrulyInfinite, isInfinite, materialLimit, limitType, limitLabel, isEnhancing }
+         */
+        calculateSingleQueueActionTime(actionObj, actionDetails, inventoryLookup) {
+            const isEnhancing = actionDetails.type === '/action_types/enhancing';
+            const isInfinite = !actionObj.hasMaxCount || actionObj.actionHrid.includes('/combat/');
+
+            let totalTime = 0;
+            let actionTimeSeconds = 0;
+            let count = 0;
+            let baseActionsNeeded = 0;
+            let isTrulyInfinite = false;
+            let materialLimit = null;
+            let limitType = null;
+            let limitLabel = '';
+
+            if (isEnhancing) {
+                const enhancingTime = this.calculateEnhancingQueueTime(actionObj, actionDetails, inventoryLookup);
+                if (enhancingTime) {
+                    count = enhancingTime.count;
+                    totalTime = enhancingTime.totalTime;
+                    actionTimeSeconds = enhancingTime.totalTime;
+                } else if (isInfinite) {
+                    isTrulyInfinite = true;
+                    totalTime = Infinity;
+                }
+            } else {
+                const timeData = this.calculateActionTime(actionDetails, actionObj.actionHrid);
+                if (!timeData) {
+                    return {
+                        totalTime: 0,
+                        actionTimeSeconds: 0,
+                        count: 0,
+                        baseActionsNeeded: 0,
+                        isTrulyInfinite: isInfinite,
+                        isInfinite,
+                        materialLimit: null,
+                        limitType: null,
+                        limitLabel: '',
+                        isEnhancing,
+                    };
+                }
+
+                const { actionTime, totalEfficiency } = timeData;
+
+                if (isInfinite) {
+                    const equipment = dataManager.getEquipment();
+                    const itemDetailMap = dataManager.getInitClientData()?.itemDetailMap || {};
+                    const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, itemDetailMap);
+                    const activeDrinks = dataManager.getActionDrinkSlots(actionDetails.type);
+                    const artisanBonus = teaParser_js.parseArtisanBonus(activeDrinks, itemDetailMap, drinkConcentration);
+
+                    const limitResult = this.calculateMaterialLimit(
+                        actionDetails,
+                        inventoryLookup,
+                        artisanBonus,
+                        actionObj
+                    );
+                    if (limitResult) {
+                        materialLimit = limitResult.maxActions;
+                        limitType = limitResult.limitType;
+                    }
+                }
+
+                isTrulyInfinite = isInfinite && materialLimit === null;
+
+                if (!isInfinite) {
+                    count = actionObj.maxCount - actionObj.currentCount;
+                } else if (materialLimit !== null) {
+                    count = materialLimit;
+                }
+
+                if (!isTrulyInfinite && count > 0) {
+                    const avgActionsPerBaseAction = efficiency_js.calculateEfficiencyMultiplier(totalEfficiency);
+                    baseActionsNeeded = Math.ceil(count / avgActionsPerBaseAction);
+                    totalTime = baseActionsNeeded * actionTime;
+                    actionTimeSeconds = totalTime;
+                } else if (isTrulyInfinite) {
+                    totalTime = Infinity;
+                }
+            }
+
+            // Derive limit label
+            if (limitType === 'gold') {
+                limitLabel = 'gold';
+            } else if (limitType && limitType.startsWith('material:')) {
+                limitLabel = 'mat';
+            } else if (limitType && limitType.startsWith('upgrade:')) {
+                limitLabel = 'upgrade';
+            } else if (limitType === 'alchemy_item') {
+                limitLabel = 'item';
+            } else {
+                limitLabel = 'max';
+            }
+
+            return {
+                totalTime,
+                actionTimeSeconds,
+                count,
+                baseActionsNeeded,
+                isTrulyInfinite,
+                isInfinite,
+                materialLimit,
+                limitType,
+                limitLabel,
+                isEnhancing,
+            };
         }
 
         /**
@@ -13429,6 +13860,924 @@
     const budgetCalculator = new BudgetCalculator();
 
     /**
+     * Alchemy Profit Calculator Module
+     * Calculates real-time profit for alchemy actions accounting for:
+     * - Success rate (failures consume materials but not catalyst)
+     * - Efficiency bonuses
+     * - Tea buff costs and duration
+     * - Market prices (ask/bid based on pricing mode)
+     */
+
+
+    class AlchemyProfit {
+        constructor() {
+            this.cachedData = null;
+            this.lastFingerprint = null;
+        }
+
+        /**
+         * Extract alchemy action data from the DOM
+         * @returns {Object|null} Action data or null if extraction fails
+         */
+        async extractActionData() {
+            try {
+                const alchemyComponent = document.querySelector('[class*="SkillActionDetail_alchemyComponent"]');
+                if (!alchemyComponent) return null;
+
+                // Get action HRID from current actions
+                const actionHrid = this.getCurrentActionHrid();
+
+                // Get success rate with breakdown
+                const successRateBreakdown = this.extractSuccessRate();
+                if (successRateBreakdown === null) return null;
+
+                // Get action time (base 20 seconds)
+                const actionSpeedBreakdown = this.extractActionSpeed();
+                const actionTime = 20 / (1 + actionSpeedBreakdown.total);
+
+                // Get efficiency
+                const efficiencyBreakdown = this.extractEfficiency();
+
+                // Get rare find
+                const rareFindBreakdown = this.extractRareFind();
+
+                // Get essence find
+                const essenceFindBreakdown = this.extractEssenceFind();
+
+                // Get requirements (inputs)
+                const requirements = await this.extractRequirements();
+
+                // Get drops (outputs) - now passing actionHrid for game data lookup
+                const drops = await this.extractDrops(actionHrid);
+
+                // Get catalyst
+                const catalyst = await this.extractCatalyst();
+
+                // Get consumables (tea/drinks)
+                const consumables = await this.extractConsumables();
+                const teaDuration = this.extractTeaDuration();
+
+                return {
+                    successRate: successRateBreakdown.total,
+                    successRateBreakdown,
+                    actionTime,
+                    efficiency: efficiencyBreakdown.total,
+                    efficiencyBreakdown,
+                    actionSpeedBreakdown,
+                    rareFindBreakdown,
+                    essenceFindBreakdown,
+                    requirements,
+                    drops,
+                    catalyst,
+                    consumables,
+                    teaDuration,
+                };
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract action data:', error);
+                return null;
+            }
+        }
+
+        /**
+         * Get current alchemy action HRID
+         * @returns {string|null} Action HRID or null
+         */
+        getCurrentActionHrid() {
+            try {
+                // Get current actions from dataManager
+                const currentActions = dataManager.getCurrentActions();
+                if (!currentActions || currentActions.length === 0) return null;
+
+                // Find alchemy action (type = /action_types/alchemy)
+                for (const action of currentActions) {
+                    if (action.actionHrid && action.actionHrid.startsWith('/actions/alchemy/')) {
+                        return action.actionHrid;
+                    }
+                }
+
+                return null;
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to get current action HRID:', error);
+                return null;
+            }
+        }
+
+        /**
+         * Extract success rate with breakdown from the DOM and active buffs
+         * @returns {Object} Success rate breakdown { total, base, tea }
+         */
+        extractSuccessRate() {
+            try {
+                const element = document.querySelector(
+                    '[class*="SkillActionDetail_successRate"] [class*="SkillActionDetail_value"]'
+                );
+                if (!element) return null;
+
+                const text = element.textContent.trim();
+                const match = text.match(/(\d+\.?\d*)/);
+                if (!match) return null;
+
+                const totalSuccessRate = parseFloat(match[1]) / 100;
+
+                // Calculate tea bonus from active drinks
+                const gameData = dataManager.getInitClientData();
+                if (!gameData) {
+                    return {
+                        total: totalSuccessRate,
+                        base: totalSuccessRate,
+                        tea: 0,
+                    };
+                }
+
+                const actionTypeHrid = '/action_types/alchemy';
+                const drinkSlots = dataManager.getActionDrinkSlots(actionTypeHrid);
+                const equipment = dataManager.getEquipment();
+
+                // Get drink concentration from equipment
+                const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
+
+                // Calculate tea success rate bonus
+                let teaBonus = 0;
+
+                if (drinkSlots && drinkSlots.length > 0) {
+                    for (const drink of drinkSlots) {
+                        if (!drink || !drink.itemHrid) continue;
+
+                        const itemDetails = gameData.itemDetailMap[drink.itemHrid];
+                        if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
+                            continue;
+                        }
+
+                        // Check for alchemy_success buff
+                        for (const buff of itemDetails.consumableDetail.buffs) {
+                            if (buff.typeHrid === '/buff_types/alchemy_success') {
+                                // ratioBoost is a percentage multiplier (e.g., 0.05 = 5% of base)
+                                // It scales with drink concentration
+                                const ratioBoost = buff.ratioBoost * (1 + drinkConcentration);
+                                teaBonus += ratioBoost;
+                            }
+                        }
+                    }
+                }
+
+                // Calculate base success rate (before tea bonus)
+                // Formula: total = base × (1 + tea_ratio_boost)
+                // So: base = total / (1 + tea_ratio_boost)
+                const baseSuccessRate = totalSuccessRate / (1 + teaBonus);
+
+                return {
+                    total: totalSuccessRate,
+                    base: baseSuccessRate,
+                    tea: teaBonus,
+                };
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract success rate:', error);
+                return null;
+            }
+        }
+
+        /**
+         * Extract action speed buff using dataManager (matches Action Panel pattern)
+         * @returns {Object} Action speed breakdown { total, equipment, tea }
+         */
+        extractActionSpeed() {
+            try {
+                const gameData = dataManager.getInitClientData();
+                if (!gameData) {
+                    return { total: 0, equipment: 0, tea: 0 };
+                }
+
+                const equipment = dataManager.getEquipment();
+                const actionTypeHrid = '/action_types/alchemy';
+
+                // Parse equipment speed bonuses using utility
+                const equipmentSpeed = equipmentParser_js.parseEquipmentSpeedBonuses(equipment, actionTypeHrid, gameData.itemDetailMap);
+
+                // TODO: Add tea speed bonuses when tea-parser supports it
+                const teaSpeed = 0;
+
+                const total = equipmentSpeed + teaSpeed;
+
+                return {
+                    total,
+                    equipment: equipmentSpeed,
+                    tea: teaSpeed,
+                };
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract action speed:', error);
+                return { total: 0, equipment: 0, tea: 0 };
+            }
+        }
+
+        /**
+         * Extract efficiency using dataManager (matches Action Panel pattern)
+         * @returns {Object} Efficiency breakdown { total, level, house, tea, equipment, community }
+         */
+        extractEfficiency() {
+            try {
+                const gameData = dataManager.getInitClientData();
+                if (!gameData) {
+                    return { total: 0, level: 0, house: 0, tea: 0, equipment: 0, community: 0 };
+                }
+
+                const equipment = dataManager.getEquipment();
+                const skills = dataManager.getSkills();
+                const houseRooms = Array.from(dataManager.getHouseRooms().values());
+                const actionTypeHrid = '/action_types/alchemy';
+
+                // Get required level from the DOM (action-specific)
+                const requiredLevel = this.extractRequiredLevel();
+
+                // Get current alchemy level from character skills
+                let currentLevel = requiredLevel;
+                for (const skill of skills) {
+                    if (skill.skillHrid === '/skills/alchemy') {
+                        currentLevel = skill.level;
+                        break;
+                    }
+                }
+
+                // Calculate house efficiency bonus (room level × 1.5%)
+                let houseEfficiency = 0;
+                for (const room of houseRooms) {
+                    const roomDetail = gameData.houseRoomDetailMap?.[room.houseRoomHrid];
+                    if (roomDetail?.usableInActionTypeMap?.[actionTypeHrid]) {
+                        houseEfficiency += (room.level || 0) * 1.5;
+                    }
+                }
+
+                // Get equipped drink slots for alchemy
+                const drinkSlots = dataManager.getActionDrinkSlots(actionTypeHrid);
+
+                // Get drink concentration from equipment
+                const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
+
+                // Parse tea efficiency bonus using utility
+                const teaEfficiency = teaParser_js.parseTeaEfficiency(
+                    actionTypeHrid,
+                    drinkSlots,
+                    gameData.itemDetailMap,
+                    drinkConcentration
+                );
+
+                // Parse tea skill level bonus (e.g., +8 Cheesesmithing from Ultra Cheesesmithing Tea)
+                const teaLevelBonus = teaParser_js.parseTeaSkillLevelBonus(
+                    actionTypeHrid,
+                    drinkSlots,
+                    gameData.itemDetailMap,
+                    drinkConcentration
+                );
+
+                // Calculate equipment efficiency bonus using utility
+                const equipmentEfficiency = equipmentParser_js.parseEquipmentEfficiencyBonuses(
+                    equipment,
+                    actionTypeHrid,
+                    gameData.itemDetailMap
+                );
+
+                // Get community buff efficiency (Production Efficiency)
+                const communityBuffLevel = dataManager.getCommunityBuffLevel('/community_buff_types/production_efficiency');
+                let communityEfficiency = 0;
+                if (communityBuffLevel > 0) {
+                    // Formula: 0.14 + ((level - 1) × 0.003) = 14% base, +0.3% per level
+                    const flatBoost = 0.14;
+                    const flatBoostLevelBonus = 0.003;
+                    const communityBonus = flatBoost + (communityBuffLevel - 1) * flatBoostLevelBonus;
+                    communityEfficiency = communityBonus * 100; // Convert to percentage
+                }
+
+                // Get achievement buffs (Adept tier: +2% efficiency per tier)
+                const achievementEfficiency =
+                    dataManager.getAchievementBuffFlatBoost(actionTypeHrid, '/buff_types/efficiency') * 100;
+
+                const efficiencyBreakdown = efficiency_js.calculateEfficiencyBreakdown({
+                    requiredLevel,
+                    skillLevel: currentLevel,
+                    teaSkillLevelBonus: teaLevelBonus,
+                    houseEfficiency,
+                    teaEfficiency,
+                    equipmentEfficiency,
+                    communityEfficiency,
+                    achievementEfficiency,
+                });
+                const totalEfficiency = efficiencyBreakdown.totalEfficiency;
+                const levelEfficiency = efficiencyBreakdown.levelEfficiency;
+
+                return {
+                    total: totalEfficiency / 100, // Convert percentage to decimal
+                    level: levelEfficiency,
+                    house: houseEfficiency,
+                    tea: teaEfficiency,
+                    equipment: equipmentEfficiency,
+                    community: communityEfficiency,
+                    achievement: achievementEfficiency,
+                };
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract efficiency:', error);
+                return { total: 0, level: 0, house: 0, tea: 0, equipment: 0, community: 0, achievement: 0 };
+            }
+        }
+
+        /**
+         * Extract rare find bonus from equipment and buffs
+         * @returns {Object} Rare find breakdown { total, equipment, achievement }
+         */
+        extractRareFind() {
+            try {
+                const gameData = dataManager.getInitClientData();
+                if (!gameData) {
+                    return { total: 0, equipment: 0, achievement: 0 };
+                }
+
+                const equipment = dataManager.getEquipment();
+                const actionTypeHrid = '/action_types/alchemy';
+
+                // Parse equipment rare find bonuses
+                let equipmentRareFind = 0;
+                for (const slot of equipment) {
+                    if (!slot || !slot.itemHrid) continue;
+
+                    const itemDetail = gameData.itemDetailMap[slot.itemHrid];
+                    if (!itemDetail?.noncombatStats?.rareFind) continue;
+
+                    const enhancementLevel = slot.enhancementLevel || 0;
+                    const enhancementBonus = this.getEnhancementBonus(enhancementLevel);
+                    const slotMultiplier = this.getSlotMultiplier(itemDetail.equipmentType);
+
+                    equipmentRareFind += itemDetail.noncombatStats.rareFind * (1 + enhancementBonus * slotMultiplier);
+                }
+
+                // Get achievement rare find bonus (Veteran tier: +2%)
+                const achievementRareFind =
+                    dataManager.getAchievementBuffFlatBoost(actionTypeHrid, '/buff_types/rare_find') * 100;
+
+                const total = equipmentRareFind + achievementRareFind;
+
+                return {
+                    total: total / 100, // Convert to decimal
+                    equipment: equipmentRareFind,
+                    achievement: achievementRareFind,
+                };
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract rare find:', error);
+                return { total: 0, equipment: 0, achievement: 0 };
+            }
+        }
+
+        /**
+         * Extract essence find bonus from equipment and buffs
+         * @returns {Object} Essence find breakdown { total, equipment }
+         */
+        extractEssenceFind() {
+            try {
+                const gameData = dataManager.getInitClientData();
+                if (!gameData) {
+                    return { total: 0, equipment: 0 };
+                }
+
+                const equipment = dataManager.getEquipment();
+
+                // Parse equipment essence find bonuses
+                let equipmentEssenceFind = 0;
+                for (const slot of equipment) {
+                    if (!slot || !slot.itemHrid) continue;
+
+                    const itemDetail = gameData.itemDetailMap[slot.itemHrid];
+                    if (!itemDetail?.noncombatStats?.essenceFind) continue;
+
+                    const enhancementLevel = slot.enhancementLevel || 0;
+                    const enhancementBonus = this.getEnhancementBonus(enhancementLevel);
+                    const slotMultiplier = this.getSlotMultiplier(itemDetail.equipmentType);
+
+                    equipmentEssenceFind += itemDetail.noncombatStats.essenceFind * (1 + enhancementBonus * slotMultiplier);
+                }
+
+                return {
+                    total: equipmentEssenceFind / 100, // Convert to decimal
+                    equipment: equipmentEssenceFind,
+                };
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract essence find:', error);
+                return { total: 0, equipment: 0 };
+            }
+        }
+
+        /**
+         * Get enhancement bonus percentage for a given enhancement level
+         * @param {number} enhancementLevel - Enhancement level (0-20)
+         * @returns {number} Enhancement bonus as decimal
+         */
+        getEnhancementBonus(enhancementLevel) {
+            const bonuses = {
+                0: 0,
+                1: 0.02,
+                2: 0.042,
+                3: 0.066,
+                4: 0.092,
+                5: 0.12,
+                6: 0.15,
+                7: 0.182,
+                8: 0.216,
+                9: 0.252,
+                10: 0.29,
+                11: 0.334,
+                12: 0.384,
+                13: 0.44,
+                14: 0.502,
+                15: 0.57,
+                16: 0.644,
+                17: 0.724,
+                18: 0.81,
+                19: 0.902,
+                20: 1.0,
+            };
+            return bonuses[enhancementLevel] || 0;
+        }
+
+        /**
+         * Get slot multiplier for enhancement bonuses
+         * @param {string} equipmentType - Equipment type HRID
+         * @returns {number} Multiplier (1 or 5)
+         */
+        getSlotMultiplier(equipmentType) {
+            // 5× multiplier for accessories, back, trinket, charm, pouch
+            const fiveXSlots = [
+                '/equipment_types/neck',
+                '/equipment_types/ring',
+                '/equipment_types/earrings',
+                '/equipment_types/back',
+                '/equipment_types/trinket',
+                '/equipment_types/charm',
+                '/equipment_types/pouch',
+            ];
+            return fiveXSlots.includes(equipmentType) ? 5 : 1;
+        }
+
+        /**
+         * Extract required level from notes
+         * @returns {number} Required alchemy level
+         */
+        extractRequiredLevel() {
+            try {
+                const notesEl = document.querySelector('[class*="SkillActionDetail_notes"]');
+                if (!notesEl) return 0;
+
+                const text = notesEl.textContent;
+                const match = text.match(/(\d+)/);
+                return match ? parseInt(match[1]) : 0;
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract required level:', error);
+                return 0;
+            }
+        }
+
+        /**
+         * Extract tea buff duration from React props
+         * @returns {number} Duration in seconds (default 300)
+         */
+        extractTeaDuration() {
+            try {
+                const rootEl = document.getElementById('root');
+                const rootFiber =
+                    rootEl?._reactRootContainer?.current || rootEl?._reactRootContainer?._internalRoot?.current;
+                if (!rootFiber) return 300;
+
+                function find(fiber) {
+                    if (!fiber) return null;
+                    if (fiber.memoizedProps?.actionBuffs) return fiber;
+                    return find(fiber.child) || find(fiber.sibling);
+                }
+
+                const fiberNode = find(rootFiber);
+                if (!fiberNode) return 300;
+
+                const buffs = fiberNode.memoizedProps.actionBuffs;
+                for (const buff of buffs) {
+                    if (buff.uniqueHrid && buff.uniqueHrid.endsWith('tea')) {
+                        const duration = buff.duration || 0;
+                        return duration / 1e9; // Convert nanoseconds to seconds
+                    }
+                }
+
+                return 300; // Default 5 minutes
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract tea duration:', error);
+                return 300;
+            }
+        }
+
+        /**
+         * Extract requirements (input materials) from the DOM
+         * @returns {Promise<Array>} Array of requirement objects
+         */
+        async extractRequirements() {
+            try {
+                const elements = document.querySelectorAll(
+                    '[class*="SkillActionDetail_itemRequirements"] [class*="Item_itemContainer"]'
+                );
+                const requirements = [];
+
+                for (let i = 0; i < elements.length; i++) {
+                    const el = elements[i];
+                    const itemData = await this.extractItemData(el, true, i);
+                    if (itemData) {
+                        requirements.push(itemData);
+                    }
+                }
+
+                return requirements;
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract requirements:', error);
+                return [];
+            }
+        }
+
+        /**
+         * Extract drops (outputs) from the DOM
+         * @returns {Promise<Array>} Array of drop objects
+         */
+        async extractDrops(actionHrid) {
+            try {
+                const elements = document.querySelectorAll(
+                    '[class*="SkillActionDetail_dropTable"] [class*="Item_itemContainer"]'
+                );
+                const drops = [];
+
+                // Get action details from game data for drop rates
+                const gameData = dataManager.getInitClientData();
+                const actionDetail = actionHrid && gameData ? gameData.actionDetailMap?.[actionHrid] : null;
+
+                for (let i = 0; i < elements.length; i++) {
+                    const el = elements[i];
+                    const itemData = await this.extractItemData(el, false, i, actionDetail);
+                    if (itemData) {
+                        drops.push(itemData);
+                    }
+                }
+
+                return drops;
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract drops:', error);
+                return [];
+            }
+        }
+
+        /**
+         * Extract catalyst from the DOM
+         * @returns {Promise<Object>} Catalyst object with prices
+         */
+        async extractCatalyst() {
+            try {
+                const element =
+                    document.querySelector(
+                        '[class*="SkillActionDetail_catalystItemInputContainer"] [class*="ItemSelector_itemContainer"]'
+                    ) ||
+                    document.querySelector(
+                        '[class*="SkillActionDetail_catalystItemInputContainer"] [class*="SkillActionDetail_itemContainer"]'
+                    );
+
+                if (!element) {
+                    return { ask: 0, bid: 0 };
+                }
+
+                const itemData = await this.extractItemData(element, false, -1);
+                return itemData || { ask: 0, bid: 0 };
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract catalyst:', error);
+                return { ask: 0, bid: 0 };
+            }
+        }
+
+        /**
+         * Extract consumables (tea/drinks) from the DOM
+         * @returns {Promise<Array>} Array of consumable objects
+         */
+        async extractConsumables() {
+            try {
+                const elements = document.querySelectorAll(
+                    '[class*="ActionTypeConsumableSlots_consumableSlots"] [class*="Item_itemContainer"]'
+                );
+                const consumables = [];
+
+                for (const el of elements) {
+                    const itemData = await this.extractItemData(el, false, -1);
+                    if (itemData && itemData.itemHrid !== '/items/coin') {
+                        consumables.push(itemData);
+                    }
+                }
+
+                return consumables;
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract consumables:', error);
+                return [];
+            }
+        }
+
+        /**
+         * Calculate the cost to create an enhanced item
+         * @param {string} itemHrid - Item HRID
+         * @param {number} targetLevel - Target enhancement level
+         * @param {string} priceType - 'ask' or 'bid'
+         * @returns {number} Total cost to create the enhanced item
+         */
+        calculateEnhancementCost(itemHrid, targetLevel, priceType) {
+            if (targetLevel === 0) {
+                const priceData = marketAPI.getPrice(itemHrid, 0);
+                return priceType === 'ask' ? priceData?.ask || 0 : priceData?.bid || 0;
+            }
+
+            const gameData = dataManager.getInitClientData();
+            if (!gameData) return 0;
+
+            const itemData = gameData.itemDetailMap?.[itemHrid];
+            if (!itemData) return 0;
+
+            // Start with base item cost
+            const basePriceData = marketAPI.getPrice(itemHrid, 0);
+            let totalCost = priceType === 'ask' ? basePriceData?.ask || 0 : basePriceData?.bid || 0;
+
+            // Add enhancement material costs for each level
+            const enhancementMaterials = itemData.enhancementCosts;
+            if (!enhancementMaterials || !Array.isArray(enhancementMaterials)) {
+                return totalCost;
+            }
+
+            // Enhance from level 0 to targetLevel
+            for (let level = 0; level < targetLevel; level++) {
+                for (const cost of enhancementMaterials) {
+                    const materialHrid = cost.itemHrid;
+                    const materialCount = cost.count || 0;
+
+                    if (materialHrid === '/items/coin') {
+                        totalCost += materialCount; // Coins are 1:1
+                    } else {
+                        const materialPrice = marketAPI.getPrice(materialHrid, 0);
+                        const price = priceType === 'ask' ? materialPrice?.ask || 0 : materialPrice?.bid || 0;
+                        totalCost += price * materialCount;
+                    }
+                }
+            }
+
+            return totalCost;
+        }
+
+        /**
+         * Calculate value recovered from decomposing an enhanced item
+         * @param {string} itemHrid - Item HRID
+         * @param {number} enhancementLevel - Enhancement level
+         * @param {string} priceType - 'ask' or 'bid'
+         * @returns {number} Total value recovered from decomposition
+         */
+        calculateDecompositionValue(itemHrid, enhancementLevel, priceType) {
+            if (enhancementLevel === 0) return 0;
+
+            const gameData = dataManager.getInitClientData();
+            if (!gameData) return 0;
+
+            const itemDetails = gameData.itemDetailMap?.[itemHrid];
+            if (!itemDetails) return 0;
+
+            let totalValue = 0;
+
+            // 1. Base item decomposition outputs
+            if (itemDetails.decompositionDetail?.results) {
+                for (const result of itemDetails.decompositionDetail.results) {
+                    const priceData = marketAPI.getPrice(result.itemHrid, 0);
+                    if (priceData) {
+                        const price = priceType === 'ask' ? priceData.ask : priceData.bid;
+                        totalValue += profitHelpers_js.calculatePriceAfterTax(price * result.amount); // 2% market tax
+                    }
+                }
+            }
+
+            // 2. Enhancing Essence from enhancement level
+            // Formula: round(2 × (0.5 + 0.1 × (1.05^itemLevel)) × (2^enhancementLevel))
+            const itemLevel = itemDetails.itemLevel || 1;
+            const essenceAmount = Math.round(2 * (0.5 + 0.1 * Math.pow(1.05, itemLevel)) * Math.pow(2, enhancementLevel));
+
+            const essencePriceData = marketAPI.getPrice('/items/enhancing_essence', 0);
+            if (essencePriceData) {
+                const essencePrice = priceType === 'ask' ? essencePriceData.ask : essencePriceData.bid;
+                totalValue += profitHelpers_js.calculatePriceAfterTax(essencePrice * essenceAmount); // 2% market tax
+            }
+
+            return totalValue;
+        }
+
+        /**
+         * Extract item data (HRID, prices, count, drop rate) from DOM element
+         * @param {HTMLElement} element - Item container element
+         * @param {boolean} isRequirement - True if this is a requirement (has count), false if drop (has drop rate)
+         * @param {number} index - Index in the list (for extracting count/rate text)
+         * @returns {Promise<Object|null>} Item data object or null
+         */
+        async extractItemData(element, isRequirement, index, actionDetail = null) {
+            try {
+                // Get item HRID from SVG use element
+                const use = element.querySelector('svg use');
+                if (!use) return null;
+
+                const href = use.getAttribute('href');
+                if (!href) return null;
+
+                const itemId = href.split('#')[1];
+                if (!itemId) return null;
+
+                const itemHrid = `/items/${itemId}`;
+
+                // Get enhancement level
+                let enhancementLevel = 0;
+                if (isRequirement) {
+                    const enhEl = element.querySelector('[class*="Item_enhancementLevel"]');
+                    if (enhEl) {
+                        const match = enhEl.textContent.match(/\+(\d+)/);
+                        enhancementLevel = match ? parseInt(match[1]) : 0;
+                    }
+                }
+
+                // Get market prices
+                let ask = 0,
+                    bid = 0;
+                if (itemHrid === '/items/coin') {
+                    ask = bid = 1;
+                } else {
+                    // Check if this is an openable container (loot crate)
+                    const itemDetails = dataManager.getItemDetails(itemHrid);
+                    if (itemDetails?.isOpenable) {
+                        // Use expected value calculator for openable containers
+                        const containerValue = expectedValueCalculator.getCachedValue(itemHrid);
+                        if (containerValue !== null && containerValue > 0) {
+                            ask = bid = containerValue;
+                        } else {
+                            // Fallback to marketplace if EV not available
+                            const priceData = marketAPI.getPrice(itemHrid, enhancementLevel);
+                            ask = priceData?.ask || 0;
+                            bid = priceData?.bid || 0;
+                        }
+                    } else {
+                        // Regular item - use marketplace price
+                        const priceData = marketAPI.getPrice(itemHrid, enhancementLevel);
+                        if (priceData && (priceData.ask > 0 || priceData.bid > 0)) {
+                            // Market data exists for this specific enhancement level
+                            ask = priceData.ask || 0;
+                            bid = priceData.bid || 0;
+                        } else {
+                            // No market data for this enhancement level - calculate cost
+                            ask = this.calculateEnhancementCost(itemHrid, enhancementLevel, 'ask');
+                            bid = this.calculateEnhancementCost(itemHrid, enhancementLevel, 'bid');
+                        }
+                    }
+                }
+
+                const result = { itemHrid, ask, bid, enhancementLevel };
+
+                // Get count or drop rate
+                if (isRequirement && index >= 0) {
+                    // Extract count from requirement
+                    const countElements = document.querySelectorAll(
+                        '[class*="SkillActionDetail_itemRequirements"] [class*="SkillActionDetail_inputCount"]'
+                    );
+
+                    if (countElements[index]) {
+                        const text = countElements[index].textContent.trim();
+                        // Extract number after the "/" character (format: "/ 2" or "/ 450")
+                        const match = text.match(/\/\s*([\d,]+)/);
+                        let parsedCount = 1;
+
+                        if (match) {
+                            const cleaned = match[1].replace(/,/g, '');
+                            parsedCount = parseFloat(cleaned);
+                        }
+
+                        result.count = parsedCount || 1;
+                    } else {
+                        result.count = 1;
+                    }
+                } else if (!isRequirement) {
+                    // Extract count and drop rate from action detail (game data) or DOM fallback
+                    let dropRateFromGameData = null;
+
+                    // Try to get drop rate from game data first
+                    if (actionDetail && actionDetail.dropTable) {
+                        const dropEntry = actionDetail.dropTable.find((drop) => drop.itemHrid === itemHrid);
+                        if (dropEntry) {
+                            dropRateFromGameData = dropEntry.dropRate;
+                        }
+                    }
+
+                    // Extract count from DOM
+                    const dropElements = document.querySelectorAll(
+                        '[class*="SkillActionDetail_drop"], [class*="SkillActionDetail_essence"], [class*="SkillActionDetail_rare"]'
+                    );
+
+                    for (const dropElement of dropElements) {
+                        // Check if this drop element contains our item
+                        const dropItemElement = dropElement.querySelector('[class*="Item_itemContainer"] svg use');
+                        if (dropItemElement) {
+                            const dropHref = dropItemElement.getAttribute('href');
+                            const dropItemId = dropHref ? dropHref.split('#')[1] : null;
+                            const dropItemHrid = dropItemId ? `/items/${dropItemId}` : null;
+
+                            if (dropItemHrid === itemHrid) {
+                                // Found the matching drop element
+                                const text = dropElement.textContent.trim();
+
+                                // Extract count (at start of text)
+                                const countMatch = text.match(/^([\d\s,.]+)/);
+                                if (countMatch) {
+                                    const cleaned = countMatch[1].replace(/,/g, '').trim();
+                                    result.count = parseFloat(cleaned) || 1;
+                                } else {
+                                    result.count = 1;
+                                }
+
+                                // Use drop rate from game data if available, otherwise try DOM
+                                if (dropRateFromGameData !== null) {
+                                    result.dropRate = dropRateFromGameData;
+                                } else {
+                                    // Extract drop rate percentage from DOM (handles both "7.29%" and "~7.29%")
+                                    const rateMatch = text.match(/~?([\d,.]+)%/);
+                                    if (rateMatch) {
+                                        const cleaned = rateMatch[1].replace(/,/g, '');
+                                        result.dropRate = parseFloat(cleaned) / 100 || 1;
+                                    } else {
+                                        result.dropRate = 1;
+                                    }
+                                }
+
+                                break; // Found it, stop searching
+                            }
+                        }
+                    }
+
+                    // If we didn't find a matching drop element, set defaults
+                    if (result.count === undefined) {
+                        result.count = 1;
+                    }
+                    if (result.dropRate === undefined) {
+                        // Use game data drop rate if available, otherwise default to 1
+                        result.dropRate = dropRateFromGameData !== null ? dropRateFromGameData : 1;
+                    }
+                }
+
+                return result;
+            } catch (error) {
+                console.error('[AlchemyProfit] Failed to extract item data:', error);
+                return null;
+            }
+        }
+
+        /**
+         * Generate state fingerprint for change detection
+         * @returns {string} Fingerprint string
+         */
+        getStateFingerprint() {
+            try {
+                const successRate =
+                    document.querySelector('[class*="SkillActionDetail_successRate"] [class*="SkillActionDetail_value"]')
+                        ?.textContent || '';
+                const consumables = Array.from(
+                    document.querySelectorAll(
+                        '[class*="ActionTypeConsumableSlots_consumableSlots"] [class*="Item_itemContainer"]'
+                    )
+                )
+                    .map((el) => el.querySelector('svg use')?.getAttribute('href') || 'empty')
+                    .join('|');
+
+                // Get catalyst (from the catalyst input container)
+                // Use Item_itemContainer to avoid the info icon's use[href]; item icons use xlink:href
+                const catalystUse = document.querySelector(
+                    '[class*="SkillActionDetail_catalystItemInputContainer"] [class*="Item_itemContainer"] svg use'
+                );
+                const catalyst = catalystUse?.getAttribute('xlink:href') || catalystUse?.getAttribute('href') || 'none';
+
+                // Get requirements (input materials)
+                const requirements = Array.from(
+                    document.querySelectorAll('[class*="SkillActionDetail_itemRequirements"] [class*="Item_itemContainer"]')
+                )
+                    .map((el) => {
+                        const href = el.querySelector('svg use')?.getAttribute('href') || 'empty';
+                        const enh = el.querySelector('[class*="Item_enhancementLevel"]')?.textContent || '0';
+                        return `${href}${enh}`;
+                    })
+                    .join('|');
+
+                // Get selected alchemy tab (Coinify/Decompose/Transmute/etc)
+                const alchemyContainer = document.querySelector('[class*="AlchemyPanel_tabsComponentContainer"]');
+                const selectedTab =
+                    alchemyContainer?.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim() || '';
+
+                // Don't include infoText - it contains our profit display which causes update loops
+                return `${selectedTab}:${successRate}:${consumables}:${catalyst}:${requirements}`;
+            } catch {
+                return '';
+            }
+        }
+    }
+
+    const alchemyProfit = new AlchemyProfit();
+
+    /**
      * Tea Optimizer Utility
      * Calculates optimal tea combinations for XP or Gold optimization
      */
@@ -13573,6 +14922,7 @@
             artisan: 0,
             gourmet: 0,
             actionLevel: 0,
+            alchemySuccess: 0,
             skillLevels: {}, // skill name → level bonus
         };
 
@@ -13605,6 +14955,10 @@
                         break;
                     case '/buff_types/action_level':
                         buffs.actionLevel += scaledValue;
+                        break;
+                    case '/buff_types/alchemy_success':
+                        // alchemy_success uses ratioBoost, not flatBoost
+                        buffs.alchemySuccess += (buff.ratioBoost || 0) * (1 + drinkConcentration);
                         break;
                     default:
                         // Check for skill level buffs (e.g., /buff_types/milking_level)
@@ -13898,6 +15252,131 @@
     }
 
     /**
+     * Calculate Gold/hour for an alchemy action with a specific tea combination
+     * @param {Object} alchemyContext - { actionType: 'coinify'|'decompose'|'transmute', itemHrid, enhancementLevel }
+     * @param {Object} buffs - Parsed tea buffs (includes alchemySuccess)
+     * @returns {number} Gold per hour (profit after all costs)
+     */
+    function calculateAlchemyGoldPerHour(alchemyContext, buffs) {
+        const { actionType, itemHrid, enhancementLevel = 0 } = alchemyContext;
+        const teaBonusOverride = buffs.alchemySuccess || 0;
+
+        let profitData = null;
+        if (actionType === 'coinify') {
+            profitData = alchemyProfitCalculator.calculateCoinifyProfit(
+                itemHrid,
+                enhancementLevel,
+                false,
+                teaBonusOverride
+            );
+        } else if (actionType === 'decompose') {
+            profitData = alchemyProfitCalculator.calculateDecomposeProfit(
+                itemHrid,
+                enhancementLevel,
+                false,
+                teaBonusOverride
+            );
+        } else if (actionType === 'transmute') {
+            profitData = alchemyProfitCalculator.calculateTransmuteProfit(itemHrid, false, teaBonusOverride);
+        }
+
+        if (!profitData) return 0;
+        return profitData.profitPerHour || 0;
+    }
+
+    /**
+     * Calculate XP/hour for an alchemy action with a specific tea combination.
+     * Alchemy XP is derived from item level, not from actionDetails.experienceGain.
+     * @param {Object} alchemyContext - { actionType, itemHrid, enhancementLevel }
+     * @param {Object} buffs - Parsed tea buffs
+     * @param {number} playerLevel - Player's alchemy level
+     * @param {Object} otherEfficiency - Non-tea efficiency sources
+     * @param {Object} calcContext - { equipment, itemDetailMap }
+     * @returns {number} XP per hour
+     */
+    function calculateAlchemyXpPerHour(alchemyContext, buffs, playerLevel, otherEfficiency, calcContext) {
+        const { actionType, itemHrid } = alchemyContext;
+        const gameData = dataManager.getInitClientData();
+        if (!gameData?.actionDetailMap) return 0;
+
+        const actionHrid = `/actions/alchemy/${actionType}`;
+        const actionDetails = gameData.actionDetailMap[actionHrid];
+        if (!actionDetails) return 0;
+
+        const itemDetails = gameData.itemDetailMap?.[itemHrid];
+        if (!itemDetails?.itemLevel) return 0;
+
+        // Base XP from alchemy formula (depends on action type + item level)
+        const itemLevel = itemDetails.itemLevel;
+        let baseXP;
+        switch (actionType) {
+            case 'coinify':
+                baseXP = itemLevel + 10;
+                break;
+            case 'decompose':
+                baseXP = itemLevel * 1.4 + 14;
+                break;
+            case 'transmute':
+                baseXP = itemLevel * 1.6 + 16;
+                break;
+            default:
+                return 0;
+        }
+
+        // Success rate with this tea's alchemy bonus (affects XP: failures give 10%)
+        const teaBonusOverride = buffs.alchemySuccess || 0;
+        let baseSuccessRate;
+        if (actionType === 'coinify') baseSuccessRate = 0.7;
+        else if (actionType === 'decompose') baseSuccessRate = 0.6;
+        else baseSuccessRate = itemDetails.alchemyDetail?.transmuteSuccessRate || 0;
+
+        // Level penalty (transmute only)
+        const levelPenalty =
+            actionType === 'transmute' && playerLevel < itemLevel ? (0.9 / itemLevel) * (playerLevel - itemLevel) : 0;
+
+        const successRate = Math.max(0, Math.min(1.0, baseSuccessRate * (1 + levelPenalty) * (1 + teaBonusOverride)));
+
+        // XP per action: success gives full XP, failure gives 10%
+        // Wisdom multiplier — replace current tea wisdom with our hypothetical tea wisdom
+        const xpData = experienceParser_js.calculateExperienceMultiplier('/skills/alchemy', '/action_types/alchemy');
+        const currentTeaWisdom = xpData.breakdown?.consumableWisdom || 0;
+        const baseWisdomWithoutTea = xpData.totalWisdom - currentTeaWisdom;
+        const totalWisdomWithOurTea = baseWisdomWithoutTea + buffs.wisdom;
+        const charmExperience = xpData.charmExperience || 0;
+        const wisdomMultiplier = 1 + totalWisdomWithOurTea / 100 + charmExperience / 100;
+
+        const fullXP = baseXP * wisdomMultiplier;
+        const xpPerAction = successRate * fullXP + (1 - successRate) * fullXP * 0.1;
+
+        // Actions per hour (uses item level for efficiency, not action level requirement)
+        const requiredLevel = itemLevel;
+        const { equipment, itemDetailMap } = calcContext;
+        const teaSkillLevelBonus = buffs.skillLevels['alchemy'] || 0;
+        const equipmentSpeedBonus = equipmentParser_js.parseEquipmentSpeedBonuses(equipment, actionDetails.type, itemDetailMap) || 0;
+        const equipmentEfficiencyBonus = equipmentParser_js.parseEquipmentEfficiencyBonuses(equipment, actionDetails.type, itemDetailMap) || 0;
+
+        const efficiencyData = efficiency_js.calculateEfficiencyBreakdown({
+            requiredLevel,
+            skillLevel: playerLevel,
+            teaSkillLevelBonus,
+            actionLevelBonus: buffs.actionLevel,
+            houseEfficiency: otherEfficiency.house || 0,
+            equipmentEfficiency: equipmentEfficiencyBonus,
+            teaEfficiency: buffs.efficiency,
+            communityEfficiency: otherEfficiency.community || 0,
+            achievementEfficiency: otherEfficiency.achievement || 0,
+        });
+
+        const efficiencyMultiplier = efficiency_js.calculateEfficiencyMultiplier(efficiencyData.totalEfficiency);
+        const baseTime = (actionDetails.baseTimeCost || 20e9) / 1e9;
+        const actionTime = baseTime / (1 + equipmentSpeedBonus);
+        const baseActionsPerHour = profitHelpers_js.calculateActionsPerHour(actionTime);
+        const actionsPerHour = profitHelpers_js.calculateEffectiveActionsPerHour(baseActionsPerHour, efficiencyMultiplier);
+
+        return actionsPerHour * xpPerAction;
+    }
+
+    /**
      * Find processing conversion for an item
      * @param {string} itemHrid - Item HRID
      * @param {Object} gameData - Game data
@@ -14076,7 +15555,14 @@
      * @param {string|null} actionNameFilter - Optional action name to restrict optimization to a single action
      * @returns {Object} Optimization result
      */
-    function findOptimalTeas(skillName, goal, locationName = null, actionNameFilter = null, constraints = null) {
+    function findOptimalTeas(
+        skillName,
+        goal,
+        locationName = null,
+        actionNameFilter = null,
+        constraints = null,
+        alchemyContext = null
+    ) {
         const normalizedSkill = skillName.toLowerCase();
         const isGathering = GATHERING_SKILLS.includes(normalizedSkill);
         const isProduction = PRODUCTION_SKILLS.includes(normalizedSkill);
@@ -14182,50 +15668,67 @@
             let profitableCount = 0;
             const actionScores = [];
 
-            for (const action of actions) {
+            // Alchemy mode: score the specific item, not all actions
+            if (alchemyContext) {
+                const actionName = `${alchemyContext.actionType}: ${alchemyContext.itemName || alchemyContext.itemHrid}`;
                 let score;
                 if (goal === 'xp') {
-                    score = calculateXpPerHour(action, buffs, playerLevel, otherEfficiency, calcContext);
+                    score = calculateAlchemyXpPerHour(alchemyContext, buffs, playerLevel, otherEfficiency, calcContext);
                     totalScore += score;
-                } else if (isGathering) {
-                    score = calculateGatheringGoldPerHour(
-                        action,
-                        buffs,
-                        playerLevel,
-                        otherEfficiency,
-                        gameData,
-                        calcContext
-                    );
-                    // Deduct tea costs from gold score
-                    score -= teaCostPerHour.total;
-                    // Only include profitable actions in gold calculations
-                    if (score > 0) {
-                        totalScore += score;
-                        profitableCount++;
-                    }
                 } else {
-                    score = calculateProductionGoldPerHour(
-                        action,
-                        buffs,
-                        playerLevel,
-                        otherEfficiency,
-                        gameData,
-                        calcContext
-                    );
-                    // Deduct tea costs from gold score
-                    score -= teaCostPerHour.total;
-                    // Only include profitable actions in gold calculations
+                    score = calculateAlchemyGoldPerHour(alchemyContext, buffs) - teaCostPerHour.total;
                     if (score > 0) {
                         totalScore += score;
                         profitableCount++;
                     }
                 }
+                actionScores.push({ action: actionName, score });
+            } else {
+                for (const action of actions) {
+                    let score;
+                    if (goal === 'xp') {
+                        score = calculateXpPerHour(action, buffs, playerLevel, otherEfficiency, calcContext);
+                        totalScore += score;
+                    } else if (isGathering) {
+                        score = calculateGatheringGoldPerHour(
+                            action,
+                            buffs,
+                            playerLevel,
+                            otherEfficiency,
+                            gameData,
+                            calcContext
+                        );
+                        // Deduct tea costs from gold score
+                        score -= teaCostPerHour.total;
+                        // Only include profitable actions in gold calculations
+                        if (score > 0) {
+                            totalScore += score;
+                            profitableCount++;
+                        }
+                    } else {
+                        score = calculateProductionGoldPerHour(
+                            action,
+                            buffs,
+                            playerLevel,
+                            otherEfficiency,
+                            gameData,
+                            calcContext
+                        );
+                        // Deduct tea costs from gold score
+                        score -= teaCostPerHour.total;
+                        // Only include profitable actions in gold calculations
+                        if (score > 0) {
+                            totalScore += score;
+                            profitableCount++;
+                        }
+                    }
 
-                actionScores.push({ action: action.name, score });
+                    actionScores.push({ action: action.name, score });
+                }
             }
 
             // For gold, average across profitable actions only; for XP, average across all
-            const avgDivisor = goal === 'gold' ? profitableCount || 1 : actions.length;
+            const avgDivisor = goal === 'gold' ? profitableCount || 1 : alchemyContext ? 1 : actions.length;
 
             results.push({
                 teas: combo,
@@ -14296,7 +15799,7 @@
             playerLevel,
             drinkConcentration,
             otherEfficiency,
-            actionsEvaluated: actions.length,
+            actionsEvaluated: alchemyContext ? 1 : actions.length,
             profitableActionsCount: topResult.profitableCount, // For display in stats
             combinationsEvaluated: combinations.length,
             allResults: results.slice(0, 5).map((r) => ({
@@ -14424,6 +15927,49 @@
         return null;
     }
 
+    /**
+     * Build alchemy context for tea optimization when on the alchemy page.
+     * Detects action type from DOM tabs or active action, extracts current item.
+     * @returns {Promise<Object|null>} { actionType, itemHrid, enhancementLevel, itemName } or null
+     */
+    async function getAlchemyContext() {
+        // Determine action type from active action or DOM tab
+        let actionType = null;
+        const actionHrid = alchemyProfit.getCurrentActionHrid();
+
+        if (actionHrid) {
+            if (actionHrid === '/actions/alchemy/coinify') actionType = 'coinify';
+            else if (actionHrid === '/actions/alchemy/transmute') actionType = 'transmute';
+            else if (actionHrid === '/actions/alchemy/decompose') actionType = 'decompose';
+        }
+
+        if (!actionType) {
+            // Fall back to selected tab
+            const tabContainer = document.querySelector('[class*="AlchemyPanel_tabsComponentContainer"]');
+            const selectedTab = tabContainer?.querySelector('[role="tab"][aria-selected="true"]');
+            const tabText = selectedTab?.textContent?.trim()?.toLowerCase() || '';
+
+            if (tabText.includes('coinify')) actionType = 'coinify';
+            else if (tabText.includes('transmute')) actionType = 'transmute';
+            else if (tabText.includes('decompose')) actionType = 'decompose';
+        }
+
+        if (!actionType) return null;
+
+        // Extract current item from requirements
+        const requirements = await alchemyProfit.extractRequirements();
+        if (!requirements || requirements.length === 0) return null;
+
+        const itemHrid = requirements[0].itemHrid;
+        if (!itemHrid) return null;
+
+        const enhancementLevel = requirements[0].enhancementLevel || 0;
+        const itemDetails = dataManager.getItemDetails(itemHrid);
+        const itemName = itemDetails?.name || itemHrid.split('/').pop().replace(/_/g, ' ');
+
+        return { actionType, itemHrid, enhancementLevel, itemName };
+    }
+
     class TeaRecommendation {
         constructor() {
             this.initialized = false;
@@ -14456,10 +16002,22 @@
                 }
             );
 
-            this.unregisterHandlers.push(unregisterLabelObserver);
+            // Observe for alchemy panel labels (different class from other skills)
+            const unregisterAlchemyLabelObserver = domObserver.onClass(
+                'TeaRecommendation-AlchemyLabel',
+                'AlchemyPanel_label',
+                (labelElement) => {
+                    this.checkAndInjectButtons(labelElement);
+                }
+            );
 
-            // Check if consumables label already exists
-            const existingLabels = document.querySelectorAll('[class*="GatheringProductionSkillPanel_label"]');
+            this.unregisterHandlers.push(unregisterLabelObserver);
+            this.unregisterHandlers.push(unregisterAlchemyLabelObserver);
+
+            // Check if consumables label already exists (both skill panel and alchemy panel variants)
+            const existingLabels = document.querySelectorAll(
+                '[class*="GatheringProductionSkillPanel_label"], [class*="AlchemyPanel_label"]'
+            );
             existingLabels.forEach((label) => {
                 this.checkAndInjectButtons(label);
             });
@@ -14557,12 +16115,15 @@
          * @param {string} goal - 'xp', 'gold', or 'both'
          * @param {HTMLElement} anchorButton - Button that was clicked
          */
-        showRecommendation(goal, anchorButton) {
+        async showRecommendation(goal, anchorButton) {
             // Close existing popup
             this.closePopup();
 
-            // Get current skill name from action filter
-            const skillName = actionFilter.getCurrentSkillName();
+            // Detect if we're on the alchemy page by checking if the button is inside an alchemy panel
+            const isAlchemy = !!anchorButton.closest('[class*="AlchemyPanel_"]');
+
+            // Get current skill name — action filter doesn't track alchemy, so override when needed
+            const skillName = isAlchemy ? 'Alchemy' : actionFilter.getCurrentSkillName();
             if (!skillName) {
                 this.showError(anchorButton, 'Could not detect current skill');
                 return;
@@ -14571,14 +16132,24 @@
             // Get current location tab (if any)
             const locationTab = getCurrentLocationTab();
 
+            // Build alchemy context if on alchemy page
+            let alchemyContext = null;
+            if (isAlchemy) {
+                alchemyContext = await getAlchemyContext();
+                if (!alchemyContext) {
+                    this.showError(anchorButton, 'No item selected in alchemy panel');
+                    return;
+                }
+            }
+
             // Handle 'both' mode - show dual results
             if (goal === 'both') {
-                this.showBothRecommendation(anchorButton, skillName, locationTab);
+                this.showBothRecommendation(anchorButton, skillName, locationTab, alchemyContext);
                 return;
             }
 
             // Calculate optimal teas (pass location name to filter by category)
-            const result = findOptimalTeas(skillName, goal, locationTab);
+            const result = findOptimalTeas(skillName, goal, locationTab, null, null, alchemyContext);
 
             if (result.error) {
                 this.showError(anchorButton, result.error);
@@ -14601,7 +16172,7 @@
             cursor: default;
         `;
 
-            this.buildPopupContent(popup, result, goal, skillName, locationTab, null);
+            this.buildPopupContent(popup, result, goal, skillName, locationTab, null, alchemyContext);
 
             // Position popup relative to button
             document.body.appendChild(popup);
@@ -14646,8 +16217,9 @@
          * @param {string} skillName - Current skill name
          * @param {string|null} locationTab - Current location tab
          * @param {string|null} drilldownAction - Action name when showing single-action view, null for all-actions
+         * @param {Object|null} alchemyContext - Alchemy context for alchemy skills
          */
-        buildPopupContent(popup, result, goal, skillName, locationTab, drilldownAction) {
+        buildPopupContent(popup, result, goal, skillName, locationTab, drilldownAction, alchemyContext = null) {
             popup.innerHTML = '';
 
             const goalLabel = goal === 'xp' ? 'XP' : 'Gold';
@@ -14667,6 +16239,10 @@
             header.title = 'Drag to move';
             if (drilldownAction) {
                 header.textContent = `Optimal ${goalLabel}/hr for ${drilldownAction}`;
+            } else if (alchemyContext) {
+                const dcPercent = result.drinkConcentration ? (result.drinkConcentration * 100).toFixed(2) : 0;
+                const dcSuffix = dcPercent > 0 ? ` (${dcPercent}% DC)` : '';
+                header.textContent = `Optimal ${goalLabel}/hr for ${alchemyContext.actionType}: ${alchemyContext.itemName}${dcSuffix}`;
             } else {
                 const displayName = locationTab || skillName;
                 const dcPercent = result.drinkConcentration ? (result.drinkConcentration * 100).toFixed(2) : 0;
@@ -14763,16 +16339,19 @@
             `;
                 backLink.textContent = `← All ${skillName} actions`;
                 backLink.addEventListener('click', () => {
-                    const allResult = findOptimalTeas(skillName, goal, locationTab);
+                    const allResult = findOptimalTeas(skillName, goal, locationTab, null, null, alchemyContext);
                     if (!allResult.error && allResult.optimal) {
-                        this.buildPopupContent(popup, allResult, goal, skillName, locationTab, null);
+                        this.buildPopupContent(popup, allResult, goal, skillName, locationTab, null, alchemyContext);
                     }
                 });
                 stats.querySelector('div:last-child').appendChild(backLink);
             } else {
                 // Expandable actions section
                 let actionsText;
-                if (goal === 'gold') {
+                if (alchemyContext) {
+                    // Single alchemy item — no "profitable of N" count needed
+                    actionsText = `${alchemyContext.actionType}: ${alchemyContext.itemName}`;
+                } else if (goal === 'gold') {
                     actionsText =
                         excludedCount > 0
                             ? `${profitableCount} profitable of ${result.actionsEvaluated} (+${excludedCount} excluded)`
@@ -14835,9 +16414,24 @@
                         actionRow.style.background = '';
                     });
                     actionRow.addEventListener('click', () => {
-                        const drillResult = findOptimalTeas(skillName, goal, locationTab, actionData.action);
+                        const drillResult = findOptimalTeas(
+                            skillName,
+                            goal,
+                            locationTab,
+                            actionData.action,
+                            null,
+                            alchemyContext
+                        );
                         if (!drillResult.error && drillResult.optimal) {
-                            this.buildPopupContent(popup, drillResult, goal, skillName, locationTab, actionData.action);
+                            this.buildPopupContent(
+                                popup,
+                                drillResult,
+                                goal,
+                                skillName,
+                                locationTab,
+                                actionData.action,
+                                alchemyContext
+                            );
                         }
                     });
                 }
@@ -14890,7 +16484,9 @@
                     const isHidden = actionsDetail.style.display === 'none';
                     actionsDetail.style.display = isHidden ? 'block' : 'none';
                     let expandedText;
-                    if (goal === 'gold') {
+                    if (alchemyContext) {
+                        expandedText = `▼ ${alchemyContext.actionType}: ${alchemyContext.itemName}`;
+                    } else if (goal === 'gold') {
                         expandedText =
                             excludedCount > 0
                                 ? `▼ ${profitableCount} profitable (+${excludedCount})`
@@ -15113,7 +16709,7 @@
                         this.pinnedTeas.add(hrid);
                         this.bannedTeas.delete(hrid);
                     }
-                    this._rerunWithConstraints(popup, goal, skillName, locationTab, drilldownAction);
+                    this._rerunWithConstraints(popup, goal, skillName, locationTab, drilldownAction, alchemyContext);
                 });
 
                 // Ban button ⊘
@@ -15136,7 +16732,7 @@
                         this.bannedTeas.add(hrid);
                         this.pinnedTeas.delete(hrid);
                     }
-                    this._rerunWithConstraints(popup, goal, skillName, locationTab, drilldownAction);
+                    this._rerunWithConstraints(popup, goal, skillName, locationTab, drilldownAction, alchemyContext);
                 });
 
                 btnContainer.appendChild(pinBtn);
@@ -15173,9 +16769,9 @@
          * @param {string} skillName - Current skill name
          * @param {string|null} locationTab - Current location tab
          */
-        showBothRecommendation(anchorButton, skillName, locationTab) {
-            const xpResult = findOptimalTeas(skillName, 'xp', locationTab);
-            const goldResult = findOptimalTeas(skillName, 'gold', locationTab);
+        showBothRecommendation(anchorButton, skillName, locationTab, alchemyContext = null) {
+            const xpResult = findOptimalTeas(skillName, 'xp', locationTab, null, null, alchemyContext);
+            const goldResult = findOptimalTeas(skillName, 'gold', locationTab, null, null, alchemyContext);
 
             if (xpResult.error && goldResult.error) {
                 this.showError(anchorButton, xpResult.error);
@@ -15199,7 +16795,9 @@
         `;
 
             // Header
-            const displayName = locationTab || skillName;
+            const displayName = alchemyContext
+                ? `${alchemyContext.actionType}: ${alchemyContext.itemName}`
+                : locationTab || skillName;
             const header = document.createElement('div');
             header.style.cssText = `
             font-size: 14px;
@@ -15377,12 +16975,20 @@
          * @param {string} skillName - Current skill name
          * @param {string|null} locationTab - Current location tab
          * @param {string|null} drilldownAction - Current drilldown action name, or null
+         * @param {Object|null} alchemyContext - Alchemy context for alchemy skills
          */
-        _rerunWithConstraints(popup, goal, skillName, locationTab, drilldownAction) {
+        _rerunWithConstraints(popup, goal, skillName, locationTab, drilldownAction, alchemyContext = null) {
             const constraints = { pinned: this.pinnedTeas, banned: this.bannedTeas };
-            const result = findOptimalTeas(skillName, goal, locationTab, drilldownAction || null, constraints);
+            const result = findOptimalTeas(
+                skillName,
+                goal,
+                locationTab,
+                drilldownAction || null,
+                constraints,
+                alchemyContext
+            );
             if (result.error) return;
-            this.buildPopupContent(popup, result, goal, skillName, locationTab, drilldownAction);
+            this.buildPopupContent(popup, result, goal, skillName, locationTab, drilldownAction, alchemyContext);
         }
 
         /**
@@ -16869,924 +18475,6 @@
     }
 
     const pinnedActionsPage = new PinnedActionsPage();
-
-    /**
-     * Alchemy Profit Calculator Module
-     * Calculates real-time profit for alchemy actions accounting for:
-     * - Success rate (failures consume materials but not catalyst)
-     * - Efficiency bonuses
-     * - Tea buff costs and duration
-     * - Market prices (ask/bid based on pricing mode)
-     */
-
-
-    class AlchemyProfit {
-        constructor() {
-            this.cachedData = null;
-            this.lastFingerprint = null;
-        }
-
-        /**
-         * Extract alchemy action data from the DOM
-         * @returns {Object|null} Action data or null if extraction fails
-         */
-        async extractActionData() {
-            try {
-                const alchemyComponent = document.querySelector('[class*="SkillActionDetail_alchemyComponent"]');
-                if (!alchemyComponent) return null;
-
-                // Get action HRID from current actions
-                const actionHrid = this.getCurrentActionHrid();
-
-                // Get success rate with breakdown
-                const successRateBreakdown = this.extractSuccessRate();
-                if (successRateBreakdown === null) return null;
-
-                // Get action time (base 20 seconds)
-                const actionSpeedBreakdown = this.extractActionSpeed();
-                const actionTime = 20 / (1 + actionSpeedBreakdown.total);
-
-                // Get efficiency
-                const efficiencyBreakdown = this.extractEfficiency();
-
-                // Get rare find
-                const rareFindBreakdown = this.extractRareFind();
-
-                // Get essence find
-                const essenceFindBreakdown = this.extractEssenceFind();
-
-                // Get requirements (inputs)
-                const requirements = await this.extractRequirements();
-
-                // Get drops (outputs) - now passing actionHrid for game data lookup
-                const drops = await this.extractDrops(actionHrid);
-
-                // Get catalyst
-                const catalyst = await this.extractCatalyst();
-
-                // Get consumables (tea/drinks)
-                const consumables = await this.extractConsumables();
-                const teaDuration = this.extractTeaDuration();
-
-                return {
-                    successRate: successRateBreakdown.total,
-                    successRateBreakdown,
-                    actionTime,
-                    efficiency: efficiencyBreakdown.total,
-                    efficiencyBreakdown,
-                    actionSpeedBreakdown,
-                    rareFindBreakdown,
-                    essenceFindBreakdown,
-                    requirements,
-                    drops,
-                    catalyst,
-                    consumables,
-                    teaDuration,
-                };
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract action data:', error);
-                return null;
-            }
-        }
-
-        /**
-         * Get current alchemy action HRID
-         * @returns {string|null} Action HRID or null
-         */
-        getCurrentActionHrid() {
-            try {
-                // Get current actions from dataManager
-                const currentActions = dataManager.getCurrentActions();
-                if (!currentActions || currentActions.length === 0) return null;
-
-                // Find alchemy action (type = /action_types/alchemy)
-                for (const action of currentActions) {
-                    if (action.actionHrid && action.actionHrid.startsWith('/actions/alchemy/')) {
-                        return action.actionHrid;
-                    }
-                }
-
-                return null;
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to get current action HRID:', error);
-                return null;
-            }
-        }
-
-        /**
-         * Extract success rate with breakdown from the DOM and active buffs
-         * @returns {Object} Success rate breakdown { total, base, tea }
-         */
-        extractSuccessRate() {
-            try {
-                const element = document.querySelector(
-                    '[class*="SkillActionDetail_successRate"] [class*="SkillActionDetail_value"]'
-                );
-                if (!element) return null;
-
-                const text = element.textContent.trim();
-                const match = text.match(/(\d+\.?\d*)/);
-                if (!match) return null;
-
-                const totalSuccessRate = parseFloat(match[1]) / 100;
-
-                // Calculate tea bonus from active drinks
-                const gameData = dataManager.getInitClientData();
-                if (!gameData) {
-                    return {
-                        total: totalSuccessRate,
-                        base: totalSuccessRate,
-                        tea: 0,
-                    };
-                }
-
-                const actionTypeHrid = '/action_types/alchemy';
-                const drinkSlots = dataManager.getActionDrinkSlots(actionTypeHrid);
-                const equipment = dataManager.getEquipment();
-
-                // Get drink concentration from equipment
-                const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
-
-                // Calculate tea success rate bonus
-                let teaBonus = 0;
-
-                if (drinkSlots && drinkSlots.length > 0) {
-                    for (const drink of drinkSlots) {
-                        if (!drink || !drink.itemHrid) continue;
-
-                        const itemDetails = gameData.itemDetailMap[drink.itemHrid];
-                        if (!itemDetails || !itemDetails.consumableDetail || !itemDetails.consumableDetail.buffs) {
-                            continue;
-                        }
-
-                        // Check for alchemy_success buff
-                        for (const buff of itemDetails.consumableDetail.buffs) {
-                            if (buff.typeHrid === '/buff_types/alchemy_success') {
-                                // ratioBoost is a percentage multiplier (e.g., 0.05 = 5% of base)
-                                // It scales with drink concentration
-                                const ratioBoost = buff.ratioBoost * (1 + drinkConcentration);
-                                teaBonus += ratioBoost;
-                            }
-                        }
-                    }
-                }
-
-                // Calculate base success rate (before tea bonus)
-                // Formula: total = base × (1 + tea_ratio_boost)
-                // So: base = total / (1 + tea_ratio_boost)
-                const baseSuccessRate = totalSuccessRate / (1 + teaBonus);
-
-                return {
-                    total: totalSuccessRate,
-                    base: baseSuccessRate,
-                    tea: teaBonus,
-                };
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract success rate:', error);
-                return null;
-            }
-        }
-
-        /**
-         * Extract action speed buff using dataManager (matches Action Panel pattern)
-         * @returns {Object} Action speed breakdown { total, equipment, tea }
-         */
-        extractActionSpeed() {
-            try {
-                const gameData = dataManager.getInitClientData();
-                if (!gameData) {
-                    return { total: 0, equipment: 0, tea: 0 };
-                }
-
-                const equipment = dataManager.getEquipment();
-                const actionTypeHrid = '/action_types/alchemy';
-
-                // Parse equipment speed bonuses using utility
-                const equipmentSpeed = equipmentParser_js.parseEquipmentSpeedBonuses(equipment, actionTypeHrid, gameData.itemDetailMap);
-
-                // TODO: Add tea speed bonuses when tea-parser supports it
-                const teaSpeed = 0;
-
-                const total = equipmentSpeed + teaSpeed;
-
-                return {
-                    total,
-                    equipment: equipmentSpeed,
-                    tea: teaSpeed,
-                };
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract action speed:', error);
-                return { total: 0, equipment: 0, tea: 0 };
-            }
-        }
-
-        /**
-         * Extract efficiency using dataManager (matches Action Panel pattern)
-         * @returns {Object} Efficiency breakdown { total, level, house, tea, equipment, community }
-         */
-        extractEfficiency() {
-            try {
-                const gameData = dataManager.getInitClientData();
-                if (!gameData) {
-                    return { total: 0, level: 0, house: 0, tea: 0, equipment: 0, community: 0 };
-                }
-
-                const equipment = dataManager.getEquipment();
-                const skills = dataManager.getSkills();
-                const houseRooms = Array.from(dataManager.getHouseRooms().values());
-                const actionTypeHrid = '/action_types/alchemy';
-
-                // Get required level from the DOM (action-specific)
-                const requiredLevel = this.extractRequiredLevel();
-
-                // Get current alchemy level from character skills
-                let currentLevel = requiredLevel;
-                for (const skill of skills) {
-                    if (skill.skillHrid === '/skills/alchemy') {
-                        currentLevel = skill.level;
-                        break;
-                    }
-                }
-
-                // Calculate house efficiency bonus (room level × 1.5%)
-                let houseEfficiency = 0;
-                for (const room of houseRooms) {
-                    const roomDetail = gameData.houseRoomDetailMap?.[room.houseRoomHrid];
-                    if (roomDetail?.usableInActionTypeMap?.[actionTypeHrid]) {
-                        houseEfficiency += (room.level || 0) * 1.5;
-                    }
-                }
-
-                // Get equipped drink slots for alchemy
-                const drinkSlots = dataManager.getActionDrinkSlots(actionTypeHrid);
-
-                // Get drink concentration from equipment
-                const drinkConcentration = teaParser_js.getDrinkConcentration(equipment, gameData.itemDetailMap);
-
-                // Parse tea efficiency bonus using utility
-                const teaEfficiency = teaParser_js.parseTeaEfficiency(
-                    actionTypeHrid,
-                    drinkSlots,
-                    gameData.itemDetailMap,
-                    drinkConcentration
-                );
-
-                // Parse tea skill level bonus (e.g., +8 Cheesesmithing from Ultra Cheesesmithing Tea)
-                const teaLevelBonus = teaParser_js.parseTeaSkillLevelBonus(
-                    actionTypeHrid,
-                    drinkSlots,
-                    gameData.itemDetailMap,
-                    drinkConcentration
-                );
-
-                // Calculate equipment efficiency bonus using utility
-                const equipmentEfficiency = equipmentParser_js.parseEquipmentEfficiencyBonuses(
-                    equipment,
-                    actionTypeHrid,
-                    gameData.itemDetailMap
-                );
-
-                // Get community buff efficiency (Production Efficiency)
-                const communityBuffLevel = dataManager.getCommunityBuffLevel('/community_buff_types/production_efficiency');
-                let communityEfficiency = 0;
-                if (communityBuffLevel > 0) {
-                    // Formula: 0.14 + ((level - 1) × 0.003) = 14% base, +0.3% per level
-                    const flatBoost = 0.14;
-                    const flatBoostLevelBonus = 0.003;
-                    const communityBonus = flatBoost + (communityBuffLevel - 1) * flatBoostLevelBonus;
-                    communityEfficiency = communityBonus * 100; // Convert to percentage
-                }
-
-                // Get achievement buffs (Adept tier: +2% efficiency per tier)
-                const achievementEfficiency =
-                    dataManager.getAchievementBuffFlatBoost(actionTypeHrid, '/buff_types/efficiency') * 100;
-
-                const efficiencyBreakdown = efficiency_js.calculateEfficiencyBreakdown({
-                    requiredLevel,
-                    skillLevel: currentLevel,
-                    teaSkillLevelBonus: teaLevelBonus,
-                    houseEfficiency,
-                    teaEfficiency,
-                    equipmentEfficiency,
-                    communityEfficiency,
-                    achievementEfficiency,
-                });
-                const totalEfficiency = efficiencyBreakdown.totalEfficiency;
-                const levelEfficiency = efficiencyBreakdown.levelEfficiency;
-
-                return {
-                    total: totalEfficiency / 100, // Convert percentage to decimal
-                    level: levelEfficiency,
-                    house: houseEfficiency,
-                    tea: teaEfficiency,
-                    equipment: equipmentEfficiency,
-                    community: communityEfficiency,
-                    achievement: achievementEfficiency,
-                };
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract efficiency:', error);
-                return { total: 0, level: 0, house: 0, tea: 0, equipment: 0, community: 0, achievement: 0 };
-            }
-        }
-
-        /**
-         * Extract rare find bonus from equipment and buffs
-         * @returns {Object} Rare find breakdown { total, equipment, achievement }
-         */
-        extractRareFind() {
-            try {
-                const gameData = dataManager.getInitClientData();
-                if (!gameData) {
-                    return { total: 0, equipment: 0, achievement: 0 };
-                }
-
-                const equipment = dataManager.getEquipment();
-                const actionTypeHrid = '/action_types/alchemy';
-
-                // Parse equipment rare find bonuses
-                let equipmentRareFind = 0;
-                for (const slot of equipment) {
-                    if (!slot || !slot.itemHrid) continue;
-
-                    const itemDetail = gameData.itemDetailMap[slot.itemHrid];
-                    if (!itemDetail?.noncombatStats?.rareFind) continue;
-
-                    const enhancementLevel = slot.enhancementLevel || 0;
-                    const enhancementBonus = this.getEnhancementBonus(enhancementLevel);
-                    const slotMultiplier = this.getSlotMultiplier(itemDetail.equipmentType);
-
-                    equipmentRareFind += itemDetail.noncombatStats.rareFind * (1 + enhancementBonus * slotMultiplier);
-                }
-
-                // Get achievement rare find bonus (Veteran tier: +2%)
-                const achievementRareFind =
-                    dataManager.getAchievementBuffFlatBoost(actionTypeHrid, '/buff_types/rare_find') * 100;
-
-                const total = equipmentRareFind + achievementRareFind;
-
-                return {
-                    total: total / 100, // Convert to decimal
-                    equipment: equipmentRareFind,
-                    achievement: achievementRareFind,
-                };
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract rare find:', error);
-                return { total: 0, equipment: 0, achievement: 0 };
-            }
-        }
-
-        /**
-         * Extract essence find bonus from equipment and buffs
-         * @returns {Object} Essence find breakdown { total, equipment }
-         */
-        extractEssenceFind() {
-            try {
-                const gameData = dataManager.getInitClientData();
-                if (!gameData) {
-                    return { total: 0, equipment: 0 };
-                }
-
-                const equipment = dataManager.getEquipment();
-
-                // Parse equipment essence find bonuses
-                let equipmentEssenceFind = 0;
-                for (const slot of equipment) {
-                    if (!slot || !slot.itemHrid) continue;
-
-                    const itemDetail = gameData.itemDetailMap[slot.itemHrid];
-                    if (!itemDetail?.noncombatStats?.essenceFind) continue;
-
-                    const enhancementLevel = slot.enhancementLevel || 0;
-                    const enhancementBonus = this.getEnhancementBonus(enhancementLevel);
-                    const slotMultiplier = this.getSlotMultiplier(itemDetail.equipmentType);
-
-                    equipmentEssenceFind += itemDetail.noncombatStats.essenceFind * (1 + enhancementBonus * slotMultiplier);
-                }
-
-                return {
-                    total: equipmentEssenceFind / 100, // Convert to decimal
-                    equipment: equipmentEssenceFind,
-                };
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract essence find:', error);
-                return { total: 0, equipment: 0 };
-            }
-        }
-
-        /**
-         * Get enhancement bonus percentage for a given enhancement level
-         * @param {number} enhancementLevel - Enhancement level (0-20)
-         * @returns {number} Enhancement bonus as decimal
-         */
-        getEnhancementBonus(enhancementLevel) {
-            const bonuses = {
-                0: 0,
-                1: 0.02,
-                2: 0.042,
-                3: 0.066,
-                4: 0.092,
-                5: 0.12,
-                6: 0.15,
-                7: 0.182,
-                8: 0.216,
-                9: 0.252,
-                10: 0.29,
-                11: 0.334,
-                12: 0.384,
-                13: 0.44,
-                14: 0.502,
-                15: 0.57,
-                16: 0.644,
-                17: 0.724,
-                18: 0.81,
-                19: 0.902,
-                20: 1.0,
-            };
-            return bonuses[enhancementLevel] || 0;
-        }
-
-        /**
-         * Get slot multiplier for enhancement bonuses
-         * @param {string} equipmentType - Equipment type HRID
-         * @returns {number} Multiplier (1 or 5)
-         */
-        getSlotMultiplier(equipmentType) {
-            // 5× multiplier for accessories, back, trinket, charm, pouch
-            const fiveXSlots = [
-                '/equipment_types/neck',
-                '/equipment_types/ring',
-                '/equipment_types/earrings',
-                '/equipment_types/back',
-                '/equipment_types/trinket',
-                '/equipment_types/charm',
-                '/equipment_types/pouch',
-            ];
-            return fiveXSlots.includes(equipmentType) ? 5 : 1;
-        }
-
-        /**
-         * Extract required level from notes
-         * @returns {number} Required alchemy level
-         */
-        extractRequiredLevel() {
-            try {
-                const notesEl = document.querySelector('[class*="SkillActionDetail_notes"]');
-                if (!notesEl) return 0;
-
-                const text = notesEl.textContent;
-                const match = text.match(/(\d+)/);
-                return match ? parseInt(match[1]) : 0;
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract required level:', error);
-                return 0;
-            }
-        }
-
-        /**
-         * Extract tea buff duration from React props
-         * @returns {number} Duration in seconds (default 300)
-         */
-        extractTeaDuration() {
-            try {
-                const rootEl = document.getElementById('root');
-                const rootFiber =
-                    rootEl?._reactRootContainer?.current || rootEl?._reactRootContainer?._internalRoot?.current;
-                if (!rootFiber) return 300;
-
-                function find(fiber) {
-                    if (!fiber) return null;
-                    if (fiber.memoizedProps?.actionBuffs) return fiber;
-                    return find(fiber.child) || find(fiber.sibling);
-                }
-
-                const fiberNode = find(rootFiber);
-                if (!fiberNode) return 300;
-
-                const buffs = fiberNode.memoizedProps.actionBuffs;
-                for (const buff of buffs) {
-                    if (buff.uniqueHrid && buff.uniqueHrid.endsWith('tea')) {
-                        const duration = buff.duration || 0;
-                        return duration / 1e9; // Convert nanoseconds to seconds
-                    }
-                }
-
-                return 300; // Default 5 minutes
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract tea duration:', error);
-                return 300;
-            }
-        }
-
-        /**
-         * Extract requirements (input materials) from the DOM
-         * @returns {Promise<Array>} Array of requirement objects
-         */
-        async extractRequirements() {
-            try {
-                const elements = document.querySelectorAll(
-                    '[class*="SkillActionDetail_itemRequirements"] [class*="Item_itemContainer"]'
-                );
-                const requirements = [];
-
-                for (let i = 0; i < elements.length; i++) {
-                    const el = elements[i];
-                    const itemData = await this.extractItemData(el, true, i);
-                    if (itemData) {
-                        requirements.push(itemData);
-                    }
-                }
-
-                return requirements;
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract requirements:', error);
-                return [];
-            }
-        }
-
-        /**
-         * Extract drops (outputs) from the DOM
-         * @returns {Promise<Array>} Array of drop objects
-         */
-        async extractDrops(actionHrid) {
-            try {
-                const elements = document.querySelectorAll(
-                    '[class*="SkillActionDetail_dropTable"] [class*="Item_itemContainer"]'
-                );
-                const drops = [];
-
-                // Get action details from game data for drop rates
-                const gameData = dataManager.getInitClientData();
-                const actionDetail = actionHrid && gameData ? gameData.actionDetailMap?.[actionHrid] : null;
-
-                for (let i = 0; i < elements.length; i++) {
-                    const el = elements[i];
-                    const itemData = await this.extractItemData(el, false, i, actionDetail);
-                    if (itemData) {
-                        drops.push(itemData);
-                    }
-                }
-
-                return drops;
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract drops:', error);
-                return [];
-            }
-        }
-
-        /**
-         * Extract catalyst from the DOM
-         * @returns {Promise<Object>} Catalyst object with prices
-         */
-        async extractCatalyst() {
-            try {
-                const element =
-                    document.querySelector(
-                        '[class*="SkillActionDetail_catalystItemInputContainer"] [class*="ItemSelector_itemContainer"]'
-                    ) ||
-                    document.querySelector(
-                        '[class*="SkillActionDetail_catalystItemInputContainer"] [class*="SkillActionDetail_itemContainer"]'
-                    );
-
-                if (!element) {
-                    return { ask: 0, bid: 0 };
-                }
-
-                const itemData = await this.extractItemData(element, false, -1);
-                return itemData || { ask: 0, bid: 0 };
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract catalyst:', error);
-                return { ask: 0, bid: 0 };
-            }
-        }
-
-        /**
-         * Extract consumables (tea/drinks) from the DOM
-         * @returns {Promise<Array>} Array of consumable objects
-         */
-        async extractConsumables() {
-            try {
-                const elements = document.querySelectorAll(
-                    '[class*="ActionTypeConsumableSlots_consumableSlots"] [class*="Item_itemContainer"]'
-                );
-                const consumables = [];
-
-                for (const el of elements) {
-                    const itemData = await this.extractItemData(el, false, -1);
-                    if (itemData && itemData.itemHrid !== '/items/coin') {
-                        consumables.push(itemData);
-                    }
-                }
-
-                return consumables;
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract consumables:', error);
-                return [];
-            }
-        }
-
-        /**
-         * Calculate the cost to create an enhanced item
-         * @param {string} itemHrid - Item HRID
-         * @param {number} targetLevel - Target enhancement level
-         * @param {string} priceType - 'ask' or 'bid'
-         * @returns {number} Total cost to create the enhanced item
-         */
-        calculateEnhancementCost(itemHrid, targetLevel, priceType) {
-            if (targetLevel === 0) {
-                const priceData = marketAPI.getPrice(itemHrid, 0);
-                return priceType === 'ask' ? priceData?.ask || 0 : priceData?.bid || 0;
-            }
-
-            const gameData = dataManager.getInitClientData();
-            if (!gameData) return 0;
-
-            const itemData = gameData.itemDetailMap?.[itemHrid];
-            if (!itemData) return 0;
-
-            // Start with base item cost
-            const basePriceData = marketAPI.getPrice(itemHrid, 0);
-            let totalCost = priceType === 'ask' ? basePriceData?.ask || 0 : basePriceData?.bid || 0;
-
-            // Add enhancement material costs for each level
-            const enhancementMaterials = itemData.enhancementCosts;
-            if (!enhancementMaterials || !Array.isArray(enhancementMaterials)) {
-                return totalCost;
-            }
-
-            // Enhance from level 0 to targetLevel
-            for (let level = 0; level < targetLevel; level++) {
-                for (const cost of enhancementMaterials) {
-                    const materialHrid = cost.itemHrid;
-                    const materialCount = cost.count || 0;
-
-                    if (materialHrid === '/items/coin') {
-                        totalCost += materialCount; // Coins are 1:1
-                    } else {
-                        const materialPrice = marketAPI.getPrice(materialHrid, 0);
-                        const price = priceType === 'ask' ? materialPrice?.ask || 0 : materialPrice?.bid || 0;
-                        totalCost += price * materialCount;
-                    }
-                }
-            }
-
-            return totalCost;
-        }
-
-        /**
-         * Calculate value recovered from decomposing an enhanced item
-         * @param {string} itemHrid - Item HRID
-         * @param {number} enhancementLevel - Enhancement level
-         * @param {string} priceType - 'ask' or 'bid'
-         * @returns {number} Total value recovered from decomposition
-         */
-        calculateDecompositionValue(itemHrid, enhancementLevel, priceType) {
-            if (enhancementLevel === 0) return 0;
-
-            const gameData = dataManager.getInitClientData();
-            if (!gameData) return 0;
-
-            const itemDetails = gameData.itemDetailMap?.[itemHrid];
-            if (!itemDetails) return 0;
-
-            let totalValue = 0;
-
-            // 1. Base item decomposition outputs
-            if (itemDetails.decompositionDetail?.results) {
-                for (const result of itemDetails.decompositionDetail.results) {
-                    const priceData = marketAPI.getPrice(result.itemHrid, 0);
-                    if (priceData) {
-                        const price = priceType === 'ask' ? priceData.ask : priceData.bid;
-                        totalValue += profitHelpers_js.calculatePriceAfterTax(price * result.amount); // 2% market tax
-                    }
-                }
-            }
-
-            // 2. Enhancing Essence from enhancement level
-            // Formula: round(2 × (0.5 + 0.1 × (1.05^itemLevel)) × (2^enhancementLevel))
-            const itemLevel = itemDetails.itemLevel || 1;
-            const essenceAmount = Math.round(2 * (0.5 + 0.1 * Math.pow(1.05, itemLevel)) * Math.pow(2, enhancementLevel));
-
-            const essencePriceData = marketAPI.getPrice('/items/enhancing_essence', 0);
-            if (essencePriceData) {
-                const essencePrice = priceType === 'ask' ? essencePriceData.ask : essencePriceData.bid;
-                totalValue += profitHelpers_js.calculatePriceAfterTax(essencePrice * essenceAmount); // 2% market tax
-            }
-
-            return totalValue;
-        }
-
-        /**
-         * Extract item data (HRID, prices, count, drop rate) from DOM element
-         * @param {HTMLElement} element - Item container element
-         * @param {boolean} isRequirement - True if this is a requirement (has count), false if drop (has drop rate)
-         * @param {number} index - Index in the list (for extracting count/rate text)
-         * @returns {Promise<Object|null>} Item data object or null
-         */
-        async extractItemData(element, isRequirement, index, actionDetail = null) {
-            try {
-                // Get item HRID from SVG use element
-                const use = element.querySelector('svg use');
-                if (!use) return null;
-
-                const href = use.getAttribute('href');
-                if (!href) return null;
-
-                const itemId = href.split('#')[1];
-                if (!itemId) return null;
-
-                const itemHrid = `/items/${itemId}`;
-
-                // Get enhancement level
-                let enhancementLevel = 0;
-                if (isRequirement) {
-                    const enhEl = element.querySelector('[class*="Item_enhancementLevel"]');
-                    if (enhEl) {
-                        const match = enhEl.textContent.match(/\+(\d+)/);
-                        enhancementLevel = match ? parseInt(match[1]) : 0;
-                    }
-                }
-
-                // Get market prices
-                let ask = 0,
-                    bid = 0;
-                if (itemHrid === '/items/coin') {
-                    ask = bid = 1;
-                } else {
-                    // Check if this is an openable container (loot crate)
-                    const itemDetails = dataManager.getItemDetails(itemHrid);
-                    if (itemDetails?.isOpenable) {
-                        // Use expected value calculator for openable containers
-                        const containerValue = expectedValueCalculator.getCachedValue(itemHrid);
-                        if (containerValue !== null && containerValue > 0) {
-                            ask = bid = containerValue;
-                        } else {
-                            // Fallback to marketplace if EV not available
-                            const priceData = marketAPI.getPrice(itemHrid, enhancementLevel);
-                            ask = priceData?.ask || 0;
-                            bid = priceData?.bid || 0;
-                        }
-                    } else {
-                        // Regular item - use marketplace price
-                        const priceData = marketAPI.getPrice(itemHrid, enhancementLevel);
-                        if (priceData && (priceData.ask > 0 || priceData.bid > 0)) {
-                            // Market data exists for this specific enhancement level
-                            ask = priceData.ask || 0;
-                            bid = priceData.bid || 0;
-                        } else {
-                            // No market data for this enhancement level - calculate cost
-                            ask = this.calculateEnhancementCost(itemHrid, enhancementLevel, 'ask');
-                            bid = this.calculateEnhancementCost(itemHrid, enhancementLevel, 'bid');
-                        }
-                    }
-                }
-
-                const result = { itemHrid, ask, bid, enhancementLevel };
-
-                // Get count or drop rate
-                if (isRequirement && index >= 0) {
-                    // Extract count from requirement
-                    const countElements = document.querySelectorAll(
-                        '[class*="SkillActionDetail_itemRequirements"] [class*="SkillActionDetail_inputCount"]'
-                    );
-
-                    if (countElements[index]) {
-                        const text = countElements[index].textContent.trim();
-                        // Extract number after the "/" character (format: "/ 2" or "/ 450")
-                        const match = text.match(/\/\s*([\d,]+)/);
-                        let parsedCount = 1;
-
-                        if (match) {
-                            const cleaned = match[1].replace(/,/g, '');
-                            parsedCount = parseFloat(cleaned);
-                        }
-
-                        result.count = parsedCount || 1;
-                    } else {
-                        result.count = 1;
-                    }
-                } else if (!isRequirement) {
-                    // Extract count and drop rate from action detail (game data) or DOM fallback
-                    let dropRateFromGameData = null;
-
-                    // Try to get drop rate from game data first
-                    if (actionDetail && actionDetail.dropTable) {
-                        const dropEntry = actionDetail.dropTable.find((drop) => drop.itemHrid === itemHrid);
-                        if (dropEntry) {
-                            dropRateFromGameData = dropEntry.dropRate;
-                        }
-                    }
-
-                    // Extract count from DOM
-                    const dropElements = document.querySelectorAll(
-                        '[class*="SkillActionDetail_drop"], [class*="SkillActionDetail_essence"], [class*="SkillActionDetail_rare"]'
-                    );
-
-                    for (const dropElement of dropElements) {
-                        // Check if this drop element contains our item
-                        const dropItemElement = dropElement.querySelector('[class*="Item_itemContainer"] svg use');
-                        if (dropItemElement) {
-                            const dropHref = dropItemElement.getAttribute('href');
-                            const dropItemId = dropHref ? dropHref.split('#')[1] : null;
-                            const dropItemHrid = dropItemId ? `/items/${dropItemId}` : null;
-
-                            if (dropItemHrid === itemHrid) {
-                                // Found the matching drop element
-                                const text = dropElement.textContent.trim();
-
-                                // Extract count (at start of text)
-                                const countMatch = text.match(/^([\d\s,.]+)/);
-                                if (countMatch) {
-                                    const cleaned = countMatch[1].replace(/,/g, '').trim();
-                                    result.count = parseFloat(cleaned) || 1;
-                                } else {
-                                    result.count = 1;
-                                }
-
-                                // Use drop rate from game data if available, otherwise try DOM
-                                if (dropRateFromGameData !== null) {
-                                    result.dropRate = dropRateFromGameData;
-                                } else {
-                                    // Extract drop rate percentage from DOM (handles both "7.29%" and "~7.29%")
-                                    const rateMatch = text.match(/~?([\d,.]+)%/);
-                                    if (rateMatch) {
-                                        const cleaned = rateMatch[1].replace(/,/g, '');
-                                        result.dropRate = parseFloat(cleaned) / 100 || 1;
-                                    } else {
-                                        result.dropRate = 1;
-                                    }
-                                }
-
-                                break; // Found it, stop searching
-                            }
-                        }
-                    }
-
-                    // If we didn't find a matching drop element, set defaults
-                    if (result.count === undefined) {
-                        result.count = 1;
-                    }
-                    if (result.dropRate === undefined) {
-                        // Use game data drop rate if available, otherwise default to 1
-                        result.dropRate = dropRateFromGameData !== null ? dropRateFromGameData : 1;
-                    }
-                }
-
-                return result;
-            } catch (error) {
-                console.error('[AlchemyProfit] Failed to extract item data:', error);
-                return null;
-            }
-        }
-
-        /**
-         * Generate state fingerprint for change detection
-         * @returns {string} Fingerprint string
-         */
-        getStateFingerprint() {
-            try {
-                const successRate =
-                    document.querySelector('[class*="SkillActionDetail_successRate"] [class*="SkillActionDetail_value"]')
-                        ?.textContent || '';
-                const consumables = Array.from(
-                    document.querySelectorAll(
-                        '[class*="ActionTypeConsumableSlots_consumableSlots"] [class*="Item_itemContainer"]'
-                    )
-                )
-                    .map((el) => el.querySelector('svg use')?.getAttribute('href') || 'empty')
-                    .join('|');
-
-                // Get catalyst (from the catalyst input container)
-                // Use Item_itemContainer to avoid the info icon's use[href]; item icons use xlink:href
-                const catalystUse = document.querySelector(
-                    '[class*="SkillActionDetail_catalystItemInputContainer"] [class*="Item_itemContainer"] svg use'
-                );
-                const catalyst = catalystUse?.getAttribute('xlink:href') || catalystUse?.getAttribute('href') || 'none';
-
-                // Get requirements (input materials)
-                const requirements = Array.from(
-                    document.querySelectorAll('[class*="SkillActionDetail_itemRequirements"] [class*="Item_itemContainer"]')
-                )
-                    .map((el) => {
-                        const href = el.querySelector('svg use')?.getAttribute('href') || 'empty';
-                        const enh = el.querySelector('[class*="Item_enhancementLevel"]')?.textContent || '0';
-                        return `${href}${enh}`;
-                    })
-                    .join('|');
-
-                // Get selected alchemy tab (Coinify/Decompose/Transmute/etc)
-                const alchemyContainer = document.querySelector('[class*="AlchemyPanel_tabsComponentContainer"]');
-                const selectedTab =
-                    alchemyContainer?.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim() || '';
-
-                // Don't include infoText - it contains our profit display which causes update loops
-                return `${selectedTab}:${successRate}:${consumables}:${catalyst}:${requirements}`;
-            } catch {
-                return '';
-            }
-        }
-    }
-
-    const alchemyProfit = new AlchemyProfit();
 
     /**
      * Alchemy Profit Display Module

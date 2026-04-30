@@ -1,7 +1,7 @@
 /**
  * Toolasha Market Library
  * Market, inventory, and economy features
- * Version: 2.27.0
+ * Version: 2.28.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -1539,8 +1539,9 @@ self.onmessage = function (e) {
             computeNetProfit,
             computeTeaCost,
             levelPenalty = 0,
+            teaBonusOverride = null,
         }) {
-            const liveTeaBonus = buffParser_js.getAlchemySuccessBonus();
+            const liveTeaBonus = teaBonusOverride !== null ? teaBonusOverride : buffParser_js.getAlchemySuccessBonus();
             const typeSpecificHrid = CATALYST_HRIDS[actionType];
             const primeCatalystHrid = CATALYST_HRIDS.prime;
             const typeSpecificPrice = marketData_js.getItemPrice(typeSpecificHrid, { context: 'profit', side: 'buy' }) ?? 0;
@@ -1684,7 +1685,7 @@ self.onmessage = function (e) {
          * @param {number} enhancementLevel - Enhancement level (default 0)
          * @returns {Object|null} Detailed profit data or null if not coinifiable
          */
-        calculateCoinifyProfit(itemHrid, enhancementLevel = 0, useLiveSetup = false) {
+        calculateCoinifyProfit(itemHrid, enhancementLevel = 0, useLiveSetup = false, teaBonusOverride = null) {
             try {
                 const gameData = dataManager.getInitClientData();
                 const itemDetails = dataManager.getItemDetails(itemHrid);
@@ -1801,6 +1802,7 @@ self.onmessage = function (e) {
                     alchemyBonusRevenue: alchemyBonus.totalBonusRevenue,
                     computeNetProfit: (successRate) => coinsProduced * successRate - (materialCost + coinCost),
                     computeTeaCost: () => teaCostData.totalCostPerHour,
+                    teaBonusOverride,
                 });
 
                 const {
@@ -1940,7 +1942,7 @@ self.onmessage = function (e) {
          * @param {number} enhancementLevel - Enhancement level (default 0)
          * @returns {Object|null} Profit data or null if not decomposable
          */
-        calculateDecomposeProfit(itemHrid, enhancementLevel = 0, useLiveSetup = false) {
+        calculateDecomposeProfit(itemHrid, enhancementLevel = 0, useLiveSetup = false, teaBonusOverride = null) {
             try {
                 const gameData = dataManager.getInitClientData();
                 const itemDetails = dataManager.getItemDetails(itemHrid);
@@ -2095,6 +2097,7 @@ self.onmessage = function (e) {
                     alchemyBonusRevenue: alchemyBonus.totalBonusRevenue,
                     computeNetProfit: (successRate) => outputValue * successRate - (inputPrice + coinCost),
                     computeTeaCost: () => teaCostData.totalCostPerHour,
+                    teaBonusOverride,
                 });
 
                 const {
@@ -2238,7 +2241,7 @@ self.onmessage = function (e) {
          * @param {string} itemHrid - Item HRID
          * @returns {Object|null} Profit data or null if not transmutable
          */
-        calculateTransmuteProfit(itemHrid, useLiveSetup = false) {
+        calculateTransmuteProfit(itemHrid, useLiveSetup = false, teaBonusOverride = null) {
             try {
                 const gameData = dataManager.getInitClientData();
                 const itemDetails = dataManager.getItemDetails(itemHrid);
@@ -2413,6 +2416,7 @@ self.onmessage = function (e) {
                     },
                     computeTeaCost: () => teaCostData.totalCostPerHour,
                     levelPenalty,
+                    teaBonusOverride,
                 });
 
                 const {
@@ -13549,10 +13553,10 @@ self.onmessage = function (e) {
                     // Get enhancement level from DOM
                     const enhancementLevel = this.getCurrentEnhancementLevel();
 
-                    // Check if this is a different item
+                    // Check if this is the same item
                     if (itemHrid === this.currentItemHrid && enhancementLevel === this.currentEnhancementLevel) {
-                        // Only update if we previously failed due to missing price data
-                        if (!this.needsPriceDataRetry) {
+                        // Re-render if display was removed by React, otherwise skip
+                        if (!this.needsPriceDataRetry && document.querySelector('.mwi-trade-history')) {
                             return;
                         }
                     }
@@ -13702,11 +13706,11 @@ self.onmessage = function (e) {
             }
 
             // Extract top ask (lowest sell price) and top bid (highest buy price)
-            const topAsk = orderBook.asks?.[0]?.price;
-            const topBid = orderBook.bids?.length > 0 ? orderBook.bids[0].price : undefined;
+            const topAsk = orderBook.asks?.[0]?.price || null;
+            const topBid = orderBook.bids?.[0]?.price || null;
 
-            // Validate prices exist and are positive
-            if (!topAsk || topAsk <= 0 || !topBid || topBid <= 0) {
+            // Return partial data — at least one side must exist
+            if (!topAsk && !topBid) {
                 return null;
             }
 

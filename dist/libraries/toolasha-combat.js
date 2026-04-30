@@ -1,7 +1,7 @@
 /**
  * Toolasha Combat Library
  * Combat, abilities, and combat stats features
- * Version: 2.27.0
+ * Version: 2.28.0
  * License: CC-BY-NC-SA-4.0
  */
 
@@ -7044,7 +7044,6 @@
             webSocketHook.on('labyrinth_updated', this.handlers.labyrinthUpdated);
 
             this.isInitialized = true;
-            console.log('[LabyrinthTracker] Initialized');
         }
 
         /**
@@ -7269,6 +7268,8 @@
             this.styleEl.id = 'mwi-labyrinth-best-style';
             this.styleEl.textContent = `
             [class*="LabyrinthPanel_automationContent"] { max-width: 36rem !important; }
+            [class*="LabyrinthPanel_skipThreshold"] { display: flex; align-items: center; }
+            .mwi-labyrinth-best { order: 99; }
         `;
             document.head.appendChild(this.styleEl);
 
